@@ -1,0 +1,26 @@
+# Zig
+.zig-cache/
+zig-cache/
+zig-out/
+zig-pkg/
+
+# Nix
+result
+result-*
+.direnv/
+
+# Local dev state
+.graf/
+.pgdata/
+*.log
+
+# Secrets and local config
+.env
+.env.*
+config.local.toml
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
