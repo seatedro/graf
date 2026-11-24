@@ -603,3 +603,25 @@ test "the ledger fills a missing graph id from the entry, then from the bound gr
     try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = core.time.now(s.io) });
     try testing.expectEqual(@as(i64, 2), try scalarI64(&s, "SELECT count(*) FROM llm_call WHERE graph_id = $1", .{gid}));
 }
+
+test "backfill entries claim after live ones, never block them, and stop at the daily cap" {
+    var s = try store.testing.open();
+    defer s.close();
+    const g = try store.testing.freshGraph(&s);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    var old = note("session", "an old decision from history", 1_700_000_000_000_000);
+    old.backfill = true;
+    const old_id = try enqueueNew(&s, g, old);
+    const live_id = try enqueueNew(&s, g, note("session", "a live decision from today", 1_800_000_000_000_000));
+
+    const first = (try s.claimWithin(a, g, "w1", 0)).?;
+    try testing.expect(first.entry_id.eql(live_id));
+    try testing.expect(try s.claimWithin(a, g, "w2", 0) == null);
+
+    const second = (try s.claimWithin(a, g, "w2", 5)).?;
+    try testing.expect(second.entry_id.eql(old_id));
+    try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM entry WHERE graph_id = $1 AND backfill", .{@as([]const u8, &g.bytes)}));
+}

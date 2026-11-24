@@ -92,7 +92,7 @@ fn worker(shared: *Shared, index: usize) void {
     var name_buf: [32]u8 = undefined;
     const name = std.fmt.bufPrint(&name_buf, "graf-worker-{d}", .{index}) catch "graf-worker";
 
-    var backend: postgres.PgBackend = .{ .store = p.store, .graph_id = p.graph_id, .io = io, .worker = name };
+    var backend: postgres.PgBackend = .{ .store = p.store, .graph_id = p.graph_id, .io = io, .worker = name, .backfill_daily_usd = p.config.limits.backfill_daily_usd };
     var model: postgres.ClientModel = .{ .client = p.client };
     var driver: pipeline.Driver(postgres.PgBackend, postgres.ClientModel) = .{
         .backend = &backend,

@@ -142,6 +142,7 @@ pub const EntryDraft = struct {
     body: EntryBody,
     reference_time: Micros,
     cursor: ?[]const u8 = null,
+    backfill: bool = false,
 };
 
 pub const Entry = struct {

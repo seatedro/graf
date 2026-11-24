@@ -84,19 +84,19 @@ pub fn enqueue(s: *Store, graph_id: Id, draft_in: *const core.EntryDraft) !core.
     var inserted = false;
     {
         var row = try conn.row(
-            \\INSERT INTO entry (id, graph_id, source_id, seq_in_source, kind, project, author, body, content_hash, reference_time)
+            \\INSERT INTO entry (id, graph_id, source_id, seq_in_source, kind, project, author, body, content_hash, reference_time, backfill)
             \\VALUES ($1, $2, $3,
             \\  CASE WHEN $4::int = 0 AND $3::uuid IS NOT NULL
             \\    THEN (SELECT COALESCE(max(seq_in_source), 0) + 1 FROM entry WHERE source_id = $3::uuid)
             \\    ELSE $4::int END,
-            \\  $5, $6, $7, $8::jsonb, $9, $10)
+            \\  $5, $6, $7, $8::jsonb, $9, $10, $11)
             \\ON CONFLICT (graph_id, content_hash) DO NOTHING
             \\RETURNING id
         , .{
             @as([]const u8, &id.bytes), @as([]const u8, &graph_id.bytes), source_id,
             draft.seq_in_source,        @tagName(draft.kind),             draft.project,
             @tagName(draft.author),     body,                             @as([]const u8, &hash),
-            draft.reference_time,
+            draft.reference_time,       draft.backfill,
         });
 
         if (row) |*r| {
@@ -128,20 +128,26 @@ pub fn loadCursor(s: *Store, arena: std.mem.Allocator, graph_id: Id, source: *co
     return try arena.dupe(u8, cursor);
 }
 
-pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const u8) !?Lease {
+pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const u8, backfill_daily_usd: ?f64) !?Lease {
     var row = (try s.pool.row(
-        \\WITH next AS (
+        \\WITH backfill_spent AS (
+        \\  SELECT COALESCE(sum(c.cost_usd), 0)::float8 AS usd
+        \\  FROM llm_call c JOIN entry b ON b.id = c.entry_id
+        \\  WHERE c.graph_id = $1 AND c.started_at >= date_trunc('day', now(), 'UTC') AND b.backfill
+        \\), next AS (
         \\  SELECT e.id FROM entry e
         \\  WHERE e.graph_id = $1
         \\    AND (e.status IN ('queued', 'extracted', 'staged') OR (e.status = 'extracting' AND e.lease_until < now()))
         \\    AND (e.lease_until IS NULL OR e.lease_until < now())
         \\    AND (e.not_before IS NULL OR e.not_before <= now())
+        \\    AND (NOT e.backfill OR $4::float8 IS NULL OR (SELECT usd FROM backfill_spent) < $4::float8)
         \\    AND NOT EXISTS (
         \\      SELECT 1 FROM entry p
         \\      WHERE p.source_id = e.source_id
+        \\        AND p.backfill = e.backfill
         \\        AND p.status IN ('queued', 'extracting', 'extracted', 'staged', 'committing')
         \\        AND (p.seq_in_source, p.reference_time, p.id) < (e.seq_in_source, e.reference_time, e.id))
-        \\  ORDER BY e.reference_time, e.seq_in_source, e.id
+        \\  ORDER BY e.backfill, e.reference_time, e.seq_in_source, e.id
         \\  LIMIT 1
         \\  FOR UPDATE SKIP LOCKED
         \\)
@@ -155,7 +161,7 @@ pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const 
         \\RETURNING e.id, e.source_id, e.seq_in_source, e.kind, e.project, e.author, e.body::text,
         \\  e.content_hash, e.reference_time, e.status, e.attempts, e.lease_token, e.base_seq,
         \\  e.commit_seq, e.cost_usd::float8, e.extraction::text
-    , .{ @as([]const u8, &graph_id.bytes), worker, @as(i32, @intCast(s.lease_ms)) })) orelse return null;
+    , .{ @as([]const u8, &graph_id.bytes), worker, @as(i32, @intCast(s.lease_ms)), backfill_daily_usd })) orelse return null;
     defer row.deinit() catch {};
 
     const id = try store.idFromPg(try row.get([]const u8, 0));

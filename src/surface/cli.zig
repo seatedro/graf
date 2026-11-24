@@ -9,13 +9,14 @@ const daemon = @import("daemon.zig");
 const mcp = @import("mcp.zig");
 const service = @import("service.zig");
 const edge = @import("edge.zig");
+const backfill = @import("backfill.zig");
 const Upstream = @import("upstream.zig").Upstream;
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
 pub const version = "0.0.0-dev";
 
-const Command = enum { help, version, config, init, serve, mcp, hook, install, pause, @"resume", source, search, entity, remember, forget, doctor, eval };
+const Command = enum { help, version, config, init, serve, mcp, hook, install, pause, @"resume", source, backfill, search, entity, remember, forget, doctor, eval };
 
 const usage =
     \\usage: graf [--config PATH] <command> [args...]
@@ -32,6 +33,8 @@ const usage =
     \\  resume                       capture transcripts again
     \\  source capy                  tail Capy threads through the public API
     \\      [--once] [--backfill]
+    \\  backfill                     ingest transcript history from before live capture started
+    \\      [--since DATE|30d] [--harness H,...] [--dry-run] [--max-entries N] [--cap-usd USD] [--upstream URL]
     \\  search <query...>            search memory
     \\      [--project P | --all] [--as-of T] [--known-at T] [--history] [--harness H] [--max-tokens N] [--json]
     \\  entity <name-or-id>          show an entity and its facts
@@ -46,7 +49,7 @@ const usage =
     \\
 ;
 
-const value_flags = [_][]const u8{ "--project", "--as-of", "--known-at", "--harness", "--max-tokens", "--depth", "--valid-from", "--query", "--reason", "--suite", "--command", "--upstream" };
+const value_flags = [_][]const u8{ "--project", "--as-of", "--known-at", "--harness", "--max-tokens", "--depth", "--valid-from", "--query", "--reason", "--suite", "--command", "--upstream", "--since", "--max-entries", "--cap-usd" };
 
 const Args = struct {
     positional: []const []const u8,
@@ -211,6 +214,7 @@ pub fn run(init: std.process.Init) !u8 {
             return 0;
         },
         .source => return runSource(init, cfg, rest, out, err),
+        .backfill => return runBackfill(init, cfg, rest, out, err),
         .doctor => return doctor(arena, init, cfg, loaded, out),
         .eval => return eval.main(arena, io, cfg, init.environ_map, rest, out, err),
         .search, .entity, .remember, .forget => {
@@ -439,6 +443,58 @@ fn runSource(init: std.process.Init, cfg: *const core.Config, rest: []const []co
     const s = src.snapshot();
     try out.print("capy: {d} threads ({d} excluded), {d} messages, {d} entries queued, {d} duplicates, {d} turns dropped\n", .{ s.threads, s.excluded_threads, s.messages, s.entries, s.duplicates, s.dropped_turns });
     return 0;
+}
+
+fn runBackfill(init: std.process.Init, cfg: *const core.Config, rest: []const []const u8, out: *Writer, err: *Writer) !u8 {
+    const arena = init.arena.allocator();
+    const io = init.io;
+    const env = init.environ_map;
+
+    const parsed = Args.parse(arena, rest) catch {
+        try err.writeAll("graf backfill: a flag is missing its value\n");
+        return 2;
+    };
+    const upstream = parsed.value("--upstream") orelse cfg.edge.upstream;
+
+    const plan = backfill.parse(rest, core.time.now(io), .{ .edge = upstream.len > 0, .capy = cfg.capyEnabled(), .capy_key = cfg.sources.capy.api_key.len > 0 }) catch |e| {
+        try err.print("graf backfill: {s}\n\n{s}", .{ backfill.describe(e), usage });
+        return 2;
+    };
+
+    if (upstream.len > 0) {
+        var up = Upstream.init(init.gpa, io, upstream, cfg.edge.token, cfg.edge.timeout_ms) catch |e| return fail(err, "backfill", e);
+        defer up.deinit();
+        const report = backfill.run(init.gpa, io, env, cfg, plan, .{ .edge = &up }) catch |e| return fail(err, "backfill", e);
+        try backfill.print(report, out);
+        return 0;
+    }
+
+    if (plan.dry_run) {
+        var opened = openReadOnly(arena, init, cfg);
+        defer if (opened) |*s| s.close();
+        const target: backfill.Target = if (opened) |*s| .{ .hub = .{ .store = s, .graph_id = s.findGraph(cfg.graph) catch null } } else .offline;
+        const report = backfill.run(init.gpa, io, env, cfg, plan, target) catch |e| return fail(err, "backfill", e);
+        try backfill.print(report, out);
+        return 0;
+    }
+
+    var rt: daemon.Runtime = undefined;
+    rt.open(init.gpa, io, env, cfg, .{ .pool_size = 2, .start_postgres = true }) catch |e| return fail(err, "backfill", e);
+    defer rt.close();
+
+    const report = backfill.run(init.gpa, io, env, cfg, plan, .{ .hub = .{ .store = &rt.store, .graph_id = rt.graph_id } }) catch |e| return fail(err, "backfill", e);
+    try backfill.print(report, out);
+    return 0;
+}
+
+fn openReadOnly(arena: Allocator, init: std.process.Init, cfg: *const core.Config) ?store.Store {
+    const url = switch (store.managed.plan(arena, init.io, init.environ_map, cfg.database.url) catch return null) {
+        .url => |u| u,
+        .managed => |m| store.managed.databaseUrl(arena, m.data_dir) catch return null,
+        .docker => store.managed.docker.url,
+        .unavailable => return null,
+    };
+    return store.Store.open(init.io, init.gpa, url, .{ .pool_size = 1 }) catch null;
 }
 
 fn runInstall(arena: Allocator, init: std.process.Init, rest: []const []const u8, out: *Writer, err: *Writer) !u8 {

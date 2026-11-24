@@ -15,6 +15,7 @@ const log = std.log.scoped(.capy);
 
 pub const Options = struct {
     since: ?core.Micros = null,
+    until: ?core.Micros = null,
     backfill: bool = false,
     page_limit: u32 = 100,
     segment: segment.Options = .{},
@@ -196,7 +197,6 @@ pub const Source = struct {
             const now = Io.Timestamp.now(io, .real).toMicroseconds();
             opts.since = if (state_dir) |sd| try state.captureSince(io, sd, now) else now;
         }
-        if (opts.backfill) opts.since = null;
 
         const cfg = &config.sources.capy;
         var client: api.Client = try .init(gpa, io, cfg.base_url, cfg.api_key);
@@ -490,8 +490,10 @@ pub const Source = struct {
 
         defer _ = s.scratch.reset(.retain_capacity);
         const turn = try turnOf(t.window.allocator(), s.scratch.allocator(), m) orelse return;
-        const too_old = if (s.options.since) |since| (turn.ts orelse now) < since else false;
-        if (s.paused or too_old) {
+        const at = turn.ts orelse now;
+        const too_old = if (s.options.since) |since| at < since else false;
+        const too_new = if (s.options.until) |until| at >= until else false;
+        if (s.paused or too_old or too_new) {
             s.stats.dropped_turns += 1;
             return;
         }
@@ -577,6 +579,18 @@ pub const Source = struct {
         t.outbox = .empty;
         t.window.deinit();
         t.window = fresh;
+    }
+
+    pub fn finish(s: *Source, now: core.Micros) !void {
+        try s.mutex.lock(s.io);
+        defer s.mutex.unlock(s.io);
+
+        for (s.threads.values()) |t| {
+            if (t.excluded) continue;
+            var sealed: std.ArrayList(segment.Window) = .empty;
+            try t.segmenter.flush(t.window.allocator(), &sealed);
+            try s.seal(t, sealed.items, now);
+        }
     }
 
     fn tickAll(s: *Source, now: core.Micros) !void {

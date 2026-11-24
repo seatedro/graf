@@ -56,6 +56,20 @@ or set `GRAF_UPSTREAM_URL` and `GRAF_UPSTREAM_TOKEN`, then run `graf serve` (or 
 
 With an upstream configured, `graf mcp` and `graf search|entity|remember|forget` talk to the hub directly. `graf doctor` reports whether the hub is reachable and how many entries are waiting.
 
+## Backfill
+
+Live capture starts at the first `graf serve` on each machine and records that moment in `~/.local/state/graf/capture-since`. `graf backfill` covers everything before it, so the two never overlap:
+
+```sh
+graf backfill --dry-run                 # count files, turns, new entries and the estimated cost; writes nothing
+graf backfill --since 30d --max-entries 2000
+graf backfill --harness claude-code,codex --cap-usd 15
+```
+
+On a hub it enqueues entries straight into Postgres; on an edge (with an upstream configured) it redacts locally and pushes them to the hub's `POST /v1/entries`, without touching the edge spool. Both scan every `~/.claude*` and `~/.codex*` profile plus `~/.pi/agent` and `~/.fx`; a hub also reads Capy history when `sources.capy` is enabled. Entries go out oldest first with their original timestamps, and the content hash makes a rerun skip what is already stored, so `--max-entries` and `--cap-usd` (checked against the estimated cost) can split a large history across several runs.
+
+Backfilled entries are marked as such. Workers always claim live entries first, and stop claiming backfilled ones once they have spent `limits.backfill_daily_usd` (default $25) in the current UTC day, so a large backfill never starves live ingestion of the overall `limits.daily_usd` budget.
+
 ## Remote MCP clients
 
 Clients that speak Streamable HTTP connect to `https://hub.example.ts.net/mcp` with the bearer header, for example:

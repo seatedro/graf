@@ -48,7 +48,19 @@ const Discovery = struct {
         for (fixed_roots) |f| try list.append(arena, .{ .harness = f[0], .path = try std.fs.path.join(arena, &.{ d.home, f[1] }) });
         return list.items;
     }
+
+    fn fromEnv(arena: Allocator, env: *const Environ.Map) !?Discovery {
+        const home = env.get("HOME") orelse return null;
+        var d: Discovery = .{ .home = try arena.dupe(u8, home), .overrides = undefined };
+        for (profile_roots, &d.overrides) |p, *o| o.* = if (env.get(p[1].env)) |v| try arena.dupe(u8, v) else null;
+        return d;
+    }
 };
+
+pub fn discoverRoots(arena: Allocator, io: Io, env: *const Environ.Map) ![]const Root {
+    const d = try Discovery.fromEnv(arena, env) orelse return &.{};
+    return d.roots(arena, io);
+}
 
 pub const Capture = struct {
     gpa: Allocator,
@@ -85,11 +97,7 @@ pub const Capture = struct {
         const home = if (env.get("HOME")) |h| try a.dupe(u8, h) else null;
         c.state_dir = try state.dir(a, env);
 
-        if (options.roots == null) if (home) |h| {
-            var d: Discovery = .{ .home = h, .overrides = undefined };
-            for (profile_roots, &d.overrides) |p, *o| o.* = if (env.get(p[1].env)) |v| try a.dupe(u8, v) else null;
-            c.discovery = d;
-        };
+        if (options.roots == null) c.discovery = try Discovery.fromEnv(a, env);
 
         const now = Io.Timestamp.now(io, .real).toMicroseconds();
         if (c.tailer_options.home == null) c.tailer_options.home = home;

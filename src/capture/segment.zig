@@ -58,6 +58,10 @@ pub const Segmenter = struct {
         if (user and agent) try s.seal(arena, .hook, sealed);
     }
 
+    pub fn flush(s: *Segmenter, arena: Allocator, sealed: *std.ArrayList(Window)) Allocator.Error!void {
+        try s.seal(arena, .idle, sealed);
+    }
+
     pub fn firstStart(s: *const Segmenter) ?u64 {
         return if (s.items.items.len > 0) s.items.items[0].start else null;
     }

@@ -16,6 +16,7 @@ pub const profiles = @import("profiles.zig");
 pub const sse = @import("sse.zig");
 pub const capy_api = @import("capy_api.zig");
 pub const capy = @import("capy.zig");
+pub const backfill = @import("backfill.zig");
 
 test {
     std.testing.refAllDecls(@This());

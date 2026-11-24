@@ -10,6 +10,7 @@ const Io = std.Io;
 
 pub const Options = struct {
     since: ?core.Micros = null,
+    until: ?core.Micros = null,
     segment: segment.Options = .{},
     home: ?[]const u8 = null,
     read_chunk: usize = 1 << 20,
@@ -216,6 +217,26 @@ pub const Tailer = struct {
         _ = t.scratch.reset(.retain_capacity);
         t.compact(f);
         return true;
+    }
+
+    pub fn finish(t: *Tailer, now: core.Micros) !void {
+        var it = t.files.valueIterator();
+        while (it.next()) |fp| {
+            const f = fp.*;
+            try t.drainOutbox(f);
+            if (f.excluded == true or !f.loaded) continue;
+
+            var items: std.ArrayList(dialect.Item) = .empty;
+            try f.parser.flushAll(f.sink(t.scratch.allocator(), &items));
+            try t.absorb(f, items.items, f.read_off, now);
+
+            var sealed: std.ArrayList(segment.Window) = .empty;
+            try f.segmenter.flush(f.window.allocator(), &sealed);
+            try t.sealAll(f, sealed.items, f.read_off, now);
+
+            _ = t.scratch.reset(.retain_capacity);
+            t.compact(f);
+        }
     }
 
     pub fn owns(t: *const Tailer, path: []const u8) bool {
@@ -426,7 +447,7 @@ pub const Tailer = struct {
 
         var sealed: std.ArrayList(segment.Window) = .empty;
         for (items, 0..) |item, i| {
-            if (t.paused or (t.options.since != null and item.turn.ts != null and item.turn.ts.? < t.options.since.?)) {
+            if (t.paused or outside(t.options, item.turn.ts)) {
                 t.stats.dropped_turns += 1;
                 continue;
             }
@@ -436,6 +457,13 @@ pub const Tailer = struct {
             const rest = if (i + 1 < items.len) items[i + 1].start else consumed;
             try t.sealAll(f, sealed.items, rest, now);
         }
+    }
+
+    fn outside(options: Options, ts: ?core.Micros) bool {
+        const at = ts orelse return false;
+        if (options.since) |since| if (at < since) return true;
+        if (options.until) |until| if (at >= until) return true;
+        return false;
     }
 
     fn decideExclusion(t: *Tailer, f: *TailFile) !void {
