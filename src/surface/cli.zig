@@ -154,7 +154,7 @@ pub fn run(init: std.process.Init) !u8 {
         },
         .init => {
             var rt: daemon.Runtime = undefined;
-            rt.open(init.gpa, io, cfg, 2) catch |e| return fail(err, "init", e);
+            rt.open(init.gpa, io, init.environ_map, cfg, .{ .pool_size = 2, .start_postgres = true }) catch |e| return fail(err, "init", e);
             defer rt.close();
             try out.print("database ready; graph '{s}' is {f}\n", .{ cfg.graph, rt.graph_id });
             return 0;
@@ -166,13 +166,7 @@ pub fn run(init: std.process.Init) !u8 {
         .mcp => return runMcp(init, cfg, config_path, err),
         .hook => return runHook(init, cfg, rest, out, err),
         .doctor => return doctor(arena, init, cfg, loaded, out),
-        .eval => {
-            const suite = (try Args.parse(arena, rest)).value("--suite") orelse "evals";
-            const metrics = eval.run(arena, io, cfg, .{ .suite_dir = suite }) catch |e| return fail(err, "eval", e);
-            try std.json.Stringify.value(metrics, .{ .whitespace = .indent_2 }, out);
-            try out.writeByte('\n');
-            return if (metrics.passes()) 0 else 1;
-        },
+        .eval => return eval.main(arena, io, cfg, init.environ_map, rest, out, err),
         .search, .entity, .remember, .forget => {
             const parsed = Args.parse(arena, rest) catch {
                 try err.print("graf {s}: a flag is missing its value\n", .{@tagName(command)});
@@ -183,7 +177,7 @@ pub fn run(init: std.process.Init) !u8 {
                 return 2;
             };
             var rt: daemon.Runtime = undefined;
-            rt.open(init.gpa, io, cfg, 2) catch |e| return fail(err, @tagName(command), e);
+            rt.open(init.gpa, io, init.environ_map, cfg, .{ .pool_size = 2 }) catch |e| return fail(err, @tagName(command), e);
             defer rt.close();
             var svc: service.Service = .{ .gpa = init.gpa, .io = io, .engine = &rt.engine, .sink = rt.store.sink(rt.graph_id), .remember_harness = .cli };
             defer svc.deinit();
@@ -264,7 +258,7 @@ fn printReply(arena: Allocator, reply: api.Reply, json: bool, out: *Writer, err:
 
 fn fail(err: *Writer, what: []const u8, e: anyerror) !u8 {
     const hint: []const u8 = switch (e) {
-        error.DatabaseNotConfigured => "set database.url in the config file or GRAF_DATABASE_URL",
+        error.DatabaseNotConfigured => "set database.url or GRAF_DATABASE_URL, or install Postgres with pgvector or Docker for a managed database",
         error.ConnectionRefused => "cannot reach Postgres; is it running? (graf doctor)",
         error.NotImplemented => "not available in this build yet",
         else => "",

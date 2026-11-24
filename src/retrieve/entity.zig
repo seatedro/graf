@@ -1,8 +1,8 @@
 const std = @import("std");
 const core = @import("core");
+const store = @import("store");
 const pg = @import("pg");
 const db = @import("db.zig");
-const text = @import("text.zig");
 const time = @import("time.zig");
 const mod = @import("mod.zig");
 const Hit = mod.Hit;
@@ -111,7 +111,7 @@ pub fn lookup(e: *mod.Engine, arena: std.mem.Allocator, params: mod.EntityParams
     defer conn.release();
 
     const as_id: ?core.Id = core.Id.parse(params.name_or_id) catch null;
-    const key = try text.norm(arena, params.name_or_id);
+    const key = try store.normalizeAlias(arena, params.name_or_id);
     var found: std.ArrayList(core.Entity) = .empty;
     for ([_]bool{ false, true }) |fuzzy| {
         var result = try db.query(conn, arena, resolve_sql, .{ &e.graph_id.bytes, if (as_id) |i| @as(?[]const u8, &i.bytes) else null, key, fuzzy });

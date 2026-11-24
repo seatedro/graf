@@ -1,9 +1,9 @@
 const std = @import("std");
 const core = @import("core");
+const store = @import("store");
 const pg = @import("pg");
 const db = @import("db.zig");
 const rank = @import("rank.zig");
-const text = @import("text.zig");
 const time = @import("time.zig");
 const mod = @import("mod.zig");
 
@@ -100,7 +100,7 @@ pub const Options = struct {
 };
 
 pub fn run(e: *mod.Engine, arena: std.mem.Allocator, params: mod.SearchParams, opts: Options) !mod.SearchResult {
-    const qnorm = try text.norm(arena, params.query);
+    const qnorm = try store.normalizeAlias(arena, params.query);
     const qemb: ?[]const f32 = if (!opts.embed) null else if (e.embedder) |em| em.embedQuery(arena, params.query) catch |err| blk: {
         db.log.warn("query embedding failed, searching without vectors: {s}", .{@errorName(err)});
         break :blk null;

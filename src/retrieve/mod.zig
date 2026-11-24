@@ -4,7 +4,6 @@ const store = @import("store");
 const llm = @import("llm");
 
 pub const time = @import("time.zig");
-pub const text = @import("text.zig");
 pub const rank = @import("rank.zig");
 pub const render_ = @import("render.zig");
 const db = @import("db.zig");
@@ -186,7 +185,7 @@ pub const Engine = struct {
 test {
     std.testing.refAllDecls(@This());
     _ = time;
-    _ = text;
+
     _ = rank;
     _ = render_;
     _ = search_;

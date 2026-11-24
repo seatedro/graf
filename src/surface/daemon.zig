@@ -16,15 +16,38 @@ const log = std.log.scoped(.serve);
 pub const tail_interval_ms = 30_000;
 
 pub const Runtime = struct {
+    arena: std.heap.ArenaAllocator,
+    postgres: ?store.managed.Server,
+    io: Io,
     store: store.Store,
     graph_id: core.Id,
     client: llm.Client,
     backend: retrieve.LlmBackend,
     engine: retrieve.Engine,
 
-    pub fn open(rt: *Runtime, gpa: Allocator, io: Io, config: *const core.Config, pool_size: u16) !void {
-        if (config.database.url.len == 0) return error.DatabaseNotConfigured;
-        rt.store = try store.Store.open(io, gpa, config.database.url, .{ .pool_size = pool_size });
+    pub const OpenOptions = struct {
+        pool_size: u16,
+        start_postgres: bool = false,
+    };
+
+    pub fn open(rt: *Runtime, gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: *const core.Config, opts: OpenOptions) !void {
+        rt.arena = .init(gpa);
+        errdefer rt.arena.deinit();
+        rt.io = io;
+        rt.postgres = null;
+        errdefer if (rt.postgres) |*p| p.stop(io);
+        const arena = rt.arena.allocator();
+        const url = switch (try store.managed.plan(arena, io, env, config.database.url)) {
+            .url => |u| u,
+            .managed => |m| if (opts.start_postgres) blk: {
+                _ = try store.managed.initCluster(gpa, io, m.toolchain, m.data_dir);
+                rt.postgres = try store.managed.Server.start(gpa, io, m.toolchain, m.data_dir, arena);
+                break :blk rt.postgres.?.url;
+            } else try store.managed.databaseUrl(arena, m.data_dir),
+            .docker => try store.managed.docker.start(arena, io),
+            .unavailable => return error.DatabaseNotConfigured,
+        };
+        rt.store = try store.Store.open(io, gpa, url, .{ .pool_size = opts.pool_size });
         errdefer rt.store.close();
         _ = try rt.store.migrate();
         rt.graph_id = try rt.store.ensureGraph(config.graph);
@@ -38,6 +61,8 @@ pub const Runtime = struct {
         rt.engine.deinit();
         rt.client.deinit();
         rt.store.close();
+        if (rt.postgres) |*p| p.stop(rt.io);
+        rt.arena.deinit();
     }
 };
 
@@ -128,7 +153,7 @@ pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: 
     const arena = arena_state.allocator();
 
     var rt: Runtime = undefined;
-    try rt.open(gpa, io, config, @intCast(@max(8, config.ingest.workers + 4)));
+    try rt.open(gpa, io, env, config, .{ .pool_size = @intCast(@max(8, config.ingest.workers + 4)), .start_postgres = true });
     defer rt.close();
 
     var tailers: Tailers = .{ .gpa = gpa, .io = io };

@@ -125,9 +125,9 @@ pub const Seeder = struct {
         , .{ &id.bytes, &sd.graph.bytes, name, norm, typ, description, if (std.mem.eql(u8, typ, "project")) description else "", @as([]const f32, &emb) });
         try sd.exec("INSERT INTO entity_alias (graph_id, norm, entity_id, alias) VALUES ($1, $2, $3, $4)", .{ &sd.graph.bytes, norm, &id.bytes, name });
         for (aliases) |a| {
-            var buf: [128]u8 = undefined;
+            var buf: [1024]u8 = undefined;
             var fba = std.heap.FixedBufferAllocator.init(&buf);
-            const n = try @import("text.zig").norm(fba.allocator(), a);
+            const n = try store.normalizeAlias(fba.allocator(), a);
             try sd.exec("INSERT INTO entity_alias (graph_id, norm, entity_id, alias) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING", .{ &sd.graph.bytes, n, &id.bytes, a });
         }
         return id;
