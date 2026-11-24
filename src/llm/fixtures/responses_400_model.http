@@ -1,0 +1,4 @@
+HTTP/1.1 400 Bad Request
+content-type: application/json
+
+{"error":{"message":"Invalid request: unknown model: no-such-model","type":"invalid_request_error","code":400}}
