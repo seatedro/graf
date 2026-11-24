@@ -13,16 +13,20 @@ const Writer = std.Io.Writer;
 
 pub const version = "0.0.0-dev";
 
-const Command = enum { help, version, config, init, serve, mcp, hook, search, entity, remember, forget, doctor, eval };
+const Command = enum { help, version, config, init, serve, mcp, hook, install, pause, @"resume", search, entity, remember, forget, doctor, eval };
 
 const usage =
     \\usage: graf [--config PATH] <command> [args...]
     \\
     \\commands:
     \\  init                         create or migrate the database
-    \\  serve                        run the daemon (HTTP, MCP, ingestion, tailers)
+    \\  serve                        run the daemon (HTTP, MCP, ingestion, capture)
     \\  mcp                          MCP server over stdio (starts the daemon if needed)
     \\  hook <harness> <event>       harness hook entry point
+    \\  install                      add graf's MCP server and hooks to each harness
+    \\      [--harness H] [--command PATH] [--dry-run]
+    \\  pause                        stop capturing transcripts until resume
+    \\  resume                       capture transcripts again
     \\  search <query...>            search memory
     \\      [--project P | --all] [--as-of T] [--known-at T] [--history] [--harness H] [--max-tokens N] [--json]
     \\  entity <name-or-id>          show an entity and its facts
@@ -37,7 +41,7 @@ const usage =
     \\
 ;
 
-const value_flags = [_][]const u8{ "--project", "--as-of", "--known-at", "--harness", "--max-tokens", "--depth", "--valid-from", "--query", "--reason", "--suite" };
+const value_flags = [_][]const u8{ "--project", "--as-of", "--known-at", "--harness", "--max-tokens", "--depth", "--valid-from", "--query", "--reason", "--suite", "--command" };
 
 const Args = struct {
     positional: []const []const u8,
@@ -132,7 +136,7 @@ pub fn run(init: std.process.Init) !u8 {
     }
 
     var diag: core.toml.Diagnostic = .{};
-    const loaded = core.config.load(arena, io, init.environ_map, .{ .path = config_path, .diag = &diag }) catch |e| switch (e) {
+    const loaded = core.config.load(arena, io, init.environ_map, .{ .path = config_path, .diag = &diag }) catch |e| if (command == .hook) return 0 else switch (e) {
         error.InvalidConfig => {
             try err.print("graf: {s}:{d}: {s}\n", .{ config_path orelse "config", diag.line, diag.message });
             return 2;
@@ -165,6 +169,16 @@ pub fn run(init: std.process.Init) !u8 {
         },
         .mcp => return runMcp(init, cfg, config_path, err),
         .hook => return runHook(init, cfg, rest, out, err),
+        .install => return runInstall(arena, init, rest, out, err),
+        .pause, .@"resume" => {
+            const dir = try capture.state.dir(arena, init.environ_map) orelse {
+                try err.print("graf {s}: set HOME or XDG_STATE_HOME\n", .{@tagName(command)});
+                return 2;
+            };
+            capture.state.setPaused(io, dir, command == .pause) catch |e| return fail(err, @tagName(command), e);
+            try out.writeAll(if (command == .pause) "capture paused\n" else "capture resumed\n");
+            return 0;
+        },
         .doctor => return doctor(arena, init, cfg, loaded, out),
         .eval => return eval.main(arena, io, cfg, init.environ_map, rest, out, err),
         .search, .entity, .remember, .forget => {
@@ -308,10 +322,29 @@ fn runHook(init: std.process.Init, cfg: *const core.Config, rest: []const []cons
     var in_buf: [16 * 1024]u8 = undefined;
     var in_reader = std.Io.File.stdin().reader(init.io, &in_buf);
     const stdin_json = in_reader.interface.allocRemaining(init.arena.allocator(), .limited(1 << 20)) catch "";
-    capture.hooks.run(init.arena.allocator(), init.io, cfg, harness, event, stdin_json, out) catch |e| {
+    capture.hooks.run(init.arena.allocator(), init.io, init.environ_map, cfg, harness, event, stdin_json, out) catch |e| {
         try err.print("graf hook: {s}\n", .{@errorName(e)});
     };
     return 0;
+}
+
+fn runInstall(arena: Allocator, init: std.process.Init, rest: []const []const u8, out: *Writer, err: *Writer) !u8 {
+    const parsed = Args.parse(arena, rest) catch {
+        try err.writeAll("graf install: a flag is missing its value\n");
+        return 2;
+    };
+    var opts: capture.install.Options = .{ .dry_run = parsed.has("--dry-run") };
+    if (parsed.value("--command")) |c| opts.command = c;
+    if (parsed.value("--harness")) |h| {
+        const harness = std.meta.stringToEnum(core.Harness, h) orelse {
+            try err.print("graf install: unknown harness '{s}'\n", .{h});
+            return 2;
+        };
+        opts.harnesses = try arena.dupe(core.Harness, &.{harness});
+    }
+    const report = capture.install.install(arena, init.io, init.environ_map, opts, out) catch |e| return fail(err, "install", e);
+    if (!report.changed() and !report.failed()) try out.writeAll("already installed\n");
+    return if (report.failed()) 1 else 0;
 }
 
 fn doctor(arena: Allocator, init: std.process.Init, cfg: *const core.Config, loaded: core.config.Loaded, out: *Writer) !u8 {
