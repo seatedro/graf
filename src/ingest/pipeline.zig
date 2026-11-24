@@ -14,6 +14,26 @@ const Micros = core.Micros;
 
 pub const max_attempts = 3;
 
+pub const Disposition = enum { requeue, split, pause_route, dead };
+
+pub const ModelFailure = struct {
+    disposition: Disposition,
+    retry_after_ms: ?u32 = null,
+};
+
+pub const Completion = struct {
+    json: []const u8,
+    repaired: bool = false,
+};
+
+pub fn dispositionForClass(class_name: []const u8) Disposition {
+    const eq = std.mem.eql;
+    if (eq(u8, class_name, "context_overflow")) return .split;
+    if (eq(u8, class_name, "auth_401_403") or eq(u8, class_name, "quota_exhausted")) return .pause_route;
+    if (eq(u8, class_name, "invalid_request_400") or eq(u8, class_name, "invalid_output")) return .dead;
+    return .requeue;
+}
+
 pub const Context = struct {
     prior: []const prompt.PriorEpisode = &.{},
     predicates: []const resolve.PredicateRow = &.{},
@@ -169,17 +189,19 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             const first = try decodeChecked(arena, resp.json, body_text, ep.reference_time);
             if (first.checked) |c| if (!c.needs_repair) return .{ .checked = c };
 
-            const problem = first.problem orelse "more than half of the facts failed validation";
-            const repaired = d.model.structured(arena, .{
-                .purpose = .repair,
-                .episode_id = ep.id,
-                .system = prompt.repair_system,
-                .user = try prompt.repairUser(arena, problem, resp.json),
-                .schema_name = "extract_result",
-                .schema_json = schema.extract_result,
-            }) catch |err| return .{ .outcome = try d.providerFailure(arena, lease, err, .extraction) };
-            const second = try decodeChecked(arena, repaired.json, body_text, ep.reference_time);
-            if (second.checked) |c| if (!c.needs_repair) return .{ .checked = c };
+            if (!resp.repaired) {
+                const problem = first.problem orelse "more than half of the facts failed validation";
+                const repaired = d.model.repair(arena, .{
+                    .purpose = .extract,
+                    .episode_id = ep.id,
+                    .system = system,
+                    .user = user,
+                    .schema_name = "extract_result",
+                    .schema_json = schema.extract_result,
+                }, resp.json, problem) catch |err| return .{ .outcome = try d.providerFailure(arena, lease, err, .extraction) };
+                const second = try decodeChecked(arena, repaired.json, body_text, ep.reference_time);
+                if (second.checked) |c| if (!c.needs_repair) return .{ .checked = c };
+            }
             try d.backend.finish(lease, .{ .dead = "extraction output failed validation after one repair" });
             return .{ .outcome = .dead };
         }
@@ -238,14 +260,18 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             };
             if (try interpretResolution(arena, p, checked, resp.json, warnings)) |v| return .{ .verdict = v };
 
-            const repaired = d.model.structured(arena, .{
-                .purpose = .repair,
+            if (resp.repaired) {
+                try warnings.append(arena, "resolution output invalid after one repair; resolved deterministically");
+                return .{ .verdict = try resolve.Verdict.none(arena, p) };
+            }
+            const repaired = d.model.repair(arena, .{
+                .purpose = .resolve,
                 .episode_id = lease.episode.id,
-                .system = prompt.repair_system,
-                .user = try prompt.repairUser(arena, "the output did not match the resolution schema or named unknown labels", resp.json),
+                .system = prompt.resolution_system,
+                .user = user,
                 .schema_name = "resolve_result",
                 .schema_json = schema.resolve_result,
-            }) catch |err| {
+            }, resp.json, "the output did not match the resolution schema or named unknown labels") catch |err| {
                 if (try d.resolutionFallback(arena, lease, err)) |o| return .{ .outcome = o };
                 try warnings.append(arena, "resolution repair failed; resolved deterministically");
                 return .{ .verdict = try resolve.Verdict.none(arena, p) };
@@ -266,22 +292,28 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             return got.verdict;
         }
 
+        fn failureOf(d: *Self, err: anyerror) ?ModelFailure {
+            return switch (err) {
+                error.ProviderFailed => d.model.failure(),
+                error.RouteHalted, error.SpendCapReached, error.ModelNotConfigured => .{ .disposition = .pause_route },
+                else => null,
+            };
+        }
+
         fn resolutionFallback(d: *Self, arena: Allocator, lease: store.Lease, err: anyerror) !?ingest.Outcome {
-            if (err != error.ProviderFailed) return err;
-            const f = d.model.lastFailure() orelse return err;
-            return switch (f.class) {
-                .context_overflow, .invalid_request_400 => null,
-                else => try d.providerFailure(arena, lease, err, .after_extraction),
+            const f = d.failureOf(err) orelse return err;
+            return switch (f.disposition) {
+                .split, .dead => null,
+                .requeue, .pause_route => try d.providerFailure(arena, lease, err, .after_extraction),
             };
         }
 
         const Stage = enum { extraction, after_extraction };
 
         fn providerFailure(d: *Self, arena: Allocator, lease: store.Lease, err: anyerror, stage: Stage) !ingest.Outcome {
-            if (err != error.ProviderFailed) return err;
-            const f = d.model.lastFailure() orelse return err;
-            switch (f.class) {
-                .context_overflow => {
+            const f = d.failureOf(err) orelse return err;
+            switch (f.disposition) {
+                .split => {
                     if (stage == .extraction) if (try splitBody(arena, lease.episode.body)) |halves| {
                         try d.backend.finish(lease, .{ .split = halves });
                         return .split;
@@ -289,15 +321,15 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                     try d.backend.finish(lease, .{ .dead = "context overflow on an episode too small to split" });
                     return .dead;
                 },
-                .invalid_request_400 => {
-                    try d.backend.finish(lease, .{ .dead = "the provider rejected the request as invalid" });
+                .dead => {
+                    try d.backend.finish(lease, .{ .dead = "the provider rejected the request" });
                     return .dead;
                 },
-                .auth_401_403, .quota_exhausted => {
-                    try d.backend.finish(lease, .{ .requeue = .{ .delay_ms = 60_000, .count_attempt = false, .reason = "provider paused" } });
+                .pause_route => {
+                    try d.backend.finish(lease, .{ .requeue = .{ .delay_ms = 60_000, .count_attempt = false, .reason = "model route paused" } });
                     return .requeued;
                 },
-                else => {
+                .requeue => {
                     if (lease.episode.attempts + 1 >= max_attempts) {
                         try d.backend.finish(lease, .{ .dead = "transient provider failures exhausted the retry budget" });
                         return .dead;

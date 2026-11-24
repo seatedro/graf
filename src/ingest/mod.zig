@@ -50,6 +50,9 @@ pub const schema = @import("schema.zig");
 pub const prompt = @import("prompt.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const rebase = @import("rebase.zig");
+pub const postgres = @import("postgres.zig");
+pub const jobs = @import("jobs.zig");
+pub const workers = @import("workers.zig");
 pub const testing = @import("testing.zig");
 
 pub const ConflictKind = rules.ConflictKind;
@@ -87,16 +90,20 @@ pub const Pipeline = struct {
     graph_id: core.Id,
 
     pub fn process(p: *Pipeline, arena: std.mem.Allocator, lease: store.Lease) !Outcome {
-        _ = p;
-        _ = arena;
-        _ = lease;
-        return core.NotImplemented;
+        var backend: postgres.PgBackend = .{ .store = p.store, .graph_id = p.graph_id, .io = p.client.io };
+        var model: postgres.ClientModel = .{ .client = p.client };
+        var driver: pipeline.Driver(postgres.PgBackend, postgres.ClientModel) = .{
+            .backend = &backend,
+            .model = &model,
+            .config = p.config,
+            .graph_id = p.graph_id,
+            .io = p.client.io,
+        };
+        return driver.process(arena, lease);
     }
 
     pub fn runWorkers(p: *Pipeline, stop: *std.atomic.Value(bool)) !void {
-        _ = p;
-        _ = stop;
-        return core.NotImplemented;
+        return workers.run(p, stop);
     }
 };
 

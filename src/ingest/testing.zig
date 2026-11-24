@@ -24,7 +24,7 @@ pub const FakeModel = struct {
     calls: std.EnumArray(core.types.LlmPurpose, u32) = .initFill(0),
     requests: std.ArrayList(llm.StructuredRequest) = .empty,
     embed_fail: ?llm.ErrorClass = null,
-    failure: ?llm.Failure = null,
+    last: ?llm.Failure = null,
     gpa: Allocator,
     kept: std.heap.ArenaAllocator,
 
@@ -42,7 +42,15 @@ pub const FakeModel = struct {
         try m.replies.append(m.gpa, reply);
     }
 
-    pub fn structured(m: *FakeModel, arena: Allocator, req: llm.StructuredRequest) !llm.StructuredResponse {
+    pub fn repair(m: *FakeModel, arena: Allocator, req: llm.StructuredRequest, broken: []const u8, problem: []const u8) !pipeline.Completion {
+        var r = req;
+        r.purpose = .repair;
+        r.user = try std.fmt.allocPrint(arena, "{s}\n{s}", .{ problem, broken });
+        const out = try m.structured(arena, r);
+        return .{ .json = out.json, .repaired = true };
+    }
+
+    pub fn structured(m: *FakeModel, arena: Allocator, req: llm.StructuredRequest) !pipeline.Completion {
         _ = arena;
         m.calls.getPtr(req.purpose).* += 1;
         var copy = req;
@@ -54,11 +62,11 @@ pub const FakeModel = struct {
         m.next += 1;
         switch (reply) {
             .json => |j| {
-                m.failure = null;
-                return .{ .json = j, .model = "fake", .usage = .{}, .cost = .{}, .latency_ms = 1 };
+                m.last = null;
+                return .{ .json = j };
             },
             .fail => |class| {
-                m.failure = .{ .class = class, .certainty = .possibly_sent };
+                m.last = .{ .class = class, .certainty = .possibly_sent };
                 return error.ProviderFailed;
             },
         }
@@ -67,7 +75,7 @@ pub const FakeModel = struct {
     pub fn embed(m: *FakeModel, arena: Allocator, req: llm.EmbedRequest) !llm.EmbedResponse {
         m.calls.getPtr(req.purpose).* += 1;
         if (m.embed_fail) |class| {
-            m.failure = .{ .class = class, .certainty = .possibly_sent };
+            m.last = .{ .class = class, .certainty = .possibly_sent };
             return error.ProviderFailed;
         }
         const out = try arena.alloc([]const f32, req.inputs.len);
@@ -88,8 +96,9 @@ pub const FakeModel = struct {
         return false;
     }
 
-    pub fn lastFailure(m: *FakeModel) ?llm.Failure {
-        return m.failure;
+    pub fn failure(m: *FakeModel) ?pipeline.ModelFailure {
+        const f = m.last orelse return null;
+        return .{ .disposition = pipeline.dispositionForClass(@tagName(f.class)), .retry_after_ms = f.retry_after_ms };
     }
 
     pub fn count(m: *const FakeModel, purpose: core.types.LlmPurpose) u32 {
