@@ -24,14 +24,14 @@ pub fn redact(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
 pub const Segmenter = struct {
     pub const Trigger = enum { tokens, idle, hook, gap };
 
-    pub fn push(s: *Segmenter, arena: std.mem.Allocator, turn: core.Turn) !?core.EpisodeDraft {
+    pub fn push(s: *Segmenter, arena: std.mem.Allocator, turn: core.Turn) !?core.EntryDraft {
         _ = s;
         _ = arena;
         _ = turn;
         return core.NotImplemented;
     }
 
-    pub fn flush(s: *Segmenter, arena: std.mem.Allocator, trigger: Trigger) !?core.EpisodeDraft {
+    pub fn flush(s: *Segmenter, arena: std.mem.Allocator, trigger: Trigger) !?core.EntryDraft {
         _ = s;
         _ = arena;
         _ = trigger;
@@ -42,7 +42,7 @@ pub const Segmenter = struct {
 pub const Tailer = struct {
     harness: core.Harness,
     root: []const u8,
-    sink: core.EpisodeSink,
+    sink: core.EntrySink,
 
     pub fn poll(t: *Tailer, arena: std.mem.Allocator) !void {
         _ = t;

@@ -41,7 +41,7 @@ pub const Failure = struct {
 
 pub const StructuredRequest = struct {
     purpose: core.types.LlmPurpose,
-    episode_id: ?core.Id = null,
+    entry_id: ?core.Id = null,
     system: []const u8,
     user: []const u8,
     schema_name: []const u8,
@@ -59,7 +59,7 @@ pub const StructuredResponse = struct {
 
 pub const EmbedRequest = struct {
     purpose: core.types.LlmPurpose,
-    episode_id: ?core.Id = null,
+    entry_id: ?core.Id = null,
     inputs: []const []const u8,
     priority: Priority = .background,
 };
