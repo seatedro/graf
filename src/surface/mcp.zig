@@ -300,7 +300,7 @@ test "stdio session conformance" {
         \\{"jsonrpc":"2.0","method":"notifications/initialized"}
         \\{"jsonrpc":"2.0","id":"list","method":"tools/list"}
         \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"memory_search","arguments":{"query":"db choice","project":"*","max_tokens":200}}}
-        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"memory_entity","arguments":{"name_or_id":"acme","depth":2}}}
+        \\{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"memory_entity","arguments":{"name_or_id":"brackwater","depth":2}}}
         \\{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"memory_remember","arguments":{"text":"We use Postgres.","scope":"global"}}}
         \\{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"memory_forget","arguments":{"query":"old db","reason":"moved"}}}
         \\{"jsonrpc":"2.0","id":7,"method":"ping"}
@@ -369,7 +369,7 @@ test "stdio session conformance" {
 
     try testing.expectEqualSlices(api.Op, &.{ .search, .entity, .remember, .forget, .search }, fake.ops.items);
     try testing.expectEqualStrings("{\"query\":\"db choice\",\"project\":\"*\",\"max_tokens\":200}", fake.bodies.items[0]);
-    try testing.expectEqualStrings("{\"name_or_id\":\"acme\",\"depth\":2}", fake.bodies.items[1]);
+    try testing.expectEqualStrings("{\"name_or_id\":\"brackwater\",\"depth\":2}", fake.bodies.items[1]);
     try testing.expectEqualStrings("{\"text\":\"We use Postgres.\",\"scope\":\"global\"}", fake.bodies.items[2]);
     try testing.expectEqualStrings("{\"query\":\"old db\",\"reason\":\"moved\"}", fake.bodies.items[3]);
 }

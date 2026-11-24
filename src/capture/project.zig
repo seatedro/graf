@@ -224,14 +224,14 @@ test "normalizeRemote handles scp, https, ssh with port, and credentials" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const cases = [_][2][]const u8{
-        .{ "git@github.com:acme/widgets.git", "github.com/acme/widgets" },
-        .{ "https://github.com/acme/widgets", "github.com/acme/widgets" },
-        .{ "https://github.com/acme/widgets.git", "github.com/acme/widgets" },
-        .{ "https://GitHub.com/acme/widgets/", "github.com/acme/widgets" },
-        .{ "ssh://git@git.example.test:2222/acme/widgets.git", "git.example.test/acme/widgets" },
-        .{ "https://user:tok-123@git.example.test/acme/widgets", "git.example.test/acme/widgets" },
+        .{ "git@github.com:brackwater/widgets.git", "github.com/brackwater/widgets" },
+        .{ "https://github.com/brackwater/widgets", "github.com/brackwater/widgets" },
+        .{ "https://github.com/brackwater/widgets.git", "github.com/brackwater/widgets" },
+        .{ "https://GitHub.com/brackwater/widgets/", "github.com/brackwater/widgets" },
+        .{ "ssh://git@git.example.test:2222/brackwater/widgets.git", "git.example.test/brackwater/widgets" },
+        .{ "https://user:tok-123@git.example.test/brackwater/widgets", "git.example.test/brackwater/widgets" },
         .{ "https://git.example.test:8443/group/sub/widgets.git/", "git.example.test/group/sub/widgets" },
-        .{ "git.example.test:acme/widgets", "git.example.test/acme/widgets" },
+        .{ "git.example.test:brackwater/widgets", "git.example.test/brackwater/widgets" },
     };
     for (cases) |c| {
         const got = (try normalizeRemote(arena, c[0])) orelse return error.TestUnexpectedResult;
@@ -252,11 +252,11 @@ test "remoteUrl prefers origin, else the first remote" {
         \\[remote "upstream"]
         \\    url = https://git.example.test/upstream/widgets.git
         \\[remote "origin"]
-        \\    url = "git@git.example.test:acme/widgets.git" ; comment
+        \\    url = "git@git.example.test:brackwater/widgets.git" ; comment
         \\    fetch = +refs/heads/*:refs/remotes/origin/*
         \\
     ;
-    try testing.expectEqualStrings("git@git.example.test:acme/widgets.git", (try remoteUrl(arena, with_origin)).?);
+    try testing.expectEqualStrings("git@git.example.test:brackwater/widgets.git", (try remoteUrl(arena, with_origin)).?);
     const without_origin =
         \\[remote "fork"]
         \\    URL = https://git.example.test/fork/widgets
@@ -269,10 +269,10 @@ test "remoteUrl prefers origin, else the first remote" {
 }
 
 test "globMatch" {
-    try testing.expect(globMatch("github.com/acme/*", "github.com/acme/widgets"));
-    try testing.expect(globMatch("github.com/acme/widgets", "github.com/acme/widgets"));
-    try testing.expect(!globMatch("github.com/acme/widgets", "github.com/acme/widgets2"));
-    try testing.expect(!globMatch("github.com/acme/*", "github.com/other/widgets"));
+    try testing.expect(globMatch("github.com/brackwater/*", "github.com/brackwater/widgets"));
+    try testing.expect(globMatch("github.com/brackwater/widgets", "github.com/brackwater/widgets"));
+    try testing.expect(!globMatch("github.com/brackwater/widgets", "github.com/brackwater/widgets2"));
+    try testing.expect(!globMatch("github.com/brackwater/*", "github.com/other/widgets"));
     try testing.expect(globMatch("*/secret-*", "git.example.test/secret-plans"));
     try testing.expect(globMatch("*", "anything"));
 }
@@ -302,19 +302,19 @@ test "derive walks to the git root, follows worktrees, falls back to cwd" {
     defer tmp.cleanup();
     const f: Fixture = .{ .arena = arena, .root = try tmp.dir.realPathFileAlloc(io, ".", arena), .dir = tmp.dir };
 
-    try f.write("main/.git/config", "[remote \"origin\"]\n\turl = https://bot:secret@Git.Example.Test/acme/widgets.git\n");
+    try f.write("main/.git/config", "[remote \"origin\"]\n\turl = https://bot:secret@Git.Example.Test/brackwater/widgets.git\n");
     try f.write("main/src/deep/file.txt", "");
-    try testing.expectEqualStrings("git.example.test/acme/widgets", try derive(arena, io, try f.path("main/src/deep")));
+    try testing.expectEqualStrings("git.example.test/brackwater/widgets", try derive(arena, io, try f.path("main/src/deep")));
     try testing.expectEqualStrings(try f.path("main"), (try gitRoot(arena, io, try f.path("main/src/deep"))).?);
 
     try f.write("main/.git/worktrees/feature/commondir", "../..\n");
     try f.write("wt/.git", try std.fmt.allocPrint(arena, "gitdir: {s}\n", .{try f.path("main/.git/worktrees/feature")}));
     try f.write("wt/pkg/x.txt", "");
-    try testing.expectEqualStrings("git.example.test/acme/widgets", try derive(arena, io, try f.path("wt/pkg")));
+    try testing.expectEqualStrings("git.example.test/brackwater/widgets", try derive(arena, io, try f.path("wt/pkg")));
 
     try f.write("sub/.git", "gitdir: ../main/.git/modules/sub\n");
-    try f.write("main/.git/modules/sub/config", "[remote \"up\"]\n\turl = git@git.example.test:acme/sub.git\n");
-    try testing.expectEqualStrings("git.example.test/acme/sub", try derive(arena, io, try f.path("sub")));
+    try f.write("main/.git/modules/sub/config", "[remote \"up\"]\n\turl = git@git.example.test:brackwater/sub.git\n");
+    try testing.expectEqualStrings("git.example.test/brackwater/sub", try derive(arena, io, try f.path("sub")));
 
     try f.write("plain/.git/config", "[core]\n\tbare = false\n");
     try f.write("plain/a/b.txt", "");
@@ -332,15 +332,15 @@ test "isExcluded: projects, paths component-wise, tilde, grafignore" {
 
     try f.write("home/work/a/b/x.txt", "");
     try f.write("home/work/a/bc/x.txt", "");
-    try f.write("repo/.git/config", "[remote \"origin\"]\n\turl = git@github.com:acme/private.git\n");
+    try f.write("repo/.git/config", "[remote \"origin\"]\n\turl = git@github.com:brackwater/private.git\n");
     try f.write("repo/lib/x.txt", "");
 
     var cfg: core.Config = .{};
-    cfg.capture.exclude_projects = &.{"github.com/acme/*"};
+    cfg.capture.exclude_projects = &.{"github.com/brackwater/*"};
     cfg.capture.exclude_paths = &.{"~/work/a/b"};
     const home = try f.path("home");
 
-    try testing.expect(try isExcluded(arena, io, &cfg, .{ .project = "github.com/acme/widgets" }));
+    try testing.expect(try isExcluded(arena, io, &cfg, .{ .project = "github.com/brackwater/widgets" }));
     try testing.expect(!try isExcluded(arena, io, &cfg, .{ .project = "github.com/other/widgets" }));
     try testing.expect(try isExcluded(arena, io, &cfg, .{ .cwd = try f.path("repo/lib"), .home = home }));
 

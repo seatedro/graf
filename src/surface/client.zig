@@ -263,12 +263,12 @@ test "client handler round-trips every request through the daemon" {
     };
     const requests = [_]api.Request{
         .{ .op = .search, .body = "{\"query\":\"q\",\"project\":\"*\"}" },
-        .{ .op = .entity, .body = "{\"name_or_id\":\"acme\"}" },
+        .{ .op = .entity, .body = "{\"name_or_id\":\"brackwater\"}" },
         .{ .op = .remember, .body = "{\"text\":\"We deploy on Fridays.\"}" },
         .{ .op = .forget, .body = "{\"fact_id\":\"00000000-0000-0000-0000-000000000001\"}" },
         .{ .op = .entries, .body = "{\"harness\":\"cli\",\"text\":\"hi\"}" },
         .{ .op = .flush, .body = "{\"harness\":\"cli\",\"session_id\":\"s\",\"transcript_path\":\"/t\",\"cwd\":\"/w\"}" },
-        .{ .op = .brief, .body = "{\"project\":\"acme web/caf\u{e9}\"}" },
+        .{ .op = .brief, .body = "{\"project\":\"brackwater web/caf\u{e9}\"}" },
         .{ .op = .brief },
         .{ .op = .warm, .session_id = "sess 1/2", .body = "{\"cwd\":\"/w\"}" },
         .{ .op = .warm, .session_id = "s" },

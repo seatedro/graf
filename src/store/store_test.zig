@@ -238,21 +238,21 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
     pgzig.norm = "pg zig";
     pgzig.aliases = &.{ "pg-zig", "karlseguin's driver" };
     const dup = entity(&s, "pgzig driver", .software);
-    const marco = entity(&s, "Marco", .person);
+    const hollis = entity(&s, "Hollis", .person);
 
     const e1 = emb(2);
     const e2 = emb(3);
     const e3 = emb(4);
     const uses = newFact(&s, g, graf.id, "uses", .{ .entity = pgzig.id }, "graf uses pg.zig.", t0, &e1);
     const lacks = newFact(&s, g, dup.id, "lacks_feature", .{ .value = "COPY" }, "pg.zig lacks COPY.", t0, &e2);
-    const oncall = newFact(&s, g, graf.id, "has_oncall", .{ .entity = marco.id }, "Marco is on call for graf.", t0, &e3);
+    const oncall = newFact(&s, g, graf.id, "has_oncall", .{ .entity = hollis.id }, "Hollis is on call for graf.", t0, &e3);
 
     const en1 = try enqueueNew(&s, g, note("commit", "entry one", t0));
     const l1 = (try s.claim(a, g, "w")).?;
     try testing.expect(l1.entry_id.eql(en1));
     const cs1: core.ChangeSet = .{
         .base_seq = 0,
-        .new_entities = &.{ graf, pgzig, dup, marco },
+        .new_entities = &.{ graf, pgzig, dup, hollis },
         .new_facts = &.{ uses, lacks, oncall },
         .evidence = &.{ .{ .fact_id = uses.fact.id, .kind = .stated, .quote = "we use pg.zig" }, .{ .fact_id = lacks.fact.id, .kind = .stated } },
         .mentions = &.{ graf.id, pgzig.id },
@@ -287,10 +287,10 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
     defer commits.deinit();
     try commits.listen("graf_commit", .{ .timeout = 5_000 });
 
-    const elena = entity(&s, "Elena", .person);
+    const juno = entity(&s, "Juno", .person);
     const e4 = emb(5);
     const e5 = emb(6);
-    const handoff = newFact(&s, g, graf.id, "has_oncall", .{ .entity = elena.id }, "Elena is on call for graf.", t0 + day, &e4);
+    const handoff = newFact(&s, g, graf.id, "has_oncall", .{ .entity = juno.id }, "Juno is on call for graf.", t0 + day, &e4);
     const supports = newFact(&s, g, pgzig.id, "supports_feature", .{ .value = "COPY" }, "pg.zig supports COPY.", t0 + day, &e5);
     const en2 = try enqueueNew(&s, g, note("commit", "entry two", t0 + day));
     const l2 = (try s.claim(a, g, "w")).?;
@@ -299,7 +299,7 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
     if (comptime @hasField(core.ChangeSet, "new_aliases")) aliases_extra = "yes";
     const cs2: core.ChangeSet = .{
         .base_seq = 1,
-        .new_entities = &.{elena},
+        .new_entities = &.{juno},
         .merges = &.{.{ .from = dup.id, .into = pgzig.id, .reason = "E2 high similarity" }},
         .new_facts = &.{ handoff, supports },
         .restatements = &.{.{ .fact_id = uses.fact.id, .confidence = 0.93 }},
@@ -373,7 +373,7 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
             \\SELECT $2::uuid = ANY(touched_entities), $3::uuid = ANY(touched_entities), $4::uuid = ANY(touched_facts),
             \\  $5::uuid = ANY(touched_facts), cardinality(touched_facts)
             \\FROM commit_log WHERE graph_id = $1 AND seq = 2
-        , .{ gid, @as([]const u8, &marco.id.bytes), @as([]const u8, &elena.id.bytes), @as([]const u8, &oncall.fact.id.bytes), @as([]const u8, &lacks.fact.id.bytes) })).?;
+        , .{ gid, @as([]const u8, &hollis.id.bytes), @as([]const u8, &juno.id.bytes), @as([]const u8, &oncall.fact.id.bytes), @as([]const u8, &lacks.fact.id.bytes) })).?;
         defer row.deinit() catch {};
         inline for (0..4) |i| try testing.expect(try row.get(bool, i));
         try testing.expectEqual(@as(i32, 5), try row.get(i32, 4));

@@ -456,9 +456,9 @@ test "existing entries are preserved byte-for-byte and backed up once" {
         \\{
         \\    "numStartups": 12,
         \\    "mcpServers": {
-        \\        "acme-docs": {"type": "http", "url": "https://mcp.example.test/mcp"}
+        \\        "brackwater-docs": {"type": "http", "url": "https://mcp.example.test/mcp"}
         \\    },
-        \\    "projects": {"/work/acme": {"allowedTools": []}}
+        \\    "projects": {"/work/brackwater": {"allowedTools": []}}
         \\}
         \\
     ;
@@ -475,8 +475,8 @@ test "existing entries are preserved byte-for-byte and backed up once" {
         \\  }
         \\}
     ;
-    const codex_toml = "model = \"some-model\"\n\n[mcp_servers.acme]\ncommand = \"acme-mcp\"";
-    const fx_json = "{\"mcpServers\":{\"acme\":{\"command\":\"acme-mcp\"}}}";
+    const codex_toml = "model = \"some-model\"\n\n[mcp_servers.brackwater]\ncommand = \"brackwater-mcp\"";
+    const fx_json = "{\"mcpServers\":{\"brackwater\":{\"command\":\"brackwater-mcp\"}}}";
     try h.write(".claude.json", claude_json);
     try h.write(".claude/settings.json", settings_json);
     try h.write(".codex/config.toml", codex_toml);
@@ -490,13 +490,13 @@ test "existing entries are preserved byte-for-byte and backed up once" {
         \\{
         \\    "numStartups": 12,
         \\    "mcpServers": {
-        \\        "acme-docs": {"type": "http", "url": "https://mcp.example.test/mcp"},
+        \\        "brackwater-docs": {"type": "http", "url": "https://mcp.example.test/mcp"},
         \\        "graf": {
         \\            "type": "stdio",
     ));
     try testing.expect(std.mem.endsWith(u8, claude,
         \\    },
-        \\    "projects": {"/work/acme": {"allowedTools": []}}
+        \\    "projects": {"/work/brackwater": {"allowedTools": []}}
         \\}
         \\
     ));
@@ -512,16 +512,16 @@ test "existing entries are preserved byte-for-byte and backed up once" {
     try testing.expectEqualStrings(codex_toml, try h.read(".codex/config.toml.bak"));
     try testing.expect(!h.exists(".codex/hooks.json.bak"));
 
-    try testing.expectEqualStrings("{\"mcpServers\":{\"acme\":{\"command\":\"acme-mcp\"}, \"graf\": {\"command\":\"graf\",\"args\":[\"mcp\"]}}}", try h.read(".fx/mcp.json"));
+    try testing.expectEqualStrings("{\"mcpServers\":{\"brackwater\":{\"command\":\"brackwater-mcp\"}, \"graf\": {\"command\":\"graf\",\"args\":[\"mcp\"]}}}", try h.read(".fx/mcp.json"));
 
-    const moved = try h.run(.{ .harnesses = &.{.@"claude-code"}, .command = "/opt/acme tools/graf" });
+    const moved = try h.run(.{ .harnesses = &.{.@"claude-code"}, .command = "/opt/brackwater tools/graf" });
     try testing.expectEqual(Action.update, moved.files[0].action);
     try testing.expectEqual(Action.update, moved.files[1].action);
     try testing.expectEqualStrings(claude_json, try h.read(".claude.json.bak"));
-    try expectHooks(arena, try h.read(".claude/settings.json"), "claude-code", "/opt/acme tools/graf");
-    try testing.expect(std.mem.indexOf(u8, try h.read(".claude/settings.json"), "\"command\": \"'/opt/acme tools/graf' hook claude-code stop\"") != null);
+    try expectHooks(arena, try h.read(".claude/settings.json"), "claude-code", "/opt/brackwater tools/graf");
+    try testing.expect(std.mem.indexOf(u8, try h.read(".claude/settings.json"), "\"command\": \"'/opt/brackwater tools/graf' hook claude-code stop\"") != null);
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, try h.read(".claude/settings.json"), "hook claude-code stop"));
-    const again = try h.run(.{ .harnesses = &.{.@"claude-code"}, .command = "/opt/acme tools/graf" });
+    const again = try h.run(.{ .harnesses = &.{.@"claude-code"}, .command = "/opt/brackwater tools/graf" });
     try testing.expect(!again.changed());
 }
 

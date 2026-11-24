@@ -69,14 +69,14 @@ pub const Seed = struct {
     pgzig: core.Id,
     postgres: core.Id,
     sqlite: core.Id,
-    potion: core.Id,
+    quayline: core.Id,
     alice: core.Id,
     tabs: core.Id,
     f_graf_uses_pg: core.Id = undefined,
     f_pgzig_lacks_copy: core.Id = undefined,
     f_pgzig_supports_copy: core.Id = undefined,
     f_graf_uses_sqlite: core.Id = undefined,
-    f_potion_uses_pg: core.Id = undefined,
+    f_quayline_uses_pg: core.Id = undefined,
     f_alice_prefers_tabs: core.Id = undefined,
     f_graf_status: core.Id = undefined,
     f_graf_chose_pg: core.Id = undefined,
@@ -179,7 +179,7 @@ pub fn seed(s: *store.Store, io: std.Io) !Seed {
         .pgzig = try sd.entity("pg.zig", "pg zig", "software", "Zig Postgres driver", &.{ "pg-zig", "the zig postgres driver" }),
         .postgres = try sd.entity("Postgres", "postgres", "software", "Relational database", &.{"PostgreSQL"}),
         .sqlite = try sd.entity("SQLite", "sqlite", "software", "Embedded database", &.{}),
-        .potion = try sd.entity("potion", "potion", "project", "Rust desktop app", &.{}),
+        .quayline = try sd.entity("quayline", "quayline", "project", "Elixir fare app", &.{}),
         .alice = try sd.entity("alice", "alice", "person", "The user", &.{}),
         .tabs = try sd.entity("tabs", "tabs", "concept", "Indentation with tab characters", &.{}),
     };
@@ -187,7 +187,7 @@ pub fn seed(s: *store.Store, io: std.Io) !Seed {
     r.f_pgzig_lacks_copy = try sd.fact(.{ .subject = r.pgzig, .relation = "lacks_feature", .value = "COPY", .text = "pg.zig lacks COPY support.", .project = "graf", .scope = "global", .valid_from = now - 25 * day, .valid_to = now - 5 * day, .end_kind = "changed", .recorded = now - 25 * day, .confidence = 0.8, .harness = "codex" });
     r.f_pgzig_supports_copy = try sd.fact(.{ .subject = r.pgzig, .relation = "supports_feature", .value = "COPY", .text = "pg.zig supports COPY since its latest release.", .project = "graf", .scope = "global", .valid_from = now - 5 * day, .recorded = now - 5 * day, .confidence = 0.85 });
     r.f_graf_uses_sqlite = try sd.fact(.{ .subject = r.graf, .relation = "uses", .object = r.sqlite, .text = "graf uses SQLite for storage.", .project = "graf", .valid_from = now - 20 * day, .recorded = now - 20 * day, .superseded = now - 10 * day, .end_kind = "retracted", .author = "agent", .confidence = 0.7 });
-    r.f_potion_uses_pg = try sd.fact(.{ .subject = r.potion, .relation = "uses", .object = r.postgres, .text = "potion uses Postgres 17 with pgvector for storage.", .project = "potion", .valid_from = now - 30 * day, .recorded = now - 30 * day });
+    r.f_quayline_uses_pg = try sd.fact(.{ .subject = r.quayline, .relation = "uses", .object = r.postgres, .text = "quayline uses Postgres 17 with pgvector for storage.", .project = "quayline", .valid_from = now - 30 * day, .recorded = now - 30 * day });
     r.f_alice_prefers_tabs = try sd.fact(.{ .subject = r.alice, .relation = "prefers", .object = r.tabs, .text = "alice prefers tabs over spaces for indentation.", .project = null, .scope = "global", .valid_from = null, .recorded = now - 40 * day });
     r.f_graf_status = try sd.fact(.{ .subject = r.graf, .relation = "has_status", .value = "beta", .text = "graf is in beta.", .project = "graf", .valid_from = now - 2 * day, .recorded = now - 2 * day });
     r.f_graf_chose_pg = try sd.fact(.{ .subject = r.graf, .relation = "chose", .object = r.postgres, .text = "graf chose Postgres over a graph database.", .rationale = "pgvector and range types cover the temporal graph", .project = "graf", .valid_from = now - 3 * day, .recorded = now - 3 * day });
@@ -282,18 +282,18 @@ test "search boosts the caller's project and scopes to it" {
     const q = "uses Postgres 17 with pgvector for storage";
 
     const all_graf = try f.engine.search(arena, .{ .query = q, .project = "*" });
-    try std.testing.expect(contains(all_graf.hits, sd.f_graf_uses_pg) and contains(all_graf.hits, sd.f_potion_uses_pg));
+    try std.testing.expect(contains(all_graf.hits, sd.f_graf_uses_pg) and contains(all_graf.hits, sd.f_quayline_uses_pg));
 
     const graf = try f.engine.search(arena, .{ .query = q, .project = "graf" });
-    try std.testing.expect(!contains(graf.hits, sd.f_potion_uses_pg));
+    try std.testing.expect(!contains(graf.hits, sd.f_quayline_uses_pg));
     try std.testing.expect(indexOf(graf.hits, sd.f_graf_uses_pg).? < 2);
     const in_all = all_graf.hits[indexOf(all_graf.hits, sd.f_graf_uses_pg).?];
     const in_graf = graf.hits[indexOf(graf.hits, sd.f_graf_uses_pg).?];
     try std.testing.expect(in_graf.score > in_all.score * 1.1);
 
-    const potion = try f.engine.search(arena, .{ .query = q, .project = "potion" });
-    try std.testing.expect(!contains(potion.hits, sd.f_graf_uses_pg));
-    try std.testing.expect(indexOf(potion.hits, sd.f_potion_uses_pg).? < 2);
+    const quayline = try f.engine.search(arena, .{ .query = q, .project = "quayline" });
+    try std.testing.expect(!contains(quayline.hits, sd.f_graf_uses_pg));
+    try std.testing.expect(indexOf(quayline.hits, sd.f_quayline_uses_pg).? < 2);
 
     const global = try f.engine.search(arena, .{ .query = "alice prefers tabs pg.zig", .project = null });
     for (global.hits) |h| try std.testing.expectEqual(core.types.Scope.global, h.fact.scope);
@@ -360,7 +360,7 @@ test "entity resolves aliases and walks two hops" {
     const pg = try f.engine.entity(arena, .{ .name_or_id = "PostgreSQL", .depth = 2 });
     try std.testing.expect(pg.entity.entity.id.eql(sd.postgres));
     try std.testing.expect(contains(pg.facts, sd.f_graf_uses_pg));
-    try std.testing.expect(contains(pg.facts, sd.f_potion_uses_pg));
+    try std.testing.expect(contains(pg.facts, sd.f_quayline_uses_pg));
     try std.testing.expect(!contains(pg.facts, sd.f_graf_pg18));
     var graf_neighbor: ?mod.EntityResult = null;
     _ = &graf_neighbor;
@@ -431,7 +431,7 @@ test "brief is deterministic, bounded and fast" {
     try std.testing.expect(std.mem.indexOf(u8, b, "chose | conf 0.90] graf chose Postgres over a graph database. (why: pgvector") != null);
     try std.testing.expect(std.mem.indexOf(u8, b, "SQLite") == null);
     try std.testing.expect(std.mem.indexOf(u8, b, "Postgres 18") == null);
-    try std.testing.expect(std.mem.indexOf(u8, b, "potion") == null);
+    try std.testing.expect(std.mem.indexOf(u8, b, "quayline") == null);
 
     var samples: [200]i96 = undefined;
     for (&samples) |*s| {

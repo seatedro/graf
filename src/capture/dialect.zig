@@ -552,7 +552,7 @@ test "claude code transcript" {
     const parsed = try parseAll(arena_state.allocator(), .@"claude-code", @embedFile("testdata/claude-code/session.jsonl"));
     try testing.expectEqual(@as(usize, 5), parsed.items.len);
     try expectTurn(parsed.items[0], .user, "Switch the widget service to Postgres 17 and check the migration runner.", &.{});
-    try expectTurn(parsed.items[1], .assistant, "I'll read the runner first.", &.{.{ .name = "Read", .args_preview = "/home/dev/acme/widget/src/migrate.zig:1-3" }});
+    try expectTurn(parsed.items[1], .assistant, "I'll read the runner first.", &.{.{ .name = "Read", .args_preview = "/home/dev/brackwater/widget/src/migrate.zig:1-3" }});
     try expectTurn(parsed.items[2], .assistant, "", &.{.{ .name = "Bash", .args_preview = "zig build test", .result_preview = "All 42 tests passed." }});
     try expectTurn(parsed.items[3], .assistant, "The runner applies each migration in its own transaction, and the tests pass.", &.{});
     try expectTurn(parsed.items[4], .user, "Thanks. Also note that we deploy on Fridays.", &.{});
@@ -562,7 +562,7 @@ test "claude code transcript" {
     try expectAbsent(parsed.items, "Caveat");
     try expectAbsent(parsed.items, "command-name");
     try testing.expectEqual(@as(u64, 1), parsed.malformed);
-    try testing.expectEqualStrings("/home/dev/acme/widget", parsed.meta.cwd.?);
+    try testing.expectEqualStrings("/home/dev/brackwater/widget", parsed.meta.cwd.?);
     try testing.expectEqualStrings("0b6f9c1e-5a0d-4c7e-9a51-3f1e2d4c5b6a", parsed.meta.session_id.?);
     try testing.expectEqualStrings("example-model-large", parsed.meta.model.?);
 }
@@ -580,7 +580,7 @@ test "codex rollout" {
     try expectTurn(parsed.items[4], .assistant, "The lease was shorter than the heartbeat interval, so I raised it to 1 s.", &.{});
     try expectAbsent(parsed.items, "HIDDEN-REASONING");
     try expectAbsent(parsed.items, "environment_context");
-    try testing.expectEqualStrings("/home/dev/acme/widget", parsed.meta.cwd.?);
+    try testing.expectEqualStrings("/home/dev/brackwater/widget", parsed.meta.cwd.?);
     try testing.expectEqualStrings("5973b6c0-94b8-487b-a530-2aeb6098ae0e", parsed.meta.session_id.?);
     try testing.expectEqualStrings("example-model-mini", parsed.meta.model.?);
 }
@@ -612,7 +612,7 @@ test "pi session" {
     try expectTurn(parsed.items[4], .tool, "", &.{.{ .name = "bash", .args_preview = "git status --short", .result_preview = " M package.json\n" }});
     try expectAbsent(parsed.items, "HIDDEN-THOUGHT");
     try expectAbsent(parsed.items, "expert coding assistant");
-    try testing.expectEqualStrings("/home/dev/acme/notes", parsed.meta.cwd.?);
+    try testing.expectEqualStrings("/home/dev/brackwater/notes", parsed.meta.cwd.?);
     try testing.expectEqualStrings("example-model", parsed.meta.model.?);
 }
 
@@ -635,7 +635,7 @@ test "fx event log" {
     try expectTurn(parsed.items[1], .assistant, "Reading build.zig.zon first.", &.{.{ .name = "read_file", .args_preview = "build.zig.zon:1-3" }});
     try expectTurn(parsed.items[2], .assistant, "", &.{.{ .name = "run_command", .args_preview = "zig build", .result_preview = "build ok" }});
     try expectTurn(parsed.items[3], .assistant, "Bumped to 0.17.1; the build passes.", &.{});
-    try testing.expectEqualStrings("/home/dev/acme/widget", parsed.meta.cwd.?);
+    try testing.expectEqualStrings("/home/dev/brackwater/widget", parsed.meta.cwd.?);
     try testing.expectEqualStrings("sess-fx-1", parsed.meta.session_id.?);
 }
 

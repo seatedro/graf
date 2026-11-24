@@ -155,8 +155,8 @@ test "scope boost prefers the caller's project" {
     const f = ProjectFilter.from("graf");
     try std.testing.expectEqual(@as(f64, 1.20), scopeBoost(f, .project, "graf"));
     try std.testing.expectEqual(@as(f64, 1.00), scopeBoost(f, .global, null));
-    try std.testing.expectEqual(@as(f64, 0.80), scopeBoost(f, .project, "potion"));
-    try std.testing.expectEqual(@as(f64, 1.00), scopeBoost(ProjectFilter.from("*"), .project, "potion"));
+    try std.testing.expectEqual(@as(f64, 0.80), scopeBoost(f, .project, "quayline"));
+    try std.testing.expectEqual(@as(f64, 1.00), scopeBoost(ProjectFilter.from("*"), .project, "quayline"));
     try std.testing.expect(ProjectFilter.from(null) == .global_only);
 }
 

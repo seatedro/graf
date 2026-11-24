@@ -635,7 +635,7 @@ test "tails a transcript, seals on idle, and resumes from the stored cursor" {
     try testing.expectEqual(@as(usize, 2), sink.entries.items.len);
     try testing.expectEqual(@as(u64, 0), restarted.stats.lines);
 
-    try h.append("{\"type\":\"user\",\"cwd\":\"/home/dev/acme/widget\",\"message\":{\"role\":\"user\",\"content\":\"One more thing: the staging database is on port 5433.\"},\"timestamp\":\"2026-11-20T17:30:00.000Z\"}\n");
+    try h.append("{\"type\":\"user\",\"cwd\":\"/home/dev/brackwater/widget\",\"message\":{\"role\":\"user\",\"content\":\"One more thing: the staging database is on port 5433.\"},\"timestamp\":\"2026-11-20T17:30:00.000Z\"}\n");
     try restarted.scan(t0 + 30 * std.time.us_per_min);
     try restarted.tick(t0 + 40 * std.time.us_per_min);
     try testing.expectEqual(@as(usize, 3), sink.entries.items.len);
@@ -855,7 +855,7 @@ test "excluded projects and paths are never read into entries" {
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
     try h.write(claude_fixture);
-    h.config.capture.exclude_paths = &.{"/home/dev/acme"};
+    h.config.capture.exclude_paths = &.{"/home/dev/brackwater"};
     var t = h.tailer(&sink, .{});
     defer t.deinit();
     try t.scan(t0 + 3 * std.time.us_per_min);
@@ -864,7 +864,7 @@ test "excluded projects and paths are never read into entries" {
     try testing.expectEqual(@as(usize, 1), t.stats.excluded_files);
 
     h.config.capture.exclude_paths = &.{};
-    h.config.capture.exclude_projects = &.{"/home/dev/acme/*"};
+    h.config.capture.exclude_projects = &.{"/home/dev/brackwater/*"};
     var again = h.tailer(&sink, .{});
     defer again.deinit();
     try again.scan(t0 + 3 * std.time.us_per_min);
@@ -878,16 +878,16 @@ test "secrets never reach an entry from any part of a turn" {
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
     const a = h.arena.allocator();
-    const gateway_key = try std.mem.concat(a, u8, &.{ "ak_live_", "Q7xV2mK9pL4rT8wZ", "3nB6cD1fH5jN0sY2" });
+    const mooring_key = try std.mem.concat(a, u8, &.{ "mr_live_", "Q7xV2mK9pL4rT8wZ", "3nB6cD1fH5jN0sY2" });
     const model_key = try std.mem.concat(a, u8, &.{ "sk-" ++ "ant-api03-", "Zr4Tq9LmXw2Vb7Nc", "K1pS8dF3gH6jY0uE", "5aWq-RtYu_Io9Pz" });
     const token = try std.mem.concat(a, u8, &.{ "gh" ++ "p_", "a1B2c3D4e5F6g7H8", "i9J0k1L2m3N4o5P6q7R8" });
     const transcript = try std.fmt.allocPrint(a,
-        \\{{"type":"user","cwd":"/home/dev/acme/widget","message":{{"role":"user","content":"Try hitting the gateway with ACME_GATEWAY_API_KEY={s} and verify https://gateway.example.test/v1 responds."}},"timestamp":"2026-11-20T17:00:00.000Z"}}
-        \\{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t1","name":"Bash","input":{{"command":"curl -H 'Authorization: Bearer {s}' https://gateway.example.test/v1/models"}}}}]}},"timestamp":"2026-11-20T17:00:02.000Z"}}
+        \\{{"type":"user","cwd":"/home/dev/brackwater/widget","message":{{"role":"user","content":"Try hitting Mooring with MOORING_API_KEY={s} and verify the staging URL https://mooring.example.test/v1 responds."}},"timestamp":"2026-11-20T17:00:00.000Z"}}
+        \\{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t1","name":"Bash","input":{{"command":"curl -H 'Authorization: Bearer {s}' https://mooring.example.test/v1/berths"}}}}]}},"timestamp":"2026-11-20T17:00:02.000Z"}}
         \\{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"t1","content":"GITHUB_TOKEN={s}\nok"}}]}},"timestamp":"2026-11-20T17:00:03.000Z"}}
-        \\{{"type":"assistant","message":{{"content":[{{"type":"text","text":"The gateway answered 200 OK."}}]}},"timestamp":"2026-11-20T17:00:04.000Z"}}
+        \\{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Mooring answered 200 OK."}}]}},"timestamp":"2026-11-20T17:00:04.000Z"}}
         \\
-    , .{ gateway_key, model_key, token });
+    , .{ mooring_key, model_key, token });
     try h.write(transcript);
     var t = h.tailer(&sink, .{});
     defer t.deinit();
@@ -895,9 +895,9 @@ test "secrets never reach an entry from any part of a turn" {
     try t.tick(t0 + 10 * std.time.us_per_min);
     try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
     const body = sink.entries.items[0].body;
-    for ([_][]const u8{ gateway_key, model_key, token, "Q7xV2mK9pL4rT8wZ", "K1pS8dF3gH6jY0uE", "i9J0k1L2m3N4o5P6" }) |secret| {
+    for ([_][]const u8{ mooring_key, model_key, token, "Q7xV2mK9pL4rT8wZ", "K1pS8dF3gH6jY0uE", "i9J0k1L2m3N4o5P6" }) |secret| {
         try testing.expect(std.mem.indexOf(u8, body, secret) == null);
     }
-    try testing.expect(std.mem.indexOf(u8, body, "https://gateway.example.test/v1") != null);
+    try testing.expect(std.mem.indexOf(u8, body, "https://mooring.example.test/v1") != null);
     try testing.expect(std.mem.indexOf(u8, body, "[REDACTED:") != null);
 }
