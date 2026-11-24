@@ -25,7 +25,7 @@ jobs:
     env:
       GRAF_TEST_DATABASE_URL: postgres://graf:graf@localhost:5432/graf_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - uses: mlugg/setup-zig@v2
@@ -57,9 +57,11 @@ jobs:
   nix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: DeterminateSystems/nix-installer-action@main
-      - name: Dev shell provides Zig and Postgres with pgvector
+      - name: Tests in the dev shell against nix run .#devdb
         run: |
-          nix develop --command zig version
-          nix develop --command bash -c 'test -f "$(pg_config --sharedir)/extension/vector.control"'
+          nix run .#devdb
+          eval "$(nix run .#devdb -- env)"
+          nix develop --command zig build test --summary all
+          nix run .#devdb -- down
