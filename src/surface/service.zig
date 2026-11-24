@@ -31,7 +31,6 @@ pub const Service = struct {
     engine: *retrieve.Engine,
     sink: ?core.EntrySink,
     flusher: ?Flusher = null,
-    remember_harness: core.Harness = .mcp,
     background: Io.Group = .init,
 
     pub fn handler(s: *Service) api.Handler {
@@ -69,8 +68,8 @@ pub const Service = struct {
             .forget => s.forget(arena, try parse(ForgetInput, arena, req.body)),
             .entries => s.entries(arena, try parse(core.EntryDraft, arena, req.body)),
             .brief => s.brief(arena, try parse(ProjectInput, arena, req.body)),
-            .flush => s.flush(arena, try parse(FlushRequest, arena, req.body)),
-            .warm => s.warm(arena, req.session_id orelse return error.MissingSessionId, try parse(PromptInput, arena, req.body)),
+            .flush => s.flush(try parse(FlushRequest, arena, req.body)),
+            .warm => s.warm(req.session_id orelse return error.MissingSessionId, try parse(PromptInput, arena, req.body)),
             .recall => s.recall(arena, req.session_id orelse return error.MissingSessionId, try parse(PromptInput, arena, req.body)),
         };
     }
@@ -213,8 +212,7 @@ pub const Service = struct {
                 try s.io.sleep(.fromMilliseconds(100), .awake);
             }
         }
-        var buf: [36]u8 = undefined;
-        return ok(arena, .{ .text = try std.fmt.allocPrint(arena, "Queued as entry {s}; it will be in memory shortly.", .{id.toString(&buf)}), .entry_id = id, .status = core.types.EntryStatus.queued });
+        return ok(arena, .{ .text = try std.fmt.allocPrint(arena, "Queued as entry {f}; it will be in memory shortly.", .{id}), .entry_id = id, .status = core.types.EntryStatus.queued });
     }
 
     fn rememberReply(arena: Allocator, id: core.Id, o: retrieve.EntryOutcome) !api.Reply {
@@ -263,13 +261,12 @@ pub const Service = struct {
         return ok(arena, .{ .text = try s.engine.brief(arena, in.project) });
     }
 
-    fn flush(s: *Service, arena: Allocator, in: FlushRequest) !api.Reply {
+    fn flush(s: *Service, in: FlushRequest) api.Reply {
         const f = s.flusher orelse return .{ .status = 202, .body = "{\"accepted\":true,\"flushed\":false}" };
         const flushed = f.flush(in) catch |err| blk: {
             log.warn("flush failed: {s}", .{@errorName(err)});
             break :blk false;
         };
-        _ = arena;
         return .{ .status = 202, .body = if (flushed) "{\"accepted\":true,\"flushed\":true}" else "{\"accepted\":true,\"flushed\":false}" };
     }
 
@@ -284,8 +281,7 @@ pub const Service = struct {
         project: ?[]const u8,
     };
 
-    fn warm(s: *Service, arena: Allocator, session_id: []const u8, in: PromptInput) !api.Reply {
-        _ = arena;
+    fn warm(s: *Service, session_id: []const u8, in: PromptInput) !api.Reply {
         const prompt = in.prompt orelse return .{ .status = 202, .body = "{\"accepted\":false}" };
         const job = try s.gpa.create(WarmJob);
         errdefer s.gpa.destroy(job);
