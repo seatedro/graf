@@ -15,7 +15,7 @@ const Writer = std.Io.Writer;
 
 pub const version = "0.0.0-dev";
 
-const Command = enum { help, version, config, init, serve, mcp, hook, install, pause, @"resume", search, entity, remember, forget, doctor, eval };
+const Command = enum { help, version, config, init, serve, mcp, hook, install, pause, @"resume", source, search, entity, remember, forget, doctor, eval };
 
 const usage =
     \\usage: graf [--config PATH] <command> [args...]
@@ -30,6 +30,8 @@ const usage =
     \\      [--harness H] [--command PATH] [--dry-run]
     \\  pause                        stop capturing transcripts until resume
     \\  resume                       capture transcripts again
+    \\  source capy                  tail Capy threads through the public API
+    \\      [--once] [--backfill]
     \\  search <query...>            search memory
     \\      [--project P | --all] [--as-of T] [--known-at T] [--history] [--harness H] [--max-tokens N] [--json]
     \\  entity <name-or-id>          show an entity and its facts
@@ -197,6 +199,7 @@ pub fn run(init: std.process.Init) !u8 {
             try out.writeAll(if (command == .pause) "capture paused\n" else "capture resumed\n");
             return 0;
         },
+        .source => return runSource(init, cfg, rest, out, err),
         .doctor => return doctor(arena, init, cfg, loaded, out),
         .eval => return eval.main(arena, io, cfg, init.environ_map, rest, out, err),
         .search, .entity, .remember, .forget => {
@@ -362,6 +365,35 @@ fn runHook(init: std.process.Init, cfg: *const core.Config, rest: []const []cons
     capture.hooks.run(init.arena.allocator(), init.io, init.environ_map, cfg, harness, event, stdin_json, out) catch |e| {
         try err.print("graf hook: {s}\n", .{@errorName(e)});
     };
+    return 0;
+}
+
+fn runSource(init: std.process.Init, cfg: *const core.Config, rest: []const []const u8, out: *Writer, err: *Writer) !u8 {
+    const io = init.io;
+    if (rest.len == 0 or !std.mem.eql(u8, rest[0], "capy")) {
+        try err.writeAll("usage: graf source capy [--once] [--backfill]\n");
+        return 2;
+    }
+    const parsed = Args.parse(init.arena.allocator(), rest[1..]) catch {
+        try err.writeAll("graf source capy: a flag is missing its value\n");
+        return 2;
+    };
+    if (cfg.sources.capy.api_key.len == 0) {
+        try err.writeAll("graf source capy: set sources.capy.api_key or GRAF_CAPY_API_KEY\n");
+        return 2;
+    }
+    var rt: daemon.Runtime = undefined;
+    rt.open(init.gpa, io, init.environ_map, cfg, .{ .pool_size = 2, .start_postgres = true }) catch |e| return fail(err, "source capy", e);
+    defer rt.close();
+    var src = capture.capy.Source.init(init.gpa, io, init.environ_map, cfg, rt.store.sink(rt.graph_id), .{ .backfill = parsed.has("--backfill") }) catch |e| return fail(err, "source capy", e);
+    defer src.deinit();
+    if (!parsed.has("--once")) {
+        src.run() catch {};
+        return 0;
+    }
+    src.runOnce(std.Io.Timestamp.now(io, .real).toMicroseconds()) catch |e| return fail(err, "source capy", e);
+    const s = src.snapshot();
+    try out.print("capy: {d} threads ({d} excluded), {d} messages, {d} entries queued, {d} duplicates, {d} turns dropped\n", .{ s.threads, s.excluded_threads, s.messages, s.entries, s.duplicates, s.dropped_turns });
     return 0;
 }
 
