@@ -39,6 +39,9 @@ pub const FakeModel = struct {
     calls: std.EnumArray(core.types.LlmPurpose, u32) = .initFill(0),
     requests: std.ArrayList(llm.StructuredRequest) = .empty,
     embed_fail: ?pipeline.Disposition = null,
+    decision_enabled: bool = false,
+    decision_answers: ?[]const llm.Answer = null,
+    decisions: std.ArrayList(llm.DecisionRequest) = .empty,
     last: ?pipeline.ModelFailure = null,
     gpa: Allocator,
     kept: std.heap.ArenaAllocator,
@@ -50,6 +53,7 @@ pub const FakeModel = struct {
     pub fn deinit(m: *FakeModel) void {
         m.replies.deinit(m.gpa);
         m.requests.deinit(m.gpa);
+        m.decisions.deinit(m.gpa);
         m.kept.deinit();
     }
 
@@ -102,17 +106,26 @@ pub const FakeModel = struct {
         return .{ .vectors = out, .usage = .{}, .cost = .{} };
     }
 
-    pub fn decide(m: *FakeModel, arena: Allocator, purpose: core.types.LlmPurpose, questions: []const llm.Question) ![]const llm.Answer {
-        _ = m;
+    pub fn decide(m: *FakeModel, arena: Allocator, req: llm.DecisionRequest) ![]const llm.Answer {
         _ = arena;
-        _ = purpose;
-        _ = questions;
-        return error.DecisionDisabled;
+        if (!m.decision_enabled) return error.DecisionDisabled;
+        const kept = m.kept.allocator();
+        var copy = req;
+        const state = try kept.alloc(llm.decision.Field, req.state.len);
+        for (req.state, state) |f, *out| out.* = .{ .name = try kept.dupe(u8, f.name), .text = try kept.dupe(u8, f.text) };
+        copy.state = state;
+        const questions = try kept.alloc(llm.Question, req.questions.len);
+        for (req.questions, questions) |q, *out| out.* = switch (q) {
+            .yes_no => |p| .{ .yes_no = try kept.dupe(u8, p) },
+            .choice => |c| .{ .choice = .{ .prompt = try kept.dupe(u8, c.prompt), .options = &.{} } },
+        };
+        copy.questions = questions;
+        try m.decisions.append(m.gpa, copy);
+        return m.decision_answers orelse error.ProviderFailed;
     }
 
     pub fn decisionEnabled(m: *FakeModel) bool {
-        _ = m;
-        return false;
+        return m.decision_enabled;
     }
 
     pub fn failure(m: *FakeModel) ?pipeline.ModelFailure {

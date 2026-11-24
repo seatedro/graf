@@ -387,17 +387,93 @@ test "decide: generic request, calibrated answers, rerank fails fast so search c
     h.cfg.decision = .{ .base_url = "https://decide.example.test", .path = "/v1/decide", .api_key = "d-key", .model = "decider-1" };
     const qs = [_]llm.Question{
         .{ .yes_no = "Is F3 the same fact?" },
-        .{ .choice = .{ .prompt = "Which entity?", .options = &.{ "E1", "E2", "neither" } } },
+        .{ .choice = .{ .prompt = "Which entity?", .options = &.{ .{ .name = "E1" }, .{ .name = "E2" }, .{ .name = "neither" } } } },
     };
-    const answers = try h.client.decide(h.a(), .resolve, &qs);
+    const answers = try h.client.decide(h.a(), .{ .purpose = .resolve, .questions = &qs });
     try testing.expectEqual(@as(f64, 0.93), answers[0].yes_no);
     try testing.expectEqualStrings("https://decide.example.test/v1/decide", h.replay.sent.items[0].url);
     try testing.expectEqualStrings("Bearer d-key", h.sentHeader(0, "authorization").?);
     try testing.expectEqual(core.types.CostStatus.priced, h.ledger.rows.items[0].cost_status);
     try testing.expectEqualStrings("typed-decisions", h.ledger.rows.items[0].route);
 
-    try testing.expectError(error.ProviderFailed, h.client.decide(h.a(), .rerank, &qs));
+    try testing.expectError(error.ProviderFailed, h.client.decide(h.a(), .{ .purpose = .rerank, .questions = &qs }));
     try testing.expectEqual(@as(usize, 2), h.replay.sent.items.len);
+}
+
+const stateful_questions = [_]llm.Question{
+    .{ .yes_no = "The new statement means the existing fact no longer holds." },
+    .{ .choice = .{ .prompt = "Which existing entity is the new entity?", .options = &.{ .{ .name = "E1", .description = "the project" }, .{ .name = "E2" }, .{ .name = "none" } } } },
+};
+
+test "decide: stateful wire sends shared state once, maps typed answers, and prices from the cost header" {
+    var h: Harness = undefined;
+    h.init(.@"openai-responses", &.{fixture("decision_stateful_ok")});
+    defer h.deinit();
+    h.cfg.decision = .{ .base_url = "https://decide.example.test", .path = "/v1/decide", .api_key = "d-key", .model = "decider-2", .wire = .stateful, .cost_header = "x-example-cost-usd" };
+    const entry_id = core.Id.v7(testing.io);
+    const answers = try h.client.decide(h.a(), .{
+        .purpose = .resolve,
+        .entry_id = entry_id,
+        .state = &.{.{ .name = "entry", .text = "We moved the project from Go to Rust." }},
+        .questions = &stateful_questions,
+    });
+    try testing.expectEqual(@as(f64, 0.87), answers[0].yes_no);
+    try testing.expectEqualSlices(f64, &.{ 0.92, 0.01, 0.07 }, answers[1].choice);
+
+    const body = try h.sentJson(0);
+    try testing.expectEqualStrings("decider-2", get(body, &.{"model"}).string);
+    try testing.expectEqualStrings("We moved the project from Go to Rust.", get(body, &.{ "state", "entry" }).string);
+    try testing.expectEqualStrings("noul", get(body, &.{ "questions", "q0", "type" }).string);
+    try testing.expectEqualStrings("the project", get(body, &.{ "questions", "q1", "criteria", "E1" }).string);
+    try testing.expect(get(body, &.{ "questions", "q1", "criteria", "none" }) == .null);
+    try testing.expectEqualStrings("Bearer d-key", h.sentHeader(0, "authorization").?);
+
+    const row = h.ledger.rows.items[0];
+    try testing.expect(row.ok);
+    try testing.expectEqualStrings("typed-decisions", row.route);
+    try testing.expectEqual(core.types.LlmPurpose.resolve, row.purpose);
+    try testing.expect(row.entry_id.?.eql(entry_id));
+    try testing.expectEqual(@as(i32, 406), row.input_tokens);
+    try testing.expectEqual(@as(i32, 59), row.output_tokens);
+    try testing.expectEqual(core.types.CostStatus.priced, row.cost_status);
+    try testing.expectApproxEqAbs(@as(f64, 0.00001705), row.cost_usd, 1e-12);
+}
+
+test "decide: stateful wire without a cost header falls back to the rate table by reported model" {
+    var h: Harness = undefined;
+    h.init(.@"openai-responses", &.{fixture("decision_stateful_no_cost")});
+    defer h.deinit();
+    h.cfg.llm.rates = &.{"decider-2.1 input=2 output=0"};
+    h.cfg.decision = .{ .base_url = "https://decide.example.test", .path = "/v1/decide", .model = "decider-2", .wire = .stateful };
+    const answers = try h.client.decide(h.a(), .{ .purpose = .resolve, .state = &.{.{ .name = "entry", .text = "x" }}, .questions = &stateful_questions });
+    try testing.expectEqual(@as(f64, 0.75), answers[1].choice[2]);
+    const row = h.ledger.rows.items[0];
+    try testing.expectEqual(core.types.CostStatus.estimated, row.cost_status);
+    try testing.expectApproxEqAbs(@as(f64, 0.002), row.cost_usd, 1e-12);
+}
+
+test "decide: a stateful refusal is recorded once and fails without retrying" {
+    var h: Harness = undefined;
+    h.init(.@"openai-responses", &.{ fixture("decision_stateful_400"), fixture("decision_stateful_ok") });
+    defer h.deinit();
+    h.cfg.decision = .{ .base_url = "https://decide.example.test", .path = "/v1/decide", .model = "decider-2", .wire = .stateful, .cost_header = "x-example-cost-usd" };
+    try testing.expectError(error.ProviderFailed, h.client.decide(h.a(), .{ .purpose = .resolve, .questions = &stateful_questions }));
+    try testing.expectEqual(@as(usize, 1), h.replay.sent.items.len);
+    try testing.expectEqual(@as(usize, 1), h.ledger.rows.items.len);
+    try testing.expect(!h.ledger.rows.items[0].ok);
+    try testing.expectEqual(@as(?i32, 400), h.ledger.rows.items[0].http_status);
+}
+
+test "decide: a slow stateful rerank fails fast with no retry so search can fall back" {
+    var h: Harness = undefined;
+    h.init(.@"openai-responses", &.{ .{ .failure = .{ .err = error.Timeout, .sent = true, .timed_out = true } }, fixture("decision_stateful_ok") });
+    defer h.deinit();
+    h.cfg.decision = .{ .base_url = "https://decide.example.test", .path = "/v1/decide", .model = "decider-2", .wire = .stateful, .rerank_timeout_ms = 50 };
+    try testing.expectError(error.ProviderFailed, h.client.decide(h.a(), .{ .purpose = .rerank, .state = &.{.{ .name = "query", .text = "q" }}, .questions = &stateful_questions }));
+    try testing.expectEqual(@as(usize, 1), h.replay.sent.items.len);
+    const row = h.ledger.rows.items[0];
+    try testing.expectEqual(core.types.LlmPurpose.rerank, row.purpose);
+    try testing.expect(!row.ok);
 }
 
 test "the spend cap stops background calls before they are sent" {
