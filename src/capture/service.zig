@@ -4,6 +4,7 @@ const tailer_mod = @import("tailer.zig");
 const watch = @import("watch.zig");
 const state = @import("state.zig");
 const spool = @import("hooks_spool.zig");
+const profiles = @import("profiles.zig");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Environ = std.process.Environ;
@@ -13,9 +14,12 @@ pub const Root = struct {
     path: []const u8,
 };
 
-pub const default_roots = [_]struct { core.Harness, []const u8 }{
-    .{ .@"claude-code", ".claude/projects" },
-    .{ .codex, ".codex/sessions" },
+pub const profile_roots = [_]struct { core.Harness, profiles.Kind, []const u8 }{
+    .{ .@"claude-code", profiles.claude, "projects" },
+    .{ .codex, profiles.codex, "sessions" },
+};
+
+pub const fixed_roots = [_]struct { core.Harness, []const u8 }{
     .{ .pi, ".pi/agent/sessions" },
     .{ .fx, ".fx/sessions" },
 };
@@ -29,60 +33,105 @@ pub const Options = struct {
     tailer: tailer_mod.Options = .{},
 };
 
+const Discovery = struct {
+    home: []const u8,
+    overrides: [profile_roots.len]?[]const u8,
+
+    fn roots(d: Discovery, arena: Allocator, io: Io) ![]const Root {
+        var list: std.ArrayList(Root) = .empty;
+        for (profile_roots, d.overrides) |p, override| {
+            for (try profiles.discover(arena, io, d.home, override, p[1])) |profile| {
+                try list.append(arena, .{ .harness = p[0], .path = try std.fs.path.join(arena, &.{ profile.dir, p[2] }) });
+            }
+        }
+
+        for (fixed_roots) |f| try list.append(arena, .{ .harness = f[0], .path = try std.fs.path.join(arena, &.{ d.home, f[1] }) });
+        return list.items;
+    }
+};
+
 pub const Capture = struct {
     gpa: Allocator,
     io: Io,
     arena: std.heap.ArenaAllocator,
     state_dir: ?[]const u8,
-    tailers: []tailer_mod.Tailer,
+    sink: core.EntrySink,
+    config: *const core.Config,
+    tailer_options: tailer_mod.Options,
+    discovery: ?Discovery,
+    tailers: std.ArrayList(tailer_mod.Tailer) = .empty,
     watcher: watch.Watcher,
     mutex: Io.Mutex = .init,
     last_scan: ?core.Micros = null,
+    paused: bool = false,
     options: Options,
 
     pub fn init(gpa: Allocator, io: Io, env: *const Environ.Map, config: *const core.Config, sink: core.EntrySink, options: Options) !Capture {
-        var arena: std.heap.ArenaAllocator = .init(gpa);
-        errdefer arena.deinit();
-        const a = arena.allocator();
+        var c: Capture = .{
+            .gpa = gpa,
+            .io = io,
+            .arena = .init(gpa),
+            .state_dir = null,
+            .sink = sink,
+            .config = config,
+            .tailer_options = options.tailer,
+            .discovery = null,
+            .watcher = .init(gpa),
+            .options = options,
+        };
+        errdefer c.deinit();
+        const a = c.arena.allocator();
 
-        const home = env.get("HOME");
-        const state_dir = try state.dir(a, env);
-        const roots = options.roots orelse blk: {
-            const h = home orelse break :blk &.{};
-            const list = try a.alloc(Root, default_roots.len);
-            for (default_roots, list) |d, *r| r.* = .{ .harness = d[0], .path = try std.fs.path.join(a, &.{ h, d[1] }) };
-            break :blk list;
+        const home = if (env.get("HOME")) |h| try a.dupe(u8, h) else null;
+        c.state_dir = try state.dir(a, env);
+
+        if (options.roots == null) if (home) |h| {
+            var d: Discovery = .{ .home = h, .overrides = undefined };
+            for (profile_roots, &d.overrides) |p, *o| o.* = if (env.get(p[1].env)) |v| try a.dupe(u8, v) else null;
+            c.discovery = d;
         };
 
         const now = Io.Timestamp.now(io, .real).toMicroseconds();
-        var tailer_options = options.tailer;
-        if (tailer_options.home == null) tailer_options.home = if (home) |h| try a.dupe(u8, h) else null;
-        if (!options.backfill and tailer_options.since == null) {
-            tailer_options.since = options.since orelse if (state_dir) |sd| try state.captureSince(io, sd, now) else now;
+        if (c.tailer_options.home == null) c.tailer_options.home = home;
+        if (!options.backfill and c.tailer_options.since == null) {
+            c.tailer_options.since = options.since orelse if (c.state_dir) |sd| try state.captureSince(io, sd, now) else now;
         }
 
-        const tailers = try gpa.alloc(tailer_mod.Tailer, roots.len);
-        for (roots, tailers) |r, *t| t.* = .init(gpa, io, r.harness, try a.dupe(u8, r.path), sink, config, tailer_options);
-        var watcher: watch.Watcher = .init(gpa);
-        for (tailers) |*t| watcher.watchTree(io, t.root) catch {};
+        if (options.roots) |roots| {
+            for (roots) |r| try c.addTailer(r);
+        } else _ = try c.discoverRoots();
 
-        return .{
-            .gpa = gpa,
-            .io = io,
-            .arena = arena,
-            .state_dir = state_dir,
-            .tailers = tailers,
-            .watcher = watcher,
-            .options = options,
-        };
+        return c;
     }
 
     pub fn deinit(c: *Capture) void {
-        for (c.tailers) |*t| t.deinit();
-        c.gpa.free(c.tailers);
+        for (c.tailers.items) |*t| t.deinit();
+        c.tailers.deinit(c.gpa);
         c.watcher.deinit();
         c.arena.deinit();
         c.* = undefined;
+    }
+
+    fn addTailer(c: *Capture, root: Root) !void {
+        const path = try c.arena.allocator().dupe(u8, root.path);
+        var t: tailer_mod.Tailer = .init(c.gpa, c.io, root.harness, path, c.sink, c.config, c.tailer_options);
+        t.paused = c.paused;
+        try c.tailers.append(c.gpa, t);
+        c.watcher.watchTree(c.io, path) catch {};
+    }
+
+    fn discoverRoots(c: *Capture) !usize {
+        const d = c.discovery orelse return 0;
+        var scratch: std.heap.ArenaAllocator = .init(c.gpa);
+        defer scratch.deinit();
+
+        var added: usize = 0;
+        next: for (try d.roots(scratch.allocator(), c.io)) |r| {
+            for (c.tailers.items) |*t| if (t.harness == r.harness and std.mem.eql(u8, t.root, r.path)) continue :next;
+            try c.addTailer(r);
+            added += 1;
+        }
+        return added;
     }
 
     pub fn run(c: *Capture) Io.Cancelable!void {
@@ -98,8 +147,8 @@ pub const Capture = struct {
     pub fn step(c: *Capture, now: core.Micros) !void {
         try c.mutex.lock(c.io);
         defer c.mutex.unlock(c.io);
-        const paused = if (c.state_dir) |sd| try state.isPaused(c.io, sd) else false;
-        for (c.tailers) |*t| t.paused = paused;
+        c.paused = if (c.state_dir) |sd| try state.isPaused(c.io, sd) else false;
+        for (c.tailers.items) |*t| t.paused = c.paused;
 
         var scratch: std.heap.ArenaAllocator = .init(c.gpa);
         defer scratch.deinit();
@@ -108,23 +157,24 @@ pub const Capture = struct {
 
         const due = if (c.last_scan) |last| now - last >= c.options.scan_every else true;
         if (due or changes.rescan or !c.watcher.active()) {
-            for (c.tailers) |*t| {
+            if (due) _ = try c.discoverRoots();
+            for (c.tailers.items) |*t| {
                 c.watcher.watchTree(c.io, t.root) catch {};
                 try t.scan(now);
             }
             c.last_scan = now;
         } else {
             for (changes.paths.items) |path| {
-                for (c.tailers) |*t| {
-                    if (!std.mem.startsWith(u8, path, t.root) or !tailer_mod.matches(t.harness, std.fs.path.basename(path))) continue;
+                for (c.tailers.items) |*t| {
+                    if (!t.owns(path) or !tailer_mod.matches(t.harness, std.fs.path.basename(path))) continue;
                     try t.pollPath(path, now);
                     break;
                 }
             }
-            for (c.tailers) |*t| try t.tick(now);
+            for (c.tailers.items) |*t| try t.tick(now);
         }
 
-        for (c.tailers) |*t| {
+        for (c.tailers.items) |*t| {
             for (t.recent.items) |path| c.watcher.watchFile(path) catch {};
             t.recent.clearRetainingCapacity();
         }
@@ -135,7 +185,13 @@ pub const Capture = struct {
         defer c.mutex.unlock(c.io);
 
         const now = Io.Timestamp.now(c.io, .real).toMicroseconds();
-        for (c.tailers) |*t| {
+        if (try c.flushKnown(harness, transcript_path, now)) return true;
+        if (try c.discoverRoots() == 0) return false;
+        return c.flushKnown(harness, transcript_path, now);
+    }
+
+    fn flushKnown(c: *Capture, harness: core.Harness, transcript_path: []const u8, now: core.Micros) !bool {
+        for (c.tailers.items) |*t| {
             if (t.harness != harness) continue;
             if (try t.flush(transcript_path, now)) return true;
         }
@@ -160,7 +216,7 @@ pub const Capture = struct {
         defer c.mutex.unlock(c.io);
 
         var total: tailer_mod.Stats = .{};
-        for (c.tailers) |*t| inline for (@typeInfo(tailer_mod.Stats).@"struct".field_names) |name| {
+        for (c.tailers.items) |*t| inline for (@typeInfo(tailer_mod.Stats).@"struct".field_names) |name| {
             @field(total, name) += @field(t.stats, name);
         };
         return total;
@@ -212,6 +268,78 @@ test "capture tails every configured root and answers hook flushes" {
     try tmp.dir.writeFile(io, .{ .sub_path = "claude/proj/s.jsonl", .data = "" });
     try testing.expect(try c.flush(.@"claude-code", transcript));
     try testing.expect(!try c.flush(.codex, transcript));
+}
+
+test "capture discovers every claude and codex profile under home" {
+    const io = testing.io;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const transcripts = [_][]const u8{
+        ".claude/projects/p/s.jsonl",
+        ".claude-work/projects/p/s.jsonl",
+        ".codex/sessions/2026/11/21/rollout-2026-11-21T09-00-00-x.jsonl",
+        ".codex-alt/sessions/2026/11/21/rollout-2026-11-21T09-00-00-x.jsonl",
+    };
+    for (transcripts) |sub| try tmp.dir.createDirPath(io, std.fs.path.dirname(sub).?);
+    try tmp.dir.createDirPath(io, ".claude.bak/projects/p");
+    try tmp.dir.createDirPath(io, ".claude-router");
+    const home = try tmp.dir.realPathFileAlloc(io, ".", arena);
+
+    var sink: tailer_mod.FakeSink = .init(testing.allocator);
+    defer sink.deinit();
+    var env = Environ.Map.init(testing.allocator);
+    defer env.deinit();
+    try env.put("HOME", home);
+    const config: core.Config = .{};
+    var c: Capture = try .init(testing.allocator, io, &env, &config, sink.entrySink(), .{ .backfill = true });
+    defer c.deinit();
+
+    var roots: usize = 0;
+    for (c.tailers.items) |t| {
+        if (t.harness == .@"claude-code" or t.harness == .codex) roots += 1;
+    }
+    try testing.expectEqual(@as(usize, 4), roots);
+
+    const t0: core.Micros = 1_795_194_000_000_000;
+    const minute = std.time.us_per_min;
+
+    try c.step(t0);
+    for (transcripts) |sub| {
+        const data = if (std.mem.startsWith(u8, sub, ".claude")) @embedFile("testdata/claude-code/session.jsonl") else @embedFile("testdata/codex/rollout.jsonl");
+        try tmp.dir.writeFile(io, .{ .sub_path = sub, .data = data });
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = ".claude.bak/projects/p/s.jsonl", .data = @embedFile("testdata/claude-code/session.jsonl") });
+    try c.step(t0 + minute);
+    try c.step(t0 + 2 * minute);
+    try c.step(t0 + 26 * 60 * minute);
+
+    try testing.expectEqual(@as(usize, 4), c.stats().files);
+    try testing.expectEqual(@as(u32, 4), sink.cursors.count());
+    for (transcripts) |sub| {
+        const path = try std.fs.path.join(arena, &.{ home, sub });
+        try testing.expect(sink.cursors.contains(path));
+        const harness: core.Harness = if (std.mem.startsWith(u8, sub, ".claude")) .@"claude-code" else .codex;
+        try testing.expect(try c.flush(harness, path));
+    }
+
+    try testing.expect(!try c.flush(.@"claude-code", try std.fs.path.join(arena, &.{ home, ".claude", "projects-old", "p", "s.jsonl" })));
+    try testing.expect(!try c.flush(.codex, try std.fs.path.join(arena, &.{ home, transcripts[0] })));
+
+    try tmp.dir.createDirPath(io, ".claude-late/projects/p");
+    try tmp.dir.writeFile(io, .{ .sub_path = ".claude-late/projects/p/s.jsonl", .data = @embedFile("testdata/claude-code/session.jsonl") });
+    const late = try std.fs.path.join(arena, &.{ home, ".claude-late", "projects", "p", "s.jsonl" });
+    try testing.expect(try c.flush(.@"claude-code", late));
+    try testing.expect(sink.cursors.contains(late));
+
+    try tmp.dir.createDirPath(io, ".codex-next/sessions/2026/11/22");
+    try tmp.dir.writeFile(io, .{ .sub_path = ".codex-next/sessions/2026/11/22/rollout-2026-11-22T09-00-00-y.jsonl", .data = @embedFile("testdata/codex/rollout.jsonl") });
+    try c.step(t0 + 27 * 60 * minute);
+    try c.step(t0 + 52 * 60 * minute);
+    try testing.expect(sink.cursors.contains(try std.fs.path.join(arena, &.{ home, ".codex-next", "sessions", "2026", "11", "22", "rollout-2026-11-22T09-00-00-y.jsonl" })));
 }
 
 test "spooled flushes replay into the matching tailer" {

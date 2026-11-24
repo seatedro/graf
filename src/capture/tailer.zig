@@ -197,7 +197,7 @@ pub const Tailer = struct {
     }
 
     pub fn flush(t: *Tailer, path: []const u8, now: core.Micros) !bool {
-        if (!std.mem.startsWith(u8, path, t.root)) return false;
+        if (!t.owns(path)) return false;
         const base = std.fs.path.basename(path);
         if (!matches(t.harness, base)) return false;
 
@@ -216,6 +216,10 @@ pub const Tailer = struct {
         _ = t.scratch.reset(.retain_capacity);
         t.compact(f);
         return true;
+    }
+
+    pub fn owns(t: *const Tailer, path: []const u8) bool {
+        return path.len > t.root.len and std.mem.startsWith(u8, path, t.root) and path[t.root.len] == std.fs.path.sep;
     }
 
     pub fn sourceKey(t: *const Tailer, f: *const TailFile) core.SourceKey {
