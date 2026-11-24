@@ -2,7 +2,6 @@ const std = @import("std");
 const core = @import("core");
 const store = @import("store");
 const db = @import("db.zig");
-const time = @import("time.zig");
 const mod = @import("mod.zig");
 const Hit = mod.Hit;
 
@@ -108,7 +107,7 @@ pub fn lookup(e: *mod.Engine, arena: std.mem.Allocator, params: mod.EntityParams
     defer conn.release();
 
     const as_id: ?core.Id = core.Id.parse(params.name_or_id) catch null;
-    const key = try store.normalizeAlias(arena, params.name_or_id);
+    const key = try core.text.norm(arena, params.name_or_id);
     var found: std.ArrayList(core.Entity) = .empty;
     for ([_]bool{ false, true }) |fuzzy| {
         var result = try db.query(conn, arena, resolve_sql, .{ &e.graph_id.bytes, if (as_id) |i| @as(?[]const u8, &i.bytes) else null, key, fuzzy });
@@ -165,7 +164,7 @@ pub fn lookup(e: *mod.Engine, arena: std.mem.Allocator, params: mod.EntityParams
         .alternatives = found.items[1..],
         .facts = facts.items,
         .neighbors = neighbors.items,
-        .as_of = params.as_of orelse time.now(e.io),
+        .as_of = params.as_of orelse core.time.now(e.io),
     };
 }
 
@@ -225,7 +224,7 @@ pub fn forget(e: *mod.Engine, arena: std.mem.Allocator, target: ForgetTarget) !F
     const note = try std.json.Stringify.valueAlloc(arena, .{
         .text = try std.fmt.allocPrint(arena, "Forget: {s}{s}{s}", .{ hit.fact.text, if (target.reason != null) " Reason: " else "", target.reason orelse "" }),
         .forget = hit.fact.id.toString(&fact_hex),
-        .at = time.now(e.io),
+        .at = core.time.now(e.io),
     }, .{});
     var hash: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(note, &hash, .{});
@@ -256,6 +255,6 @@ pub fn forget(e: *mod.Engine, arena: std.mem.Allocator, target: ForgetTarget) !F
 
     var forgotten = hit;
     forgotten.fact.end_kind = .forgotten;
-    forgotten.fact.known.upper = time.now(e.io);
+    forgotten.fact.known.upper = core.time.now(e.io);
     return .{ .forgotten = try arena.dupe(Hit, &.{forgotten}) };
 }

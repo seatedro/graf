@@ -199,7 +199,7 @@ pub fn build(e: *mod.Engine, arena: std.mem.Allocator, project: ?[]const u8) ![]
 
     if (prefs_out.written().len + project_out.written().len + recent_out.written().len == 0) return "";
     var date_buf: [10]u8 = undefined;
-    try w.print("## graf memory brief (project: {s}, {s})\n", .{ project orelse "none", time.formatDate(time.now(e.io), &date_buf) });
+    try w.print("## graf memory brief (project: {s}, {s})\n", .{ project orelse "none", time.formatDate(core.time.now(e.io), &date_buf) });
     if (prefs_out.written().len > 0) try w.print("\n### Standing preferences\n{s}", .{prefs_out.written()});
     if (project_out.written().len > 0) try w.print("\n### Project {s}\n{s}", .{ project.?, project_out.written() });
     if (recent_out.written().len > 0) try w.print("\n### Last 14 days: decisions and changes\n{s}", .{recent_out.written()});

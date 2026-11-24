@@ -219,7 +219,7 @@ fn testHit(subject: core.Id, subject_name: []const u8, fact_text: []const u8, lo
 
 test "render groups by subject and tags each line" {
     const day = std.time.us_per_day;
-    const t0 = try time.parseIso("2026-11-22");
+    const t0 = try core.time.parseIso("2026-11-22");
     const pgzig = core.Id.fromParts(1, @splat(1));
     const graf = core.Id.fromParts(1, @splat(2));
     const hits = [_]Hit{

@@ -217,63 +217,12 @@ pub fn dupeToolCall(arena: Allocator, call: core.ToolCall) Allocator.Error!core.
     };
 }
 
-pub fn parseTimestamp(s: []const u8) ?core.Micros {
-    if (s.len < 19 or s[4] != '-' or s[7] != '-' or (s[10] != 'T' and s[10] != ' ' and s[10] != 't') or s[13] != ':' or s[16] != ':') return null;
-    const year = std.fmt.parseInt(i64, s[0..4], 10) catch return null;
-    const month = std.fmt.parseInt(u8, s[5..7], 10) catch return null;
-    const day = std.fmt.parseInt(u8, s[8..10], 10) catch return null;
-    const hour = std.fmt.parseInt(i64, s[11..13], 10) catch return null;
-    const minute = std.fmt.parseInt(i64, s[14..16], 10) catch return null;
-    const second = std.fmt.parseInt(i64, s[17..19], 10) catch return null;
-    if (month < 1 or month > 12 or day < 1 or day > 31 or hour > 23 or minute > 59 or second > 60) return null;
-    var i: usize = 19;
-    var micros: i64 = 0;
-    if (i < s.len and s[i] == '.') {
-        i += 1;
-        var digits: usize = 0;
-        while (i < s.len and std.ascii.isDigit(s[i])) : (i += 1) {
-            if (digits < 6) micros = micros * 10 + (s[i] - '0');
-            digits += 1;
-        }
-        if (digits == 0) return null;
-        while (digits < 6) : (digits += 1) micros *= 10;
-    }
-    var offset_s: i64 = 0;
-    if (i < s.len) {
-        switch (s[i]) {
-            'Z', 'z' => i += 1,
-            '+', '-' => {
-                if (s.len < i + 6 or s[i + 3] != ':') return null;
-                const oh = std.fmt.parseInt(i64, s[i + 1 .. i + 3], 10) catch return null;
-                const om = std.fmt.parseInt(i64, s[i + 4 .. i + 6], 10) catch return null;
-                offset_s = (oh * 3600 + om * 60) * @as(i64, if (s[i] == '-') -1 else 1);
-                i += 6;
-            },
-            else => return null,
-        }
-    }
-    if (i != s.len) return null;
-    const days = daysFromCivil(year, month, day);
-    const secs = days * 86400 + hour * 3600 + minute * 60 + second - offset_s;
-    return secs * std.time.us_per_s + micros;
-}
-
-fn daysFromCivil(year: i64, month: u8, day: u8) i64 {
-    const y = if (month <= 2) year - 1 else year;
-    const era = @divFloor(y, 400);
-    const yoe = y - era * 400;
-    const m: i64 = month;
-    const doy = @divFloor(153 * (if (m > 2) m - 3 else m + 9) + 2, 5) + day - 1;
-    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
-    return era * 146097 + doe - 719468;
-}
-
 pub fn jsonTimestamp(v: ?std.json.Value) ?core.Micros {
     const value = v orelse return null;
     return switch (value) {
         .integer => |ms| ms * std.time.us_per_ms,
         .float => |ms| @intFromFloat(ms * std.time.us_per_ms),
-        .string => |s| parseTimestamp(s),
+        .string => |s| core.time.parseIso(s) catch null,
         else => null,
     };
 }
@@ -332,10 +281,8 @@ test "command output keeps head and tail; arguments are bounded" {
     try testing.expect(std.mem.endsWith(u8, tc.result_preview, "TAIL-MARKER"));
 }
 
-test "timestamps" {
-    try testing.expectEqual(@as(?core.Micros, 0), parseTimestamp("1970-01-01T00:00:00Z"));
-    try testing.expectEqual(@as(?core.Micros, 1_763_658_000_123_000), parseTimestamp("2025-11-20T17:00:00.123Z"));
-    try testing.expectEqual(@as(?core.Micros, 1_763_658_000_000_000), parseTimestamp("2025-11-20T19:00:00+02:00"));
-    try testing.expectEqual(@as(?core.Micros, null), parseTimestamp("yesterday"));
+test "json timestamps take epoch milliseconds or iso strings" {
     try testing.expectEqual(@as(?core.Micros, 1_000), jsonTimestamp(.{ .integer = 1 }));
+    try testing.expectEqual(@as(?core.Micros, 1_763_658_000_123_000), jsonTimestamp(.{ .string = "2025-11-20T17:00:00.123Z" }));
+    try testing.expectEqual(@as(?core.Micros, null), jsonTimestamp(.{ .string = "yesterday" }));
 }

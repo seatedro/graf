@@ -1,6 +1,5 @@
 const std = @import("std");
 const core = @import("core");
-const time = @import("time.zig");
 const render = @import("render.zig");
 const mod = @import("mod.zig");
 const Hit = mod.Hit;
@@ -73,7 +72,7 @@ pub fn warm(e: *mod.Engine, session_id: []const u8, prompt: []const u8, project:
     const c = &e.sessions;
     c.mutex.lockUncancelable(e.io);
     defer c.mutex.unlock(e.io);
-    const s = try c.session(e.gpa, session_id, time.now(e.io));
+    const s = try c.session(e.gpa, session_id, core.time.now(e.io));
     _ = s.arena.reset(.retain_capacity);
     const a = s.arena.allocator();
     const copy = try a.alloc(Hit, top.len);
@@ -87,7 +86,7 @@ pub fn recall(e: *mod.Engine, arena: std.mem.Allocator, session_id: []const u8, 
     const c = &e.sessions;
     c.mutex.lockUncancelable(e.io);
     defer c.mutex.unlock(e.io);
-    const s = try c.session(e.gpa, session_id, time.now(e.io));
+    const s = try c.session(e.gpa, session_id, core.time.now(e.io));
 
     var out: std.Io.Writer.Allocating = .init(arena);
     var budget: render.Budget = .{ .max_tokens = mod.recall_tokens };

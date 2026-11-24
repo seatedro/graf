@@ -577,7 +577,7 @@ const Scorer = struct {
                 .entry = ep,
                 .fact = sc.suite.factIndex(inv.fact_id).?,
                 .kind = inv.end_kind,
-                .valid_to = if (inv.valid_to) |v| time.parseRfc3339(v) catch null else null,
+                .valid_to = if (inv.valid_to) |v| core.time.parseRfc3339(v) catch null else null,
             });
         }
         return list.items;
@@ -802,7 +802,7 @@ pub fn goldState(arena: Allocator, suite: *const Suite) !GraphState {
             if (contains(gold.restated, ref.fact.id)) try evidence.append(arena, .{ .entry = ep, .kind = .restated });
             for (gold.invalidations) |inv| {
                 if (!std.mem.eql(u8, inv.fact_id, ref.fact.id)) continue;
-                valid.upper = if (inv.valid_to) |v| try time.parseRfc3339(v) else null;
+                valid.upper = if (inv.valid_to) |v| try core.time.parseRfc3339(v) else null;
                 end_kind = inv.end_kind;
             }
         }
@@ -1008,7 +1008,7 @@ test "a historical backfill that clobbers current state fails" {
     const f = try Fixture.init();
     defer f.deinit();
     const juno = f.fact("f_mooring_oncall_juno");
-    juno.valid.upper = try time.parseRfc3339("2026-11-21T20:00:00Z");
+    juno.valid.upper = try core.time.parseRfc3339("2026-11-21T20:00:00Z");
     juno.end_kind = .changed;
     const tamsin = f.fact("f_mooring_oncall_tamsin");
     tamsin.valid.upper = null;
