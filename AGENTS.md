@@ -2,16 +2,6 @@
 
 Read this before changing anything in graf. It is short on purpose.
 
-## Hard rule: vendor neutrality
-
-graf is a public-grade, vendor-neutral project. Nothing in this repository may name an internal company, an internal LLM gateway or proxy, or any internal service codename. That covers code, identifiers, config keys, CLI flags, environment variables, HTTP headers, tests, fixtures, docs, comments, branch names, PR text, and commit messages.
-
-- Describe providers generically: "an OpenAI-compatible endpoint", "an Anthropic-compatible endpoint", "a proxy", "a typed decision-model backend".
-- Provider URLs, API keys, cost headers, and model ids belong in the user's `~/.config/graf/config.toml` or `GRAF_*` env vars, never in source. Code reads the cost header name from `llm.cost_header`; it never hard-codes one.
-- Fixtures and eval episodes use made-up names (`example.test`, "acme", a fictional gateway). Captured provider responses are scrubbed of hostnames, ids, and vendor headers before they are committed.
-- To test against a private endpoint on your own machine, map its credentials into `GRAF_LLM_BASE_URL` / `GRAF_LLM_API_KEY` (and the `GRAF_EMBED_*` / `GRAF_DECISION_*` equivalents) in your shell. Never commit them, and never mention where they point.
-- CI runs a denylist check when the `GRAF_DENYLIST` repository secret is set. Passing it is necessary, not sufficient.
-
 ## Layout and ownership
 
 Code is split into modules under `src/`. A module is a directory with a root file `mod.zig` and may import only the modules declared for it in `build.zig`; the compiler rejects anything else. Add files freely inside your module. You never need to touch `build.zig` to add a file.
@@ -32,7 +22,7 @@ Rules for working across modules:
 - Stay inside your directories. If you need something from another module, code against its public declarations in `mod.zig`. If a declaration is missing or wrong, change it in a PR for that module rather than from inside another module's change.
 - `core` is shared. You may add new declarations to `core` in your PR. Changing or removing an existing `core` declaration needs its own small PR that lands first.
 - Stubs return `error.NotImplemented` (`core.NotImplemented`). Replace them with real implementations.
-- Capture never imports `store`: it writes through `core.EpisodeSink`. The LLM client never imports `store`: it writes through `core.LlmLedger`. `store` implements both.
+- Capture never imports `store`: it writes through `core.EntrySink`. The LLM client never imports `store`: it writes through `core.LlmLedger`. `store` implements both.
 
 ## Migrations
 
