@@ -226,6 +226,12 @@ pub fn plan(arena: std.mem.Allocator, io: std.Io, env: *const std.process.Enviro
     if (try findToolchain(arena, io, env.get("PATH"))) |tc| {
         return .{ .managed = .{ .toolchain = tc, .data_dir = try defaultDataDir(arena, env) } };
     }
+
+    if (defaultDataDir(arena, env)) |data_dir| {
+        const version_file = try std.fs.path.join(arena, &.{ data_dir, "PG_VERSION" });
+        if (std.Io.Dir.accessAbsolute(io, version_file, .{})) |_| return .{ .url = try databaseUrl(arena, data_dir) } else |_| {}
+    } else |_| {}
+
     if (docker.available(arena, io)) return .docker;
     return .unavailable;
 }
@@ -253,6 +259,28 @@ test "an explicit url wins over every other plan" {
     var env: std.process.Environ.Map = .init(arena.allocator());
     const p = try plan(arena.allocator(), std.testing.io, &env, "postgres://x@h/db");
     try std.testing.expectEqualStrings("postgres://x@h/db", p.url);
+}
+
+test "an initialized managed cluster is reachable without the toolchain on PATH" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+    if (try findToolchain(arena, io, "") != null) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(io, "graf/pg");
+    try tmp.dir.writeFile(io, .{ .sub_path = "graf/pg/PG_VERSION", .data = "17\n" });
+    const data_home = try tmp.dir.realPathFileAlloc(io, ".", arena);
+
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put("XDG_DATA_HOME", data_home);
+    try env.put("PATH", "");
+
+    const p = try plan(arena, io, &env, null);
+    try std.testing.expectEqualStrings(try databaseUrl(arena, try defaultDataDir(arena, &env)), p.url);
 }
 
 test "managed cluster initializes socket-only, starts, serves pgvector and stops" {
