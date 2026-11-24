@@ -195,34 +195,34 @@ pub fn countCalls(pool: *pg.Pool, entry_id: core.Id, purpose: core.types.LlmPurp
 const fixture_sql =
     \\INSERT INTO graph (id, name) VALUES ('{graph}', '{name}');
     \\INSERT INTO entity (id, graph_id, name, norm, type, created_seq, updated_seq, name_emb) VALUES
-    \\  ('{e_graf}', '{graph}', 'graf', 'graf', 'project', 1, 1, array_fill(0.01::float4, ARRAY[512])::halfvec),
+    \\  ('{e_brinelog}', '{graph}', 'brinelog', 'brinelog', 'project', 1, 1, array_fill(0.01::float4, ARRAY[512])::halfvec),
     \\  ('{e_pgzig}', '{graph}', 'pg.zig', 'pg zig', 'software', 1, 1, NULL),
-    \\  ('{e_potion}', '{graph}', 'Potion', 'potion', 'project', 2, 2, NULL),
-    \\  ('{e_tollgate}', '{graph}', 'Tollgate', 'tollgate', 'software', 3, 3, NULL),
-    \\  ('{e_marco}', '{graph}', 'Marco', 'marco', 'person', 3, 3, NULL),
-    \\  ('{e_elena}', '{graph}', 'Elena', 'elena', 'person', 4, 4, NULL);
+    \\  ('{e_quayline}', '{graph}', 'Quayline', 'quayline', 'project', 2, 2, NULL),
+    \\  ('{e_mooring}', '{graph}', 'Mooring', 'mooring', 'software', 3, 3, NULL),
+    \\  ('{e_hollis}', '{graph}', 'Hollis', 'hollis', 'person', 3, 3, NULL),
+    \\  ('{e_juno}', '{graph}', 'Juno', 'juno', 'person', 4, 4, NULL);
     \\INSERT INTO entity (id, graph_id, name, norm, type, created_seq, updated_seq, merged_into) VALUES
     \\  ('{e_pgzig2}', '{graph}', 'karlseguin''s driver', 'karlseguins driver', 'software', 2, 3, '{e_pgzig}');
     \\INSERT INTO entity_alias (graph_id, norm, entity_id, alias) VALUES
     \\  ('{graph}', 'pg zig', '{e_pgzig}', 'pg-zig'),
-    \\  ('{graph}', 'acme gateway', '{e_tollgate}', 'Acme gateway');
+    \\  ('{graph}', 'brackwater booking service', '{e_mooring}', 'Brackwater booking service');
     \\INSERT INTO entry (id, graph_id, kind, author, body, content_hash, reference_time, status) VALUES
-    \\  ('{e01}', '{graph}', 'turns', 'mixed', '{"turns":[{"role":"user","text":"start graf"}]}', '\x01', '2026-11-18T18:00:00Z', 'committed'),
+    \\  ('{e01}', '{graph}', 'turns', 'mixed', '{"turns":[{"role":"user","text":"start brinelog"}]}', '\x01', '2026-11-18T18:00:00Z', 'committed'),
     \\  ('{e03}', '{graph}', 'turns', 'mixed', '{"turns":[]}', '\x03', '2026-11-19T22:00:00Z', 'committed'),
     \\  ('{e05}', '{graph}', 'turns', 'user', '{"turns":[]}', '\x05', '2026-11-20T16:30:00Z', 'committed'),
     \\  ('{e06}', '{graph}', 'turns', 'user', '{"turns":[]}', '\x06', '2026-11-20T18:00:00Z', 'extracted'),
-    \\  ('{e18}', '{graph}', 'turns', 'mixed', '{"turns":[{"role":"user","text":"TOLLGATE_API_KEY=tg_live_SUPERSECRETKEY0123456789abcdef"}]}', '\x18', '2026-11-22T20:00:00Z', 'queued');
+    \\  ('{e18}', '{graph}', 'turns', 'mixed', '{"turns":[{"role":"user","text":"MOORING_API_KEY=mr_live_7Qk2Vx9Lp4Rt8Wz3Hn6Jb1Ys5Dc0FgAe"}]}', '\x18', '2026-11-22T20:00:00Z', 'queued');
     \\INSERT INTO fact (id, graph_id, subject_id, relation, qualifier, object_id, object_value, text, scope, valid, known, end_kind, author, confidence, emb, created_seq) VALUES
-    \\  ('{f_uses}', '{graph}', '{e_graf}', 'uses', '', '{e_pgzig2}', NULL, 'graf uses pg.zig.', 'project',
+    \\  ('{f_uses}', '{graph}', '{e_brinelog}', 'uses', '', '{e_pgzig2}', NULL, 'brinelog uses pg.zig.', 'project',
     \\   tstzrange('2026-11-18T18:00:00Z', NULL), tstzrange('2026-11-18T18:00:05Z', NULL), NULL, 'user', 0.9, array_fill(0.01::float4, ARRAY[512])::halfvec, 1),
-    \\  ('{f_marco}', '{graph}', '{e_tollgate}', 'has_oncall', '', '{e_marco}', NULL, 'Marco is oncall for Tollgate.', 'project',
+    \\  ('{f_hollis}', '{graph}', '{e_mooring}', 'has_oncall', '', '{e_hollis}', NULL, 'Hollis is oncall for Mooring.', 'project',
     \\   tstzrange('2026-11-19T22:00:00Z', '2026-11-20T17:00:00Z'), tstzrange('2026-11-19T22:00:05Z', NULL), 'changed', 'tool', 0.8, array_fill(0.01::float4, ARRAY[512])::halfvec, 3),
-    \\  ('{f_ver}', '{graph}', '{e_graf}', 'has_setting', 'zig_version', NULL, '0.17.1', 'graf pins Zig 0.17.1.', 'project',
+    \\  ('{f_ver}', '{graph}', '{e_brinelog}', 'has_setting', 'zig_version', NULL, '0.17.1', 'brinelog pins Zig 0.17.1.', 'project',
     \\   tstzrange('-infinity', 'infinity'), tstzrange('2026-11-18T18:00:05Z', '2026-11-18T19:00:00Z'), 'retracted', 'user', 0.9, array_fill(0.01::float4, ARRAY[512])::halfvec, 2);
     \\INSERT INTO fact_evidence (fact_id, entry_id, kind, quote) VALUES
     \\  ('{f_uses}', '{e01}', 'stated', 'pg.zig driver'),
     \\  ('{f_uses}', '{e05}', 'restated', NULL),
-    \\  ('{f_marco}', '{e03}', 'stated', NULL),
+    \\  ('{f_hollis}', '{e03}', 'stated', NULL),
     \\  ('{f_ver}', '{e01}', 'stated', NULL);
     \\INSERT INTO llm_call (id, graph_id, entry_id, purpose, route, model, attempt, outcome, latency_ms, cost_usd) VALUES
     \\  ('{c1}', '{graph}', '{e01}', 'extract', 'openai-responses', 'test-model', 1, 'ok', 900, 0.0125),
@@ -308,9 +308,9 @@ test "loads a hand-built graph from Postgres and scores it" {
     try std.testing.expectEqual(try t.parseRfc3339("2026-11-18T18:00:00Z"), uses.valid.lower.?);
     try std.testing.expect(uses.valid.upper == null);
 
-    const marco = state.facts[2];
-    try std.testing.expectEqual(core.types.EndKind.changed, marco.end_kind.?);
-    try std.testing.expectEqual(try t.parseRfc3339("2026-11-20T17:00:00Z"), marco.valid.upper.?);
+    const hollis = state.facts[2];
+    try std.testing.expectEqual(core.types.EndKind.changed, hollis.end_kind.?);
+    try std.testing.expectEqual(try t.parseRfc3339("2026-11-20T17:00:00Z"), hollis.valid.upper.?);
     const ver = state.facts[1];
     try std.testing.expect(ver.valid.lower == null and ver.valid.upper == null);
     try std.testing.expect(ver.known.upper != null);
@@ -338,10 +338,10 @@ test "loads a hand-built graph from Postgres and scores it" {
     try std.testing.expect(report.metrics.calls_per_entry == null);
     try std.testing.expect(!report.metrics.passes());
     var recalled_uses = false;
-    var recalled_marco = false;
+    var recalled_hollis = false;
     for (report.findings) |msg| {
-        recalled_uses = recalled_uses or std.mem.indexOf(u8, msg, "missing f_graf_uses_pgzig") != null;
-        recalled_marco = recalled_marco or std.mem.indexOf(u8, msg, "missing f_tollgate_oncall_marco") != null;
+        recalled_uses = recalled_uses or std.mem.indexOf(u8, msg, "missing f_brinelog_uses_pgzig") != null;
+        recalled_hollis = recalled_hollis or std.mem.indexOf(u8, msg, "missing f_mooring_oncall_hollis") != null;
     }
-    try std.testing.expect(!recalled_uses and !recalled_marco);
+    try std.testing.expect(!recalled_uses and !recalled_hollis);
 }

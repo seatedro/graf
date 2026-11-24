@@ -286,7 +286,7 @@ test "entries convert to drafts with their source key and reference time" {
     const draft = try toDraft(suite.entries[1]);
     try std.testing.expectEqual(core.Harness.capy, draft.source.?.harness);
     try std.testing.expectEqualStrings("capy-thread-0012", draft.source.?.external_id);
-    try std.testing.expectEqualStrings("github.com/seatedro/graf", draft.project.?);
+    try std.testing.expectEqualStrings("github.com/tidewright/brinelog", draft.project.?);
     try std.testing.expectEqual(@as(i32, 1), draft.seq_in_source);
     try std.testing.expectEqual(try time.parseRfc3339("2026-11-19T20:15:00Z"), draft.reference_time);
     try std.testing.expectEqual(@as(usize, 2), draft.body.turns.len);

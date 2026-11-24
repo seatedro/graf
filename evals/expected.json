@@ -2,25 +2,25 @@
   "suite_version": "1.0",
   "description": "Starter 20-entry labeled evaluation suite for the graf release gates.",
   "canonical_entities": [
-    {"id": "ent_graf", "name": "graf", "type": "project", "aliases": ["graf repo", "graf hub"], "first_seen": "e01"},
-    {"id": "ent_potion", "name": "Potion", "type": "project", "aliases": ["potion"], "first_seen": "e01"},
+    {"id": "ent_brinelog", "name": "brinelog", "type": "project", "aliases": ["brinelog repo", "brinelog collector"], "first_seen": "e01"},
+    {"id": "ent_quayline", "name": "Quayline", "type": "project", "aliases": ["quayline"], "first_seen": "e01"},
     {"id": "ent_zig", "name": "Zig", "type": "software", "aliases": ["Zig 0.17.1"], "first_seen": "e01"},
     {"id": "ent_postgres", "name": "Postgres 17", "type": "software", "aliases": ["Postgres", "pgvector", "Postgres 17 with pgvector"], "first_seen": "e01"},
     {"id": "ent_pgzig", "name": "pg.zig", "type": "software", "aliases": ["pg-zig", "karlseguin's driver", "karlseguin's pg.zig driver"], "first_seen": "e01"},
-    {"id": "ent_tollgate", "name": "Tollgate", "type": "software", "aliases": ["Acme gateway"], "first_seen": "e03"},
-    {"id": "ent_monorepo", "name": "acme-labs/monorepo", "type": "repository", "aliases": ["monorepo"], "first_seen": "e03"},
-    {"id": "ent_marco", "name": "Marco", "type": "person", "aliases": [], "first_seen": "e03"},
-    {"id": "ent_elena", "name": "Elena", "type": "person", "aliases": [], "first_seen": "e06"},
-    {"id": "ent_rust", "name": "Rust", "type": "software", "aliases": [], "first_seen": "e07"},
-    {"id": "ent_rohit", "name": "rohit", "type": "person", "aliases": ["seatedro"], "first_seen": "e08"},
-    {"id": "ent_haiku", "name": "claude-haiku-5-5", "type": "ai_model", "aliases": [], "first_seen": "e08"},
-    {"id": "ent_acme", "name": "Acme", "type": "organization", "aliases": [], "first_seen": "e09"},
-    {"id": "ent_acmebox", "name": "acme-box", "type": "software", "aliases": [], "first_seen": "e09"},
-    {"id": "ent_gpt41mini", "name": "gpt-4.1-mini", "type": "ai_model", "aliases": [], "first_seen": "e11"},
-    {"id": "ent_priya", "name": "Priya", "type": "person", "aliases": [], "first_seen": "e12"},
-    {"id": "ent_axum", "name": "axum", "type": "software", "aliases": [], "first_seen": "e13"},
+    {"id": "ent_mooring", "name": "Mooring", "type": "software", "aliases": ["Brackwater booking service"], "first_seen": "e03"},
+    {"id": "ent_harborops", "name": "brackwater/harbor-ops", "type": "repository", "aliases": ["harbor-ops"], "first_seen": "e03"},
+    {"id": "ent_hollis", "name": "Hollis", "type": "person", "aliases": [], "first_seen": "e03"},
+    {"id": "ent_juno", "name": "Juno", "type": "person", "aliases": [], "first_seen": "e06"},
+    {"id": "ent_elixir", "name": "Elixir", "type": "software", "aliases": [], "first_seen": "e07"},
+    {"id": "ent_maren", "name": "maren", "type": "person", "aliases": ["tidewright"], "first_seen": "e08"},
+    {"id": "ent_surge12", "name": "surge-net-1.2", "type": "ai_model", "aliases": [], "first_seen": "e08"},
+    {"id": "ent_brackwater", "name": "Brackwater", "type": "organization", "aliases": [], "first_seen": "e09"},
+    {"id": "ent_buoy", "name": "brackwater-buoy", "type": "software", "aliases": [], "first_seen": "e09"},
+    {"id": "ent_surge20", "name": "surge-net-2.0-lite", "type": "ai_model", "aliases": [], "first_seen": "e11"},
+    {"id": "ent_tamsin", "name": "Tamsin", "type": "person", "aliases": [], "first_seen": "e12"},
+    {"id": "ent_bandit", "name": "Bandit", "type": "software", "aliases": [], "first_seen": "e13"},
     {"id": "ent_age", "name": "Apache AGE", "type": "software", "aliases": [], "first_seen": "e15"},
-    {"id": "ent_lighthouse", "name": "lighthouse", "type": "environment", "aliases": ["devbox lighthouse"], "first_seen": "e16"},
+    {"id": "ent_kittiwake", "name": "kittiwake", "type": "environment", "aliases": ["field box kittiwake"], "first_seen": "e16"},
     {"id": "ent_fx_agent", "name": "fx", "type": "software", "aliases": ["fx agent", "Vercel Labs coding agent"], "first_seen": "e20"},
     {"id": "ent_pi", "name": "pi", "type": "software", "aliases": [], "first_seen": "e20"},
     {"id": "ent_fx_dataset", "name": "FX currency rates dataset", "type": "dataset", "aliases": ["FX dataset"], "first_seen": "e20"}
@@ -28,22 +28,22 @@
   "expected_merges": [
     {"entry": "e05", "mention": "pg-zig", "must_resolve_to": "ent_pgzig", "rule": "E2_normalized_alias"},
     {"entry": "e05", "mention": "karlseguin's driver", "must_resolve_to": "ent_pgzig", "rule": "E1_or_alias"},
-    {"entry": "e08", "mention": "seatedro", "must_resolve_to": "ent_rohit", "rule": "alias_on_person"},
-    {"entry": "e19", "mention": "Tollgate", "must_resolve_to": "ent_tollgate", "rule": "cross_project_graph_wide_entity"}
+    {"entry": "e08", "mention": "tidewright", "must_resolve_to": "ent_maren", "rule": "alias_on_person"},
+    {"entry": "e19", "mention": "Mooring", "must_resolve_to": "ent_mooring", "rule": "cross_project_graph_wide_entity"}
   ],
   "must_not_merge": [
-    {"entry": "e09", "entity_a": "ent_acme", "entity_b": "ent_acmebox", "reason": "organization vs software; distinct entities"},
+    {"entry": "e09", "entity_a": "ent_brackwater", "entity_b": "ent_buoy", "reason": "organization vs software; distinct entities"},
     {"entry": "e20", "entity_a": "ent_fx_agent", "entity_b": "ent_fx_dataset", "reason": "software vs dataset; acronym collision"},
-    {"entry": "e01", "entity_a": "ent_graf", "entity_b": "ent_potion", "reason": "explicitly separate projects"}
+    {"entry": "e01", "entity_a": "ent_brinelog", "entity_b": "ent_quayline", "reason": "explicitly separate projects"}
   ],
   "entries": {
     "e01": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_uses_zig", "subject": "ent_graf", "relation": "uses", "object": "ent_zig", "valid_from": "2026-11-18T18:00:00Z"},
-        {"id": "f_graf_zig_ver", "subject": "ent_graf", "relation": "has_setting", "qualifier": "zig_version", "object_value": "0.17.1", "valid_from": "2026-11-18T18:00:00Z"},
-        {"id": "f_graf_uses_pg", "subject": "ent_graf", "relation": "uses", "object": "ent_postgres", "valid_from": "2026-11-18T18:00:00Z"},
-        {"id": "f_graf_uses_pgzig", "subject": "ent_graf", "relation": "uses", "object": "ent_pgzig", "valid_from": "2026-11-18T18:00:00Z"}
+        {"id": "f_brinelog_uses_zig", "subject": "ent_brinelog", "relation": "uses", "object": "ent_zig", "valid_from": "2026-11-18T18:00:00Z"},
+        {"id": "f_brinelog_zig_ver", "subject": "ent_brinelog", "relation": "has_setting", "qualifier": "zig_version", "object_value": "0.17.1", "valid_from": "2026-11-18T18:00:00Z"},
+        {"id": "f_brinelog_uses_pg", "subject": "ent_brinelog", "relation": "uses", "object": "ent_postgres", "valid_from": "2026-11-18T18:00:00Z"},
+        {"id": "f_brinelog_uses_pgzig", "subject": "ent_brinelog", "relation": "uses", "object": "ent_pgzig", "valid_from": "2026-11-18T18:00:00Z"}
       ]
     },
     "e02": {
@@ -57,47 +57,47 @@
     "e03": {
       "skip": false,
       "facts_added": [
-        {"id": "f_tollgate_part_mono", "subject": "ent_tollgate", "relation": "part_of", "object": "ent_monorepo", "valid_from": "2026-11-19T22:00:00Z"},
-        {"id": "f_tollgate_loc", "subject": "ent_tollgate", "relation": "located_at", "object_value": "infra/tollgate", "valid_from": "2026-11-19T22:00:00Z"},
-        {"id": "f_tollgate_oncall_marco", "subject": "ent_tollgate", "relation": "has_oncall", "object": "ent_marco", "valid_from": "2026-11-19T22:00:00Z"}
+        {"id": "f_mooring_part_harborops", "subject": "ent_mooring", "relation": "part_of", "object": "ent_harborops", "valid_from": "2026-11-19T22:00:00Z"},
+        {"id": "f_mooring_loc", "subject": "ent_mooring", "relation": "located_at", "object_value": "services/mooring", "valid_from": "2026-11-19T22:00:00Z"},
+        {"id": "f_mooring_oncall_hollis", "subject": "ent_mooring", "relation": "has_oncall", "object": "ent_hollis", "valid_from": "2026-11-19T22:00:00Z"}
       ]
     },
     "e04": {"skip": true, "reason": "Transient test execution output only; must produce 0 facts.", "facts_added": []},
     "e05": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_unnest", "subject": "ent_graf", "relation": "uses", "object_value": "unnest batch inserts", "valid_from": "2026-11-20T16:30:00Z"}
+        {"id": "f_brinelog_unnest", "subject": "ent_brinelog", "relation": "uses", "object_value": "unnest batch inserts", "valid_from": "2026-11-20T16:30:00Z"}
       ],
       "restated": ["f_pgzig_lacks_copy"]
     },
     "e06": {
       "skip": false,
       "facts_added": [
-        {"id": "f_tollgate_oncall_elena", "subject": "ent_tollgate", "relation": "has_oncall", "object": "ent_elena", "valid_from": "2026-11-20T17:00:00Z", "time_basis": "explicit"}
+        {"id": "f_mooring_oncall_juno", "subject": "ent_mooring", "relation": "has_oncall", "object": "ent_juno", "valid_from": "2026-11-20T17:00:00Z", "time_basis": "explicit"}
       ],
       "invalidations": [
-        {"fact_id": "f_tollgate_oncall_marco", "end_kind": "changed", "valid_to": "2026-11-20T17:00:00Z", "mechanism": "deterministic_one_per_subject"}
+        {"fact_id": "f_mooring_oncall_hollis", "end_kind": "changed", "valid_to": "2026-11-20T17:00:00Z", "mechanism": "deterministic_one_per_subject"}
       ]
     },
     "e07": {
       "skip": false,
       "facts_added": [
-        {"id": "f_potion_uses_rust", "subject": "ent_potion", "relation": "uses", "object": "ent_rust", "valid_from": "2026-11-20T19:00:00Z"}
+        {"id": "f_quayline_uses_elixir", "subject": "ent_quayline", "relation": "uses", "object": "ent_elixir", "valid_from": "2026-11-20T19:00:00Z"}
       ],
-      "must_not_contain_facts": ["Potion uses Go"],
-      "note": "Assistant's refuted claim ('Potion uses Go') must either never be written (intra-entry correction) or be immediately retracted (end_kind=retracted)."
+      "must_not_contain_facts": ["Quayline uses Go"],
+      "note": "Assistant's refuted claim ('Quayline uses Go') must either never be written (intra-entry correction) or be immediately retracted (end_kind=retracted)."
     },
     "e08": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_ext_haiku", "subject": "ent_graf", "relation": "has_setting", "qualifier": "extraction_model", "object": "ent_haiku", "valid_from": "2026-11-20T21:00:00Z"},
-        {"id": "f_graf_owned_rohit", "subject": "ent_graf", "relation": "owned_by", "object": "ent_rohit", "valid_from": "2026-11-20T21:00:00Z"}
+        {"id": "f_brinelog_model_surge12", "subject": "ent_brinelog", "relation": "has_setting", "qualifier": "anomaly_model", "object": "ent_surge12", "valid_from": "2026-11-20T21:00:00Z"},
+        {"id": "f_brinelog_owned_maren", "subject": "ent_brinelog", "relation": "owned_by", "object": "ent_maren", "valid_from": "2026-11-20T21:00:00Z"}
       ]
     },
     "e09": {
       "skip": false,
       "facts_added": [
-        {"id": "f_acme_maintains_acmebox", "subject": "ent_acme", "relation": "maintains", "object": "ent_acmebox", "valid_from": "2026-11-21T01:00:00Z"}
+        {"id": "f_brackwater_maintains_buoy", "subject": "ent_brackwater", "relation": "maintains", "object": "ent_buoy", "valid_from": "2026-11-21T01:00:00Z"}
       ]
     },
     "e10": {
@@ -112,64 +112,64 @@
     "e11": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_ext_gpt41", "subject": "ent_graf", "relation": "has_setting", "qualifier": "extraction_model", "object": "ent_gpt41mini", "valid_from": "2026-11-21T19:00:00Z"}
+        {"id": "f_brinelog_model_surge20", "subject": "ent_brinelog", "relation": "has_setting", "qualifier": "anomaly_model", "object": "ent_surge20", "valid_from": "2026-11-21T19:00:00Z"}
       ],
       "invalidations": [
-        {"fact_id": "f_graf_ext_haiku", "end_kind": "changed", "valid_to": "2026-11-21T19:00:00Z", "mechanism": "deterministic_one_per_subject_qualifier"}
+        {"fact_id": "f_brinelog_model_surge12", "end_kind": "changed", "valid_to": "2026-11-21T19:00:00Z", "mechanism": "deterministic_one_per_subject_qualifier"}
       ]
     },
     "e12": {
       "skip": false,
       "facts_added": [
-        {"id": "f_tollgate_oncall_priya", "subject": "ent_tollgate", "relation": "has_oncall", "object": "ent_priya", "valid_from": "2026-11-10T00:00:00Z", "valid_to": "2026-11-17T00:00:00Z", "time_basis": "explicit"}
+        {"id": "f_mooring_oncall_tamsin", "subject": "ent_mooring", "relation": "has_oncall", "object": "ent_tamsin", "valid_from": "2026-11-10T00:00:00Z", "valid_to": "2026-11-17T00:00:00Z", "time_basis": "explicit"}
       ],
       "invalidations": [],
-      "must_remain_active": ["f_tollgate_oncall_elena"],
-      "note": "Out-of-order historical fact must NOT invalidate Elena's current oncall status."
+      "must_remain_active": ["f_mooring_oncall_juno"],
+      "note": "Out-of-order historical fact must NOT invalidate Juno's current oncall status."
     },
     "e13": {
       "skip": false,
       "facts_added": [
-        {"id": "f_potion_uses_axum", "subject": "ent_potion", "relation": "uses", "object": "ent_axum", "valid_from": "2026-11-21T21:30:00Z"}
+        {"id": "f_quayline_uses_bandit", "subject": "ent_quayline", "relation": "uses", "object": "ent_bandit", "valid_from": "2026-11-21T21:30:00Z"}
       ],
-      "must_not_contain_facts": ["Potion uses actix"],
-      "note": "Intra-entry self-correction (F2): actix must never be persisted as an active fact."
+      "must_not_contain_facts": ["Quayline uses Cowboy"],
+      "note": "Intra-entry self-correction (F2): Cowboy must never be persisted as an active fact."
     },
-    "e14": {"skip": true, "reason": "Hypothetical brainstorming with explicit non-commitment; must produce 0 facts.", "facts_added": [], "must_not_contain_facts": ["graf uses Neo4j", "graf uses Apache AGE"]},
+    "e14": {"skip": true, "reason": "Hypothetical brainstorming with explicit non-commitment; must produce 0 facts.", "facts_added": [], "must_not_contain_facts": ["brinelog uses Neo4j", "brinelog uses Apache AGE"]},
     "e15": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_rejected_age", "subject": "ent_graf", "relation": "rejected", "object": "ent_age", "valid_from": "2026-11-22T16:00:00Z"}
+        {"id": "f_brinelog_rejected_age", "subject": "ent_brinelog", "relation": "rejected", "object": "ent_age", "valid_from": "2026-11-22T16:00:00Z"}
       ],
-      "restated": ["f_graf_uses_pg"],
+      "restated": ["f_brinelog_uses_pg"],
       "note": "Postgres 17 + pgvector must be restated (confidence increased, evidence appended), not duplicated."
     },
     "e16": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_loc_lighthouse", "subject": "ent_graf", "relation": "located_at", "object": "ent_lighthouse", "valid_from": "2026-11-22T18:00:00Z"},
-        {"id": "f_graf_migration_sched", "subject": "ent_graf", "relation": "scheduled_for", "object_value": "2026-12-03", "valid_from": "2026-11-22T18:00:00Z", "time_basis": "explicit"}
+        {"id": "f_brinelog_loc_kittiwake", "subject": "ent_brinelog", "relation": "located_at", "object": "ent_kittiwake", "valid_from": "2026-11-22T18:00:00Z"},
+        {"id": "f_brinelog_migration_sched", "subject": "ent_brinelog", "relation": "scheduled_for", "object_value": "2026-12-03", "valid_from": "2026-11-22T18:00:00Z", "time_basis": "explicit"}
       ]
     },
     "e17": {
       "skip": false,
       "facts_added": [
-        {"id": "f_rohit_prefers_zig", "subject": "ent_rohit", "relation": "prefers", "object": "ent_zig", "scope": "global", "valid_from": "2026-11-22T19:00:00Z"},
-        {"id": "f_rohit_avoids_py", "subject": "ent_rohit", "relation": "avoids", "object_value": "Python sidecars", "scope": "global", "valid_from": "2026-11-22T19:00:00Z"}
+        {"id": "f_maren_prefers_zig", "subject": "ent_maren", "relation": "prefers", "object": "ent_zig", "scope": "global", "valid_from": "2026-11-22T19:00:00Z"},
+        {"id": "f_maren_avoids_jvm", "subject": "ent_maren", "relation": "avoids", "object_value": "JVM daemons", "scope": "global", "valid_from": "2026-11-22T19:00:00Z"}
       ]
     },
     "e18": {
       "skip": false,
       "facts_added": [
-        {"id": "f_tollgate_url", "subject": "ent_tollgate", "relation": "located_at", "object_value": "https://tollgate.example.test/v1", "valid_from": "2026-11-22T20:00:00Z"}
+        {"id": "f_mooring_url", "subject": "ent_mooring", "relation": "located_at", "object_value": "https://mooring.example.test/v1", "valid_from": "2026-11-22T20:00:00Z"}
       ],
-      "forbidden_substrings_anywhere": ["SUPERSECRETKEY", "tg_live_SUPERSECRETKEY0123456789abcdef"],
+      "forbidden_substrings_anywhere": ["7Qk2Vx9Lp4Rt8Wz3Hn6Jb1Ys5Dc0FgAe", "mr_live_7Qk2Vx9Lp4Rt8Wz3Hn6Jb1Ys5Dc0FgAe"],
       "note": "Hard security gate: the API key must be redacted before entry storage and model calls, and never appear in any table."
     },
     "e19": {
       "skip": false,
       "facts_added": [
-        {"id": "f_potion_uses_tollgate", "subject": "ent_potion", "relation": "uses", "object": "ent_tollgate", "valid_from": "2026-11-23T01:00:00Z"}
+        {"id": "f_quayline_uses_mooring", "subject": "ent_quayline", "relation": "uses", "object": "ent_mooring", "valid_from": "2026-11-23T01:00:00Z"}
       ]
     },
     "e20": {
@@ -181,15 +181,15 @@
     }
   },
   "retrieval_queries": [
-    {"id": "q01", "query": "Who is oncall for Tollgate right now?", "project": "github.com/acme-labs/monorepo", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_tollgate_oncall_elena"], "must_exclude": ["f_tollgate_oncall_marco", "f_tollgate_oncall_priya"]},
-    {"id": "q02", "query": "Who was oncall for Tollgate on November 19?", "project": "github.com/acme-labs/monorepo", "as_of": "2026-11-19T23:00:00Z", "must_include": ["f_tollgate_oncall_marco"], "must_exclude": ["f_tollgate_oncall_elena", "f_tollgate_oncall_priya"]},
-    {"id": "q03", "query": "Who was oncall for Tollgate on November 12?", "project": "github.com/acme-labs/monorepo", "as_of": "2026-11-12T12:00:00Z", "must_include": ["f_tollgate_oncall_priya"], "must_exclude": ["f_tollgate_oncall_elena", "f_tollgate_oncall_marco"]},
-    {"id": "q04", "query": "What extraction model is graf configured to use?", "project": "github.com/seatedro/graf", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_graf_ext_gpt41"], "must_exclude": ["f_graf_ext_haiku"]},
-    {"id": "q05", "query": "Does pg.zig support COPY?", "project": "github.com/seatedro/graf", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_pgzig_supports_copy"], "must_exclude": ["f_pgzig_lacks_copy"]},
-    {"id": "q06", "query": "What backend language and HTTP server does Potion use?", "project": "github.com/seatedro/potion", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_potion_uses_rust", "f_potion_uses_axum"], "must_exclude_substrings": ["Go", "actix"]},
-    {"id": "q07", "query": "Why did graf decide against Apache AGE?", "project": "github.com/seatedro/graf", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_graf_rejected_age"]},
-    {"id": "q08", "query": "What are rohit's language preferences for infrastructure tools?", "project": "github.com/seatedro/potion", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_rohit_prefers_zig", "f_rohit_avoids_py"], "note": "Tests global-scope fact visibility when querying from a different project (potion)."},
-    {"id": "q09", "query": "Which projects use Tollgate?", "project": "*", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_potion_uses_tollgate"], "note": "Tests cross-project entity unification on ent_tollgate."},
-    {"id": "q10", "query": "Where is the graf hub running and when is the schema migration scheduled?", "project": "github.com/seatedro/graf", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_graf_loc_lighthouse", "f_graf_migration_sched"]}
+    {"id": "q01", "query": "Who is oncall for Mooring right now?", "project": "github.com/brackwater/harbor-ops", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_mooring_oncall_juno"], "must_exclude": ["f_mooring_oncall_hollis", "f_mooring_oncall_tamsin"]},
+    {"id": "q02", "query": "Who was oncall for Mooring on November 19?", "project": "github.com/brackwater/harbor-ops", "as_of": "2026-11-19T23:00:00Z", "must_include": ["f_mooring_oncall_hollis"], "must_exclude": ["f_mooring_oncall_juno", "f_mooring_oncall_tamsin"]},
+    {"id": "q03", "query": "Who was oncall for Mooring on November 12?", "project": "github.com/brackwater/harbor-ops", "as_of": "2026-11-12T12:00:00Z", "must_include": ["f_mooring_oncall_tamsin"], "must_exclude": ["f_mooring_oncall_juno", "f_mooring_oncall_hollis"]},
+    {"id": "q04", "query": "What anomaly model is brinelog configured to use?", "project": "github.com/tidewright/brinelog", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_brinelog_model_surge20"], "must_exclude": ["f_brinelog_model_surge12"]},
+    {"id": "q05", "query": "Does pg.zig support COPY?", "project": "github.com/tidewright/brinelog", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_pgzig_supports_copy"], "must_exclude": ["f_pgzig_lacks_copy"]},
+    {"id": "q06", "query": "What backend language and HTTP server does Quayline use?", "project": "github.com/tidewright/quayline", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_quayline_uses_elixir", "f_quayline_uses_bandit"], "must_exclude_substrings": ["Go", "Cowboy"]},
+    {"id": "q07", "query": "Why did brinelog decide against Apache AGE?", "project": "github.com/tidewright/brinelog", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_brinelog_rejected_age"]},
+    {"id": "q08", "query": "What are maren's language preferences for field tools?", "project": "github.com/tidewright/quayline", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_maren_prefers_zig", "f_maren_avoids_jvm"], "note": "Tests global-scope fact visibility when querying from a different project (quayline)."},
+    {"id": "q09", "query": "Which projects use Mooring?", "project": "*", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_quayline_uses_mooring"], "note": "Tests cross-project entity unification on ent_mooring."},
+    {"id": "q10", "query": "Where is the brinelog collector running and when is the schema migration scheduled?", "project": "github.com/tidewright/brinelog", "as_of": "2026-11-23T12:00:00Z", "must_include": ["f_brinelog_loc_kittiwake", "f_brinelog_migration_sched"]}
   ]
 }

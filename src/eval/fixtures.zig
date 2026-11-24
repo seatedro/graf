@@ -310,8 +310,8 @@ test "must_not_contain patterns resolve their subject" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const suite = try loadShippedSuite(arena, std.testing.io);
-    const pat = (try parsePattern(arena, &suite, "graf uses Apache AGE")).?;
-    try std.testing.expectEqualStrings("ent_graf", suite.entities()[pat.subject].id);
+    const pat = (try parsePattern(arena, &suite, "brinelog uses Apache AGE")).?;
+    try std.testing.expectEqualStrings("ent_brinelog", suite.entities()[pat.subject].id);
     try std.testing.expectEqualStrings("uses", pat.relation);
     try std.testing.expectEqualStrings("apache age", pat.object);
 }
