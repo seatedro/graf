@@ -112,6 +112,7 @@ pub fn run(arena: Allocator, io: std.Io, config: *const core.Config, opts: RunOp
     };
 
     var client = llm.Client.init(arena, io, config, s.ledger());
+    client.graph_id = graph_id;
     defer client.deinit();
     var pipeline: ingest.Pipeline = .{ .store = &s, .client = &client, .config = config, .graph_id = graph_id };
 
