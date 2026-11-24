@@ -7,6 +7,7 @@ pub const match = @import("match.zig");
 pub const score = @import("score.zig");
 pub const pgload = @import("pgload.zig");
 pub const runner = @import("runner.zig");
+pub const judge = @import("judge.zig");
 pub const cli = @import("cli.zig");
 
 pub const main = cli.main;
@@ -29,8 +30,11 @@ pub const gates = struct {
     pub const entity_f1_min = 0.85;
     pub const merge_accuracy_min = 0.90;
     pub const cross_type_merges_max = 0;
-    pub const fact_precision_min = 0.85;
     pub const fact_recall_min = 0.80;
+    pub const trap_facts_max = 0;
+    pub const labeled_precision_min = 0.85;
+    pub const fact_density_max = 1.75;
+    pub const residual_faithfulness_min = 0.80;
     pub const invalidation_f1_min = 0.85;
     pub const temporal_accuracy_min = 0.90;
     pub const secret_leaks_max = 0;
@@ -44,8 +48,11 @@ pub const Metrics = struct {
     entity_f1: ?f64 = null,
     merge_accuracy: ?f64 = null,
     cross_type_merges: ?u32 = null,
-    fact_precision: ?f64 = null,
     fact_recall: ?f64 = null,
+    trap_facts: ?u32 = null,
+    labeled_precision: ?f64 = null,
+    fact_density: ?f64 = null,
+    residual_faithfulness: ?f64 = null,
     invalidation_f1: ?f64 = null,
     temporal_accuracy: ?f64 = null,
     secret_leaks: ?u32 = null,
@@ -54,13 +61,18 @@ pub const Metrics = struct {
     cost_per_entry_usd: ?f64 = null,
     crash_resume_pass_rate: ?f64 = null,
 
-    pub fn gateList(m: Metrics) [12]Gate {
+    pub const gate_count = 15;
+
+    pub fn gateList(m: Metrics) [gate_count]Gate {
         return .{
             .{ .metric = "entity_f1", .value = m.entity_f1, .bound = .at_least, .limit = gates.entity_f1_min, .unit = .ratio },
             .{ .metric = "merge_accuracy", .value = m.merge_accuracy, .bound = .at_least, .limit = gates.merge_accuracy_min, .unit = .ratio },
             .{ .metric = "cross_type_merges", .value = count(m.cross_type_merges), .bound = .at_most, .limit = gates.cross_type_merges_max, .unit = .count },
-            .{ .metric = "fact_precision", .value = m.fact_precision, .bound = .at_least, .limit = gates.fact_precision_min, .unit = .ratio },
             .{ .metric = "fact_recall", .value = m.fact_recall, .bound = .at_least, .limit = gates.fact_recall_min, .unit = .ratio },
+            .{ .metric = "trap_facts", .value = count(m.trap_facts), .bound = .at_most, .limit = gates.trap_facts_max, .unit = .count },
+            .{ .metric = "labeled_precision", .value = m.labeled_precision, .bound = .at_least, .limit = gates.labeled_precision_min, .unit = .ratio },
+            .{ .metric = "fact_density", .value = m.fact_density, .bound = .at_most, .limit = gates.fact_density_max, .unit = .times },
+            .{ .metric = "residual_faithfulness", .value = m.residual_faithfulness, .bound = .at_least, .limit = gates.residual_faithfulness_min, .unit = .ratio, .scoring = .judge },
             .{ .metric = "invalidation_f1", .value = m.invalidation_f1, .bound = .at_least, .limit = gates.invalidation_f1_min, .unit = .ratio },
             .{ .metric = "temporal_accuracy", .value = m.temporal_accuracy, .bound = .at_least, .limit = gates.temporal_accuracy_min, .unit = .ratio },
             .{ .metric = "secret_leaks", .value = count(m.secret_leaks), .bound = .at_most, .limit = gates.secret_leaks_max, .unit = .count },
@@ -87,9 +99,11 @@ pub const Gate = struct {
     bound: Bound,
     limit: f64,
     unit: Unit,
+    scoring: Scoring = .deterministic,
 
     pub const Bound = enum { at_least, at_most };
-    pub const Unit = enum { ratio, count, calls, usd };
+    pub const Unit = enum { ratio, count, calls, usd, times };
+    pub const Scoring = enum { deterministic, judge };
     pub const Status = enum { pass, fail, unmeasured };
 
     pub fn status(g: Gate) Status {
@@ -116,8 +130,11 @@ test "every gate must be measured and within bounds to pass" {
         .entity_f1 = 0.9,
         .merge_accuracy = 1,
         .cross_type_merges = 0,
-        .fact_precision = 0.9,
         .fact_recall = 0.85,
+        .trap_facts = 0,
+        .labeled_precision = 1,
+        .fact_density = 1.75,
+        .residual_faithfulness = 0.8,
         .invalidation_f1 = 1,
         .temporal_accuracy = 1,
         .secret_leaks = 0,
@@ -132,4 +149,17 @@ test "every gate must be measured and within bounds to pass" {
     m.crash_resume_pass_rate = 1;
     m.secret_leaks = 1;
     try std.testing.expect(!m.passes());
+    m.secret_leaks = 0;
+    m.fact_density = 1.8;
+    try std.testing.expect(!m.passes());
+    m.fact_density = 1.2;
+    m.residual_faithfulness = null;
+    try std.testing.expect(!m.passes());
+}
+
+test "only residual faithfulness is judge-scored" {
+    for ((Metrics{}).gateList()) |g| {
+        const judged = std.mem.eql(u8, g.metric, "residual_faithfulness");
+        try std.testing.expectEqual(judged, g.scoring == .judge);
+    }
 }

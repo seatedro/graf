@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const store = @import("store");
 const score = @import("score.zig");
+const judge = @import("judge.zig");
 
 const Allocator = std.mem.Allocator;
 const pg = store.pg;
@@ -141,26 +142,55 @@ pub fn loadGraphState(arena: Allocator, pool: *pg.Pool, graph_id: core.Id, links
         }
     }
 
-    var calls: std.ArrayList(score.LlmCall) = .empty;
-    {
-        var result = try pool.query("SELECT entry_id::text, purpose, cost_usd::float8 FROM llm_call WHERE graph_id = $1 ORDER BY started_at, id", .{gid});
-        defer result.deinit();
-        while (try result.next()) |row| {
-            try calls.append(arena, .{
-                .entry = if (try row.get(?[]const u8, 0)) |e| try evalId(&eval_ids, arena, e) else null,
-                .purpose = try parseEnum(core.types.LlmPurpose, try row.get([]const u8, 1)),
-                .cost_usd = try row.get(f64, 2),
-            });
-        }
-    }
-
     return .{
         .entities = entities.items,
         .facts = facts.items,
         .entries = entries.items,
-        .llm_calls = calls.items,
+        .llm_calls = try loadCalls(arena, pool, graph_id, links),
         .scanned = try scanForSecrets(arena, pool, graph_id),
     };
+}
+
+pub fn loadCalls(arena: Allocator, pool: *pg.Pool, graph_id: core.Id, links: []const EntryLink) ![]const score.LlmCall {
+    var calls: std.ArrayList(score.LlmCall) = .empty;
+    var result = try pool.query("SELECT entry_id::text, purpose, cost_usd::float8 FROM llm_call WHERE graph_id = $1 ORDER BY started_at, id", .{&graph_id.bytes});
+    defer result.deinit();
+    while (try result.next()) |row| {
+        try calls.append(arena, .{
+            .entry = if (try row.get(?[]const u8, 0)) |e| try linkedId(arena, links, e) else null,
+            .purpose = try parseEnum(core.types.LlmPurpose, try row.get([]const u8, 1)),
+            .cost_usd = try row.get(f64, 2),
+        });
+    }
+    return calls.items;
+}
+
+pub fn loadEntryViews(arena: Allocator, pool: *pg.Pool, graph_id: core.Id, links: []const EntryLink) !std.StringHashMapUnmanaged(judge.EntryView) {
+    var views: std.StringHashMapUnmanaged(judge.EntryView) = .empty;
+    var result = try pool.query(
+        \\SELECT id::text, (extract(epoch FROM reference_time) * 1000000)::int8, project, kind, author, body::text
+        \\FROM entry WHERE graph_id = $1
+    , .{&graph_id.bytes});
+    defer result.deinit();
+    while (try result.next()) |row| {
+        const body = try std.json.parseFromSliceLeaky(core.EntryBody, arena, try row.get([]const u8, 5), .{ .allocate = .alloc_always, .ignore_unknown_fields = true });
+        try views.put(arena, try linkedId(arena, links, try row.get([]const u8, 0)), .{
+            .reference_time = try row.get(i64, 1),
+            .project = try dupeOpt(arena, try row.get(?[]const u8, 2)),
+            .kind = try parseEnum(core.types.EntryKind, try row.get([]const u8, 3)),
+            .author = try parseEnum(core.types.Author, try row.get([]const u8, 4)),
+            .body = body,
+        });
+    }
+    return views;
+}
+
+fn linkedId(arena: Allocator, links: []const EntryLink, db_id: []const u8) ![]const u8 {
+    for (links) |l| {
+        var buf: [36]u8 = undefined;
+        if (std.mem.eql(u8, l.id.toString(&buf), db_id)) return l.eval_id;
+    }
+    return arena.dupe(u8, db_id);
 }
 
 pub fn scanForSecrets(arena: Allocator, pool: *pg.Pool, graph_id: core.Id) ![]const score.ScannedText {

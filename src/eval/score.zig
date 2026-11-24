@@ -66,6 +66,24 @@ pub const QueryResult = struct {
     hits: []const Hit = &.{},
 };
 
+pub const Judgment = struct {
+    fact: []const u8,
+    supported: bool,
+    durable: bool,
+    reason: []const u8 = "",
+};
+
+pub const Residual = struct {
+    fact: []const u8,
+    entry: ?[]const u8,
+    text: []const u8,
+    subject: []const u8,
+    relation: []const u8,
+    qualifier: []const u8,
+    object: []const u8,
+    judgment: ?Judgment = null,
+};
+
 pub const CrashResume = struct {
     trials: u32,
     passed: u32,
@@ -79,6 +97,8 @@ pub const GraphState = struct {
     scanned: ?[]const ScannedText = null,
     retrieval: ?[]const QueryResult = null,
     crash_resume: ?CrashResume = null,
+    judgments: ?[]const Judgment = null,
+    judge_calls: []const LlmCall = &.{},
 };
 
 pub const Detail = struct {
@@ -90,8 +110,15 @@ pub const Detail = struct {
     unlabeled_entities: u32 = 0,
     merge_pairs: u32 = 0,
     merges_correct: u32 = 0,
-    fact_tp: u32 = 0,
-    fact_fp: u32 = 0,
+    gold_facts: u32 = 0,
+    facts_extracted: u32 = 0,
+    facts_matched: u32 = 0,
+    duplicate_facts: u32 = 0,
+    residual_facts: u32 = 0,
+    residual_faithful: u32 = 0,
+    residual_unsupported: u32 = 0,
+    residual_transient: u32 = 0,
+    residual_unjudged: u32 = 0,
     gold_fact_items: u32 = 0,
     gold_fact_items_found: u32 = 0,
     invalidation_tp: u32 = 0,
@@ -107,12 +134,16 @@ pub const Detail = struct {
     repair_calls: u32 = 0,
     embedding_calls: u32 = 0,
     total_cost_usd: f64 = 0,
+    judge_calls: u32 = 0,
+    judge_cost_usd: f64 = 0,
 };
 
 pub const Report = struct {
     graph: ?[]const u8 = null,
+    judge: ?[]const u8 = null,
     metrics: mod.Metrics,
     detail: Detail,
+    residuals: []const Residual = &.{},
     findings: []const []const u8,
 };
 
@@ -157,6 +188,8 @@ const Scorer = struct {
     fact_gold: []?usize = &.{},
     fact_entry: []?[]const u8 = &.{},
     forgiven: []bool = &.{},
+    trap: []bool = &.{},
+    residual: []bool = &.{},
     claimed: []?usize = &.{},
     patterns: []const fixtures.Pattern = &.{},
 
@@ -472,10 +505,13 @@ const Scorer = struct {
         sc.fact_gold = try a.alloc(?usize, facts.len);
         sc.fact_entry = try a.alloc(?[]const u8, facts.len);
         sc.forgiven = try a.alloc(bool, facts.len);
+        sc.trap = try a.alloc(bool, facts.len);
+        sc.residual = try a.alloc(bool, facts.len);
         for (facts, 0..) |d, i| {
             try sc.fact_index.put(a, d.key, i);
             sc.fact_entry[i] = statingEntry(d);
-            sc.forgiven[i] = retracted(d) and try sc.patternHit(d) != null;
+            const forbidden = try sc.patternHit(d) != null;
+            sc.forgiven[i] = retracted(d) and forbidden;
             var best: ?usize = null;
             var best_strength: u8 = 0;
             var best_pref = false;
@@ -490,6 +526,8 @@ const Scorer = struct {
                 }
             }
             sc.fact_gold[i] = best;
+            sc.trap[i] = !sc.forgiven[i] and (sc.fromSkipEntry(i) or (best == null and forbidden));
+            sc.residual[i] = !sc.forgiven[i] and !sc.trap[i] and best == null and !retracted(d);
         }
 
         const order = try a.alloc(usize, facts.len);
@@ -518,29 +556,29 @@ const Scorer = struct {
     }
 
     fn scoreFacts(sc: *Scorer) !void {
-        var tp: u32 = 0;
-        var fp: u32 = 0;
+        var traps: u32 = 0;
         for (sc.state.facts, 0..) |d, i| {
             if (sc.forgiven[i]) continue;
+            sc.detail.facts_extracted += 1;
             const ep = sc.fact_entry[i] orelse "?";
-            if (sc.fromSkipEntry(i)) {
-                fp += 1;
-                try sc.note("fact: skip entry {s} produced '{s}'", .{ ep, d.text });
+            if (sc.trap[i]) {
+                traps += 1;
+                if (sc.fromSkipEntry(i)) {
+                    try sc.note("fact: skip entry {s} produced '{s}'", .{ ep, d.text });
+                } else try sc.note("fact: {s} wrote forbidden fact '{s}' and left it active", .{ ep, d.text });
                 continue;
             }
-            const g = sc.fact_gold[i] orelse {
-                fp += 1;
-                if (try sc.patternHit(d) != null) {
-                    try sc.note("fact: {s} wrote forbidden fact '{s}' and left it active", .{ ep, d.text });
-                } else try sc.note("fact: {s} wrote unlabeled fact '{s}' ({s})", .{ ep, d.text, d.relation });
+            if (sc.residual[i]) {
+                sc.detail.residual_facts += 1;
                 continue;
-            };
+            }
+            const g = sc.fact_gold[i] orelse continue;
             if (sc.claimed[g] != i) {
-                fp += 1;
+                sc.detail.duplicate_facts += 1;
                 try sc.note("fact: {s} duplicated {s} as a new row", .{ ep, sc.suite.facts[g].fact.id });
                 continue;
             }
-            tp += 1;
+            sc.detail.facts_matched += 1;
         }
         var items: u32 = 0;
         var found: u32 = 0;
@@ -560,12 +598,74 @@ const Scorer = struct {
                 if (ok) found += 1 else try sc.note("fact: {s} did not restate {s}", .{ ep, id });
             }
         }
-        sc.detail.fact_tp = tp;
-        sc.detail.fact_fp = fp;
+        sc.detail.gold_facts = @intCast(sc.suite.facts.len);
         sc.detail.gold_fact_items = items;
         sc.detail.gold_fact_items_found = found;
-        sc.metrics.fact_precision = ratio(tp, tp + fp);
         sc.metrics.fact_recall = ratio(found, items);
+        sc.metrics.trap_facts = traps;
+        sc.metrics.labeled_precision = ratio(sc.detail.facts_matched, sc.detail.facts_matched + sc.detail.duplicate_facts + traps);
+        sc.metrics.fact_density = ratio(sc.detail.facts_extracted, sc.detail.gold_facts);
+    }
+
+    fn residuals(sc: *Scorer) ![]Residual {
+        var list: std.ArrayList(Residual) = .empty;
+        for (sc.state.facts, 0..) |d, i| {
+            if (!sc.residual[i]) continue;
+            try list.append(sc.arena, .{
+                .fact = d.key,
+                .entry = sc.fact_entry[i],
+                .text = d.text,
+                .subject = sc.entityName(d.subject),
+                .relation = d.relation,
+                .qualifier = d.qualifier,
+                .object = switch (d.object) {
+                    .entity => |k| sc.entityName(k),
+                    .value => |v| v,
+                },
+            });
+        }
+        return list.items;
+    }
+
+    fn entityName(sc: *Scorer, key: []const u8) []const u8 {
+        const i = sc.entity_index.get(key) orelse return key;
+        return sc.state.entities[i].name;
+    }
+
+    fn scoreResiduals(sc: *Scorer) ![]const Residual {
+        const list = try sc.residuals();
+        if (list.len == 0) {
+            sc.metrics.residual_faithfulness = 1;
+            return list;
+        }
+        const judgments = sc.state.judgments orelse {
+            try sc.note("judge: {d} residual facts were not judged; residual faithfulness is unmeasured", .{list.len});
+            return list;
+        };
+        for (list) |*r| {
+            for (judgments) |j| {
+                if (std.mem.eql(u8, j.fact, r.fact)) {
+                    r.judgment = j;
+                    break;
+                }
+            }
+            const ep = r.entry orelse "?";
+            const j = r.judgment orelse {
+                sc.detail.residual_unjudged += 1;
+                try sc.note("judge: no verdict for {s} residual '{s}'", .{ ep, r.text });
+                continue;
+            };
+            if (j.supported and j.durable) {
+                sc.detail.residual_faithful += 1;
+                continue;
+            }
+            if (!j.supported) sc.detail.residual_unsupported += 1;
+            if (!j.durable) sc.detail.residual_transient += 1;
+            const why = if (!j.supported and !j.durable) "unsupported and transient" else if (!j.supported) "unsupported" else "transient";
+            try sc.note("judge: {s} residual '{s}' is {s}: {s}", .{ ep, r.text, why, j.reason });
+        }
+        sc.metrics.residual_faithfulness = ratio(sc.detail.residual_faithful, @intCast(list.len));
+        return list;
     }
 
     const GoldInvalidation = struct { entry: []const u8, fact: usize, kind: EndKind, valid_to: ?core.Micros };
@@ -740,12 +840,16 @@ const Scorer = struct {
                 .resolve => sc.detail.resolution_calls += 1,
                 .repair => sc.detail.repair_calls += 1,
                 .embed_entry, .embed_batch => sc.detail.embedding_calls += 1,
-                .rerank, .summarize, .embed_query => {},
+                .rerank, .summarize, .embed_query, .judge => {},
             }
             switch (c.purpose) {
-                .rerank, .embed_query => {},
+                .rerank, .embed_query, .judge => {},
                 else => sc.detail.total_cost_usd += c.cost_usd,
             }
+        }
+        for (sc.state.judge_calls) |c| {
+            sc.detail.judge_calls += 1;
+            sc.detail.judge_cost_usd += c.cost_usd;
         }
         if (!all_terminal) return;
         const n: f64 = @floatFromInt(sc.suite.entries.len);
@@ -771,10 +875,12 @@ pub fn scoreState(arena: Allocator, suite: *const Suite, state: *const GraphStat
 
     try sc.prepareEntities();
     try sc.prepareFacts();
+    var residual_list: []const Residual = &.{};
     if (ingested) {
         try sc.scoreEntities();
         try sc.scoreMerges();
         try sc.scoreFacts();
+        residual_list = try sc.scoreResiduals();
         try sc.scoreInvalidations();
         try sc.scoreTemporal();
     } else try sc.note("ingestion: no suite entry reached a terminal status; graph metrics are unmeasured", .{});
@@ -785,7 +891,14 @@ pub fn scoreState(arena: Allocator, suite: *const Suite, state: *const GraphStat
     if (state.crash_resume) |cr| {
         if (cr.trials > 0) sc.metrics.crash_resume_pass_rate = ratio(cr.passed, cr.trials);
     }
-    return .{ .metrics = sc.metrics, .detail = sc.detail, .findings = sc.findings.items };
+    return .{ .metrics = sc.metrics, .detail = sc.detail, .residuals = residual_list, .findings = sc.findings.items };
+}
+
+pub fn residualFacts(arena: Allocator, suite: *const Suite, state: *const GraphState) ![]const Residual {
+    var sc: Scorer = .{ .arena = arena, .suite = suite, .state = state };
+    try sc.prepareEntities();
+    try sc.prepareFacts();
+    return sc.residuals();
 }
 
 pub fn goldState(arena: Allocator, suite: *const Suite) !GraphState {
@@ -936,7 +1049,11 @@ test "the gold state passes every gate" {
     try testing.expectEqual(@as(usize, 0), report.findings.len);
     try testing.expect(report.metrics.passes());
     try testing.expectEqual(@as(f64, 1), report.metrics.entity_f1.?);
-    try testing.expectEqual(@as(f64, 1), report.metrics.fact_precision.?);
+    try testing.expectEqual(@as(f64, 1), report.metrics.residual_faithfulness.?);
+    try testing.expectEqual(@as(f64, 1), report.metrics.fact_density.?);
+    try testing.expectEqual(@as(u32, 0), report.metrics.trap_facts.?);
+    try testing.expectEqual(@as(f64, 1), report.metrics.labeled_precision.?);
+    try testing.expectEqual(@as(u32, 31), report.detail.gold_facts);
     try testing.expectEqual(@as(f64, 1), report.metrics.fact_recall.?);
     try testing.expectEqual(@as(u32, 34), report.detail.gold_fact_items);
     try testing.expectEqual(@as(u32, 7), report.detail.temporal_items);
@@ -1031,7 +1148,7 @@ test "a leaked secret fails the secret gate" {
     for (report.findings) |msg| try testing.expect(std.mem.indexOf(u8, msg, "7Qk2Vx9Lp4Rt8Wz3") == null);
 }
 
-test "facts from a skip entry are false positives" {
+test "facts from a skip entry are trap facts" {
     const f = try Fixture.init();
     defer f.deinit();
     try f.addEntity(.{ .key = "neo", .name = "Neo4j", .type = .software });
@@ -1044,9 +1161,10 @@ test "facts from a skip entry are false positives" {
         .evidence = &.{.{ .entry = "e14", .kind = .stated }},
     });
     const report = try f.score();
-    try testing.expectEqual(@as(u32, 1), report.detail.fact_fp);
+    try testing.expectEqual(@as(u32, 1), report.metrics.trap_facts.?);
+    try testing.expectEqual(@as(u32, 0), report.detail.residual_facts);
     try testing.expect(Fixture.hasFinding(report, "skip entry e14 produced"));
-    try testing.expect(report.metrics.fact_precision.? < 1);
+    try expectGate(report, "trap_facts", .fail);
 }
 
 test "a refuted claim is forgiven only when it is retracted" {
@@ -1064,14 +1182,16 @@ test "a refuted claim is forgiven only when it is retracted" {
         .evidence = &.{.{ .entry = "e07", .kind = .stated }},
     });
     const forgiven = try f.score();
-    try testing.expectEqual(@as(u32, 0), forgiven.detail.fact_fp);
+    try testing.expectEqual(@as(u32, 0), forgiven.metrics.trap_facts.?);
+    try testing.expectEqual(@as(u32, 0), forgiven.detail.residual_facts);
     try testing.expectEqual(@as(u32, 0), forgiven.detail.invalidation_fp);
 
     const go = f.fact("go-fact");
     go.end_kind = null;
     go.known.upper = null;
     const active = try f.score();
-    try testing.expectEqual(@as(u32, 1), active.detail.fact_fp);
+    try testing.expectEqual(@as(u32, 1), active.metrics.trap_facts.?);
+    try testing.expectEqual(@as(u32, 0), active.detail.residual_facts);
     try testing.expect(Fixture.hasFinding(active, "forbidden fact 'Quayline uses Go'"));
 }
 
@@ -1087,8 +1207,18 @@ test "a restatement that inserts a second row is a duplicate" {
         .evidence = &.{.{ .entry = "e15", .kind = .stated }},
     });
     const report = try f.score();
-    try testing.expectEqual(@as(u32, 1), report.detail.fact_fp);
+    try testing.expectEqual(@as(u32, 1), report.detail.duplicate_facts);
     try testing.expect(Fixture.hasFinding(report, "duplicated f_brinelog_uses_pg"));
+    try testing.expectApproxEqAbs(@as(f64, 31.0 / 32.0), report.metrics.labeled_precision.?, 1e-9);
+    try expectGate(report, "labeled_precision", .pass);
+    for (0..5) |n| try f.addFact(.{
+        .key = try std.fmt.allocPrint(f.alloc(), "again-{d}", .{n}),
+        .subject = "ent_brinelog",
+        .relation = "uses",
+        .object = .{ .entity = "ent_postgres" },
+        .evidence = &.{.{ .entry = "e15", .kind = .stated }},
+    });
+    try expectGate(try f.score(), "labeled_precision", .fail);
 }
 
 test "a valid_from three days off fails temporal grounding" {
@@ -1123,4 +1253,93 @@ test "calls and cost are unmeasured until every entry finishes" {
     try expectGate(report, "calls_per_entry", .unmeasured);
     try expectGate(report, "cost_per_entry_usd", .unmeasured);
     try expectGate(report, "entity_f1", .pass);
+}
+
+fn addUnlabeled(f: *Fixture, key: []const u8, text: []const u8) !void {
+    try f.addFact(.{
+        .key = key,
+        .subject = "ent_brinelog",
+        .relation = "kept_separate_from",
+        .object = .{ .entity = "ent_quayline" },
+        .text = text,
+        .evidence = &.{.{ .entry = "e01", .kind = .stated }},
+    });
+}
+
+test "an unlabeled fact is a residual that only the judge can score" {
+    const f = try Fixture.init();
+    defer f.deinit();
+    try addUnlabeled(f, "separate", "brinelog is kept separate from Quayline");
+
+    const residuals = try residualFacts(f.alloc(), &f.suite, &f.state);
+    try testing.expectEqual(@as(usize, 1), residuals.len);
+    try testing.expectEqualStrings("e01", residuals[0].entry.?);
+    try testing.expectEqualStrings("brinelog", residuals[0].subject);
+    try testing.expectEqualStrings("Quayline", residuals[0].object);
+
+    const unjudged = try f.score();
+    try testing.expectEqual(@as(u32, 1), unjudged.detail.residual_facts);
+    try testing.expectEqual(@as(u32, 0), unjudged.metrics.trap_facts.?);
+    try expectGate(unjudged, "residual_faithfulness", .unmeasured);
+    try testing.expect(!unjudged.metrics.passes());
+
+    f.state.judgments = &.{.{ .fact = "separate", .supported = true, .durable = true, .reason = "the user says to keep it separate" }};
+    const faithful = try f.score();
+    try testing.expectEqual(@as(f64, 1), faithful.metrics.residual_faithfulness.?);
+    try testing.expect(faithful.metrics.passes());
+    try testing.expect(faithful.residuals[0].judgment != null);
+
+    f.state.judgments = &.{.{ .fact = "separate", .supported = true, .durable = false, .reason = "one-off remark" }};
+    const transient = try f.score();
+    try testing.expectEqual(@as(f64, 0), transient.metrics.residual_faithfulness.?);
+    try testing.expectEqual(@as(u32, 1), transient.detail.residual_transient);
+    try testing.expect(Fixture.hasFinding(transient, "is transient: one-off remark"));
+    try expectGate(transient, "residual_faithfulness", .fail);
+
+    f.state.judgments = &.{};
+    const missing = try f.score();
+    try testing.expectEqual(@as(u32, 1), missing.detail.residual_unjudged);
+    try expectGate(missing, "residual_faithfulness", .fail);
+}
+
+test "a retracted unlabeled fact is neither a residual nor a trap" {
+    const f = try Fixture.init();
+    defer f.deinit();
+    try addUnlabeled(f, "withdrawn", "brinelog is kept separate from Quayline");
+    const d = f.fact("withdrawn");
+    d.end_kind = .retracted;
+    d.known = .{ .lower = 1, .upper = 2 };
+    const report = try f.score();
+    try testing.expectEqual(@as(u32, 0), report.detail.residual_facts);
+    try testing.expectEqual(@as(u32, 0), report.metrics.trap_facts.?);
+    try testing.expectEqual(@as(u32, 32), report.detail.facts_extracted);
+}
+
+test "shredding an entry into many facts breaks the density cap" {
+    const f = try Fixture.init();
+    defer f.deinit();
+    var judgments: std.ArrayList(Judgment) = .empty;
+    for (0..24) |n| {
+        const key = try std.fmt.allocPrint(f.alloc(), "micro-{d}", .{n});
+        try addUnlabeled(f, key, "brinelog is kept separate from Quayline");
+        try judgments.append(f.alloc(), .{ .fact = key, .supported = true, .durable = true });
+    }
+    f.state.judgments = judgments.items;
+    const report = try f.score();
+    try testing.expectEqual(@as(f64, 1), report.metrics.residual_faithfulness.?);
+    try testing.expectApproxEqAbs(@as(f64, 55.0 / 31.0), report.metrics.fact_density.?, 1e-9);
+    try expectGate(report, "fact_density", .fail);
+}
+
+test "judge calls stay out of the ingestion call and cost gates" {
+    const f = try Fixture.init();
+    defer f.deinit();
+    const judge_calls = [_]LlmCall{ .{ .purpose = .judge, .cost_usd = 0.5 }, .{ .purpose = .repair, .cost_usd = 0.25 } };
+    f.state.judge_calls = &judge_calls;
+    f.state.llm_calls = try std.mem.concat(f.alloc(), LlmCall, &.{ f.state.llm_calls, &.{.{ .purpose = .judge, .cost_usd = 1 }} });
+    const report = try f.score();
+    try testing.expectApproxEqAbs(@as(f64, 1.9), report.metrics.calls_per_entry.?, 1e-9);
+    try expectGate(report, "cost_per_entry_usd", .pass);
+    try testing.expectEqual(@as(u32, 2), report.detail.judge_calls);
+    try testing.expectApproxEqAbs(@as(f64, 0.75), report.detail.judge_cost_usd, 1e-9);
 }

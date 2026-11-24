@@ -8,6 +8,7 @@ const mod = @import("mod.zig");
 const fixtures = @import("fixtures.zig");
 const score = @import("score.zig");
 const pgload = @import("pgload.zig");
+const judge = @import("judge.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -20,6 +21,7 @@ pub const RunOptions = struct {
     entry_timeout_ms: u32 = 300_000,
     poll_ms: u32 = 50,
     worker: []const u8 = "graf-eval",
+    judge: ?judge.Setup = null,
 };
 
 pub fn toDraft(ep: mod.EvalEntry) !core.EntryDraft {
@@ -58,6 +60,7 @@ fn sleepMs(io: std.Io, ms: u32) void {
 const Notes = struct {
     arena: Allocator,
     list: std.ArrayList([]const u8) = .empty,
+    judge: ?[]const u8 = null,
 
     fn add(n: *Notes, comptime fmt: []const u8, args: anytype) !void {
         try n.list.append(n.arena, try std.fmt.allocPrint(n.arena, fmt, args));
@@ -156,6 +159,8 @@ pub fn run(arena: Allocator, io: std.Io, config: *const core.Config, opts: RunOp
         state.retrieval = try runQueries(arena, &engine, &suite, &notes);
     } else try notes.add("retrieval: skipped because ingestion did not run", .{});
 
+    if (ingesting and enqueued) state.judgments = try judgeResiduals(arena, io, &s, config, opts, &suite, &state, graph, graph_id, links.items, &notes);
+
     state.crash_resume = try crashResume(arena, io, &s, config, opts, &suite, graph, &notes);
     return finish(arena, &suite, &state, graph, &notes);
 }
@@ -163,8 +168,73 @@ pub fn run(arena: Allocator, io: std.Io, config: *const core.Config, opts: RunOp
 fn finish(arena: Allocator, suite: *const fixtures.Suite, state: *const score.GraphState, graph: []const u8, notes: *Notes) !score.Report {
     var report = try score.scoreState(arena, suite, state);
     report.graph = graph;
+    report.judge = notes.judge;
     report.findings = try std.mem.concat(arena, []const u8, &.{ notes.list.items, report.findings });
     return report;
+}
+
+fn judgeResiduals(
+    arena: Allocator,
+    io: std.Io,
+    s: *store.Store,
+    config: *const core.Config,
+    opts: RunOptions,
+    suite: *const fixtures.Suite,
+    state: *score.GraphState,
+    graph: []const u8,
+    graph_id: core.Id,
+    links: []const pgload.EntryLink,
+    notes: *Notes,
+) !?[]const score.Judgment {
+    const residuals = try score.residualFacts(arena, suite, state);
+    if (residuals.len == 0) return &.{};
+    const setup = opts.judge orelse {
+        try notes.add("judge: no judge is configured; residual faithfulness is unmeasured", .{});
+        return null;
+    };
+    notes.judge = try std.fmt.allocPrint(arena, "{s} ({t})", .{ setup.llm.model, setup.llm.route });
+    if (setup.warning) |w| try notes.add("judge: {s}", .{w});
+
+    const judge_graph = try std.fmt.allocPrint(arena, "{s}-judge", .{graph});
+    const judge_graph_id = try s.ensureGraph(judge_graph);
+    var judge_config = config.*;
+    judge_config.llm = setup.llm;
+    var client = llm.Client.init(arena, io, &judge_config, s.ledger());
+    client.graph_id = judge_graph_id;
+    defer client.deinit();
+
+    const views = try pgload.loadEntryViews(arena, s.pool, graph_id, links);
+    var judgments: std.ArrayList(score.Judgment) = .empty;
+    const done = try arena.alloc(bool, residuals.len);
+    @memset(done, false);
+    for (residuals, 0..) |first, i| {
+        if (done[i]) continue;
+        const entry = first.entry orelse continue;
+        var members: std.ArrayList(usize) = .empty;
+        var facts: std.ArrayList(judge.Fact) = .empty;
+        for (residuals[i..], i..) |r, j| {
+            const other = r.entry orelse continue;
+            if (done[j] or !std.mem.eql(u8, other, entry)) continue;
+            done[j] = true;
+            try members.append(arena, j);
+            try facts.append(arena, .{ .text = r.text, .subject = r.subject, .relation = r.relation, .qualifier = r.qualifier, .object = r.object });
+        }
+        const view = views.get(entry) orelse {
+            try notes.add("judge: entry {s} was not found; its residual facts are unjudged", .{entry});
+            continue;
+        };
+        const verdicts = judge.judgeEntry(&client, arena, view, facts.items) catch |err| {
+            try notes.add("judge: judging {s} failed: {s}; residual faithfulness is unmeasured", .{ entry, @errorName(err) });
+            state.judge_calls = try pgload.loadCalls(arena, s.pool, judge_graph_id, links);
+            return null;
+        };
+        for (members.items, verdicts) |j, v| {
+            const verdict = v orelse continue;
+            try judgments.append(arena, .{ .fact = residuals[j].fact, .supported = verdict.supported, .durable = verdict.durable, .reason = verdict.reason });
+        }
+    }
+    state.judge_calls = try pgload.loadCalls(arena, s.pool, judge_graph_id, links);
+    return judgments.items;
 }
 
 fn runQueries(arena: Allocator, engine: *retrieve.Engine, suite: *const fixtures.Suite, notes: *Notes) !?[]const score.QueryResult {
