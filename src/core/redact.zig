@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
+const sanitize = @import("text.zig").sanitize;
 const Allocator = std.mem.Allocator;
 
 pub const Kind = enum { api_key, jwt, pem, assignment, bearer, url_credentials, high_entropy };
@@ -9,7 +10,7 @@ const marker_prefix = "[REDACTED:";
 const max_passes = 4;
 
 pub fn redact(arena: Allocator, text: []const u8) Allocator.Error![]const u8 {
-    var current = text;
+    var current = try sanitize(arena, text);
     for (0..max_passes) |_| {
         const next = try redactPass(arena, current);
         if (next.ptr == current.ptr) break;
@@ -870,7 +871,22 @@ pub fn redactBody(arena: Allocator, body: types.EntryBody) Allocator.Error!types
 pub fn redactDraft(arena: Allocator, draft: types.EntryDraft) Allocator.Error!types.EntryDraft {
     var out = draft;
     out.body = try redactBody(arena, draft.body);
+    out.project = try sanitizeOptional(arena, draft.project);
+    out.cursor = try sanitizeOptional(arena, draft.cursor);
+
+    if (draft.source) |src| out.source = .{
+        .harness = src.harness,
+        .external_id = try sanitize(arena, src.external_id),
+        .project = try sanitizeOptional(arena, src.project),
+        .agent = try sanitizeOptional(arena, src.agent),
+        .model = try sanitizeOptional(arena, src.model),
+    };
+
     return out;
+}
+
+fn sanitizeOptional(arena: Allocator, s: ?[]const u8) Allocator.Error!?[]const u8 {
+    return if (s) |v| try sanitize(arena, v) else null;
 }
 
 test "redactDraft clears every string in the body and is stable on redacted input" {
@@ -895,6 +911,42 @@ test "redactDraft clears every string in the body and is stable on redacted inpu
 
     const twice = try redactDraft(arena, once);
     try std.testing.expectEqualStrings(json, try std.json.Stringify.valueAlloc(arena, twice.body, .{}));
+}
+
+test "redactDraft strips NUL bytes from the body and source metadata before redacting" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const split_secret = "gh" ++ "p_a1B2c3D4e5\x00F6g7H8i9J0k1L2m3N4o5P6q7R8";
+    const turns = [_]types.Turn{.{
+        .role = .tool,
+        .text = "out\x00put",
+        .tool_calls = &.{.{ .name = "Ba\x00sh", .args_preview = "{\"cmd\":\"cat\x00\"}", .result_preview = split_secret }},
+    }};
+    const draft: types.EntryDraft = .{
+        .source = .{ .harness = .pi, .external_id = "sess\x00-1", .project = "pro\x00j", .agent = "a\x00", .model = "\x00m" },
+        .kind = .turns,
+        .project = "pro\x00j",
+        .author = .tool,
+        .body = .{ .turns = &turns, .text = "\x00note" },
+        .reference_time = 0,
+        .cursor = "{\"offset\":\x001}",
+    };
+
+    const out = try redactDraft(arena, draft);
+    const json = try std.json.Stringify.valueAlloc(arena, out, .{});
+
+    try std.testing.expect(std.mem.indexOfScalar(u8, json, 0) == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\\u0000") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "a1B2c3D4e5") == null);
+    try std.testing.expectEqualStrings("output", out.body.turns[0].text);
+    try std.testing.expectEqualStrings("Bash", out.body.turns[0].tool_calls[0].name);
+    try std.testing.expectEqualStrings("note", out.body.text.?);
+    try std.testing.expectEqualStrings("sess-1", out.source.?.external_id);
+    try std.testing.expectEqualStrings("proj", out.source.?.project.?);
+    try std.testing.expectEqualStrings("proj", out.project.?);
+    try std.testing.expectEqualStrings("{\"offset\":1}", out.cursor.?);
 }
 
 test {
