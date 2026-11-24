@@ -32,7 +32,6 @@ pub const State = struct {
 
 pub const Event = union(enum) {
     start,
-    succeeded,
     failed: struct { class: ErrorClass, retry_after_ms: ?u32 = null },
     invalid_output,
 };
@@ -43,14 +42,12 @@ pub const Action = union(enum) {
         phase: Phase,
         cooldown_until_ms: ?u64 = null,
     },
-    done,
     give_up: struct { disposition: Disposition, class: ErrorClass },
 };
 
 pub fn step(s: *State, event: Event, now_ms: u64) Action {
     switch (event) {
         .start => return sendAt(s, now_ms, null),
-        .succeeded => return .done,
         .invalid_output => {
             if (s.phase == .repair) return giveUp(.dead, .invalid_output);
             s.phase = .repair;
@@ -170,12 +167,6 @@ test "one repair, then dead; transport retries still apply to the repair request
     try expectSend(step(&s, .invalid_output, 10), 10, 10, .repair, false);
     try expectSend(step(&s, .{ .failed = .{ .class = .http_5xx } }, 20), 1020, 1220, .repair, false);
     try expectGiveUp(step(&s, .invalid_output, 2000), .dead, .invalid_output);
-}
-
-test "success ends the call" {
-    var s = State.init(3);
-    _ = step(&s, .start, 0);
-    try testing.expect(step(&s, .succeeded, 5) == .done);
 }
 
 test "jitter is reproducible from the seed" {

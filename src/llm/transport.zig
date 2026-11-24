@@ -53,11 +53,12 @@ pub const Transport = struct {
 
 pub const Http = struct {
     client: std.http.Client,
-    max_body_bytes: usize = 64 << 20,
-    idle_ttl_ms: u64 = 30_000,
-    pool_size: usize = 32,
     last_done_ms: std.atomic.Value(u64) = .init(0),
-    poll_ms: i64 = 5,
+
+    const max_body_bytes = 64 << 20;
+    const idle_ttl_ms = 30_000;
+    const pool_size = 32;
+    const poll_ms = 5;
 
     pub fn init(gpa: std.mem.Allocator, io: Io) Http {
         return .{ .client = .{ .allocator = gpa, .io = io } };
@@ -110,7 +111,7 @@ pub const Http = struct {
                 timed_out = true;
                 break;
             }
-            io.sleep(.fromMilliseconds(h.poll_ms), .awake) catch {
+            io.sleep(.fromMilliseconds(poll_ms), .awake) catch {
                 cancelled = true;
                 break;
             };
@@ -152,9 +153,9 @@ pub const Http = struct {
 
     fn dropIdleConnections(h: *Http, io: Io) void {
         const last = h.last_done_ms.load(.acquire);
-        if (last == 0 or limiter.nowMs(io) -| last < h.idle_ttl_ms) return;
+        if (last == 0 or limiter.nowMs(io) -| last < idle_ttl_ms) return;
         h.client.connection_pool.resize(io, 0) catch return;
-        h.client.connection_pool.resize(io, h.pool_size) catch return;
+        h.client.connection_pool.resize(io, pool_size) catch return;
     }
 
     fn exchange(h: *Http, io: Io, arena: std.mem.Allocator, req: *const Request, p: *Progress) Exchange {
@@ -209,7 +210,7 @@ pub const Http = struct {
                 error.WriteFailed => return error.OutOfMemory,
             };
             p.last_bytes_ms.store(limiter.nowMs(io), .release);
-            if (out.written().len > h.max_body_bytes) return error.ResponseTooLarge;
+            if (out.written().len > max_body_bytes) return error.ResponseTooLarge;
         }
         return .{ .status = status, .headers = captured.items, .body = out.written() };
     }
