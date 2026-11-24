@@ -68,7 +68,7 @@ graf backfill --harness claude-code,codex --cap-usd 15
 
 On a hub it enqueues entries straight into Postgres; on an edge (with an upstream configured) it redacts locally and pushes them to the hub's `POST /v1/entries`, without touching the edge spool. Both scan every `~/.claude*` and `~/.codex*` profile plus `~/.pi/agent` and `~/.fx`; a hub also reads Capy history when `sources.capy` is enabled. Entries go out oldest first with their original timestamps, and the content hash makes a rerun skip what is already stored, so `--max-entries` and `--cap-usd` (checked against the estimated cost) can split a large history across several runs.
 
-Backfilled entries are marked as such. Workers always claim live entries first, and stop claiming backfilled ones once they have spent `limits.backfill_daily_usd` (default $25) in the current UTC day, so a large backfill never starves live ingestion of the overall `limits.daily_usd` budget.
+Backfilled entries are marked as such. Workers always claim live entries first, and stop claiming backfilled ones once they have spent `limits.backfill_daily_usd` (default $250) in the current UTC day. The overall `limits.daily_usd` still caps the total, so set `backfill_daily_usd` below it when live ingestion should always keep some of the day's budget.
 
 ## Remote MCP clients
 
