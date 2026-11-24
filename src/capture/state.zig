@@ -92,13 +92,13 @@ test "state dir prefers XDG_STATE_HOME, then HOME" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var both = try testEnv(&.{ .{ "XDG_STATE_HOME", "/x/state" }, .{ "HOME", "/home/acme" } });
+    var both = try testEnv(&.{ .{ "XDG_STATE_HOME", "/x/state" }, .{ "HOME", "/home/brackwater" } });
     defer both.deinit();
     try std.testing.expectEqualStrings("/x/state/graf", (try dir(arena, &both)).?);
 
-    var home_only = try testEnv(&.{ .{ "XDG_STATE_HOME", "" }, .{ "HOME", "/home/acme" } });
+    var home_only = try testEnv(&.{ .{ "XDG_STATE_HOME", "" }, .{ "HOME", "/home/brackwater" } });
     defer home_only.deinit();
-    try std.testing.expectEqualStrings("/home/acme/.local/state/graf", (try dir(arena, &home_only)).?);
+    try std.testing.expectEqualStrings("/home/brackwater/.local/state/graf", (try dir(arena, &home_only)).?);
 
     var none = try testEnv(&.{});
     defer none.deinit();
@@ -109,15 +109,15 @@ test "socket path: configured, tilde, default" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var env = try testEnv(&.{.{ "HOME", "/home/acme" }});
+    var env = try testEnv(&.{.{ "HOME", "/home/brackwater" }});
     defer env.deinit();
 
     var cfg: core.Config = .{};
-    try std.testing.expectEqualStrings("/home/acme/.local/state/graf/graf.sock", (try socketPath(arena, &cfg, &env)).?);
+    try std.testing.expectEqualStrings("/home/brackwater/.local/state/graf/graf.sock", (try socketPath(arena, &cfg, &env)).?);
     cfg.serve.socket = "/run/graf.sock";
     try std.testing.expectEqualStrings("/run/graf.sock", (try socketPath(arena, &cfg, &env)).?);
     cfg.serve.socket = "~/g.sock";
-    try std.testing.expectEqualStrings("/home/acme/g.sock", (try socketPath(arena, &cfg, &env)).?);
+    try std.testing.expectEqualStrings("/home/brackwater/g.sock", (try socketPath(arena, &cfg, &env)).?);
     try std.testing.expectEqualStrings("/s/spool.jsonl", try spoolPath(arena, "/s"));
 }
 

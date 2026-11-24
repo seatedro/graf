@@ -389,9 +389,9 @@ test "http routes over tcp and unix socket" {
             try fake.expectLast(p.op, "{\"query\":\"x\"}", null);
         }
 
-        var r = try c.request(arena, .GET, "/v1/brief?project=acme%20web&x=1", null);
+        var r = try c.request(arena, .GET, "/v1/brief?project=brackwater%20web&x=1", null);
         try testing.expectEqual(200, r.status);
-        try fake.expectLast(.brief, "{\"project\":\"acme web\"}", null);
+        try fake.expectLast(.brief, "{\"project\":\"brackwater web\"}", null);
         r = try c.request(arena, .GET, "/v1/brief", null);
         try fake.expectLast(.brief, "{}", null);
 

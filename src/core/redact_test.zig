@@ -152,7 +152,7 @@ test "jwts are redacted whole" {
     var g = Gen.init(a, 2);
     const enc = std.base64.url_safe_no_pad.Encoder;
     const header_json = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
-    const payload_json = "{\"sub\":\"user-4821\",\"name\":\"Acme Tester\",\"iat\":1700000000}";
+    const payload_json = "{\"sub\":\"user-4821\",\"name\":\"Brackwater Tester\",\"iat\":1700000000}";
     const header = enc.encode(try a.alloc(u8, enc.calcSize(header_json.len)), header_json);
     const payload = enc.encode(try a.alloc(u8, enc.calcSize(payload_json.len)), payload_json);
     const sig = try g.chars(b64url, 43);
@@ -195,7 +195,7 @@ test "secret assignments redact only the value" {
     const a = arena.allocator();
     var g = Gen.init(a, 4);
     const cases = [_][2][]const u8{
-        .{ "ACME_GATEWAY_API_KEY=", "" },
+        .{ "MOORING_API_KEY=", "" },
         .{ "export DB_PASSWORD=\"", "\"" },
         .{ "export DB_PASSWORD='", "'" },
         .{ "password: ", "\n" },
@@ -203,12 +203,12 @@ test "secret assignments redact only the value" {
         .{ "{\"client_secret\": \"", "\"}" },
         .{ "{\"apiKey\":\"", "\",\"region\":\"west\"}" },
         .{ "{\\\"api_key\\\": \\\"", "\\\"}" },
-        .{ "{\"cmd\": \"export ACME_TOKEN=", "\\nrun\"}" },
-        .{ "acme deploy --api-key ", " --region west" },
-        .{ "acme deploy --token=", "" },
+        .{ "{\"cmd\": \"export BRACKWATER_TOKEN=", "\\nrun\"}" },
+        .{ "brackwater deploy --api-key ", " --region west" },
+        .{ "brackwater deploy --token=", "" },
         .{ "curl https://api.example.test/v1/items?access_token=", "&page=2" },
         .{ "const apiKey = \"", "\";" },
-        .{ "ACME_SIGNING_KEY=", "" },
+        .{ "BRACKWATER_SIGNING_KEY=", "" },
         .{ "X-Api-Key: ", "" },
         .{ "**Password**: ", "" },
         .{ "secret = '", "'" },
@@ -216,10 +216,10 @@ test "secret assignments redact only the value" {
         .{ "AUTH_TOKEN := \"", "\"" },
         .{ "\"credentials\" => \"", "\"" },
         .{ "PGPASSWORD=", " psql -h db.example.test" },
-        .{ "set ACME_TOKEN=", " && run" },
+        .{ "set BRACKWATER_TOKEN=", " && run" },
         .{ "passphrase = ", "\n" },
         .{ "  auth: ", "\n" },
-        .{ "acme-db --password ", "" },
+        .{ "brackwater-db --password ", "" },
         .{ "DB_PW=", "" },
         .{ "private_key: ", "" },
         .{ "cloud_secret_access_key = ", "" },
@@ -229,7 +229,7 @@ test "secret assignments redact only the value" {
         try expectExact(a, try g.cat(&.{ c[0], value, c[1] }), try marked(&g, c[0], .assignment, c[1]));
     }
     const spaced = "correct horse battery staple";
-    try expectExact(a, "export ACME_PASSWORD=\"" ++ spaced ++ "\"", "export ACME_PASSWORD=\"[REDACTED:assignment]\"");
+    try expectExact(a, "export BRACKWATER_PASSWORD=\"" ++ spaced ++ "\"", "export BRACKWATER_PASSWORD=\"[REDACTED:assignment]\"");
     try expectExact(a, "password=hunter2", "password=[REDACTED:assignment]");
     try expectExact(a, "PASSWORD=s3cr3t!", "PASSWORD=[REDACTED:assignment]");
 }
@@ -244,9 +244,9 @@ test "assignment look-alikes survive" {
         "\"input_tokens\": 1234, \"output_tokens\": 99",
         "\"prompt_tokens\": \"812\"",
         "password: \"\"",
-        "API_KEY=${ACME_API_KEY}",
-        "TOKEN=$ACME_TOKEN",
-        "ACME_API_KEY=<your-key-here>",
+        "API_KEY=${BRACKWATER_API_KEY}",
+        "TOKEN=$BRACKWATER_TOKEN",
+        "BRACKWATER_API_KEY=<your-key-here>",
         "PASSWORD=********",
         "auth: true",
         "secret: null",
@@ -258,7 +258,7 @@ test "assignment look-alikes survive" {
         "const token = getToken();",
         "self.password = password",
         "password = os.environ[\"DB_PASSWORD\"]",
-        "api_key = os.getenv(\"ACME_KEY\")",
+        "api_key = os.getenv(\"BRACKWATER_KEY\")",
         "token => token.trim()",
         "auth_type: oauth",
         "tokenizer: cl100k_base",
@@ -267,7 +267,7 @@ test "assignment look-alikes survive" {
         "PWD=/home/user/src/graf",
         "if token == expected:",
         "token_url = \"https://auth.example.test/oauth/token\"",
-        "password_file: /etc/acme/db.pass",
+        "password_file: /etc/brackwater/db.pass",
         "api_key=[REDACTED:assignment]",
         "Use the --token flag to pass it",
         "use std::auth::login;",
@@ -291,9 +291,9 @@ test "authorization headers and bare bearer or basic credentials" {
     const a = arena.allocator();
     var g = Gen.init(a, 5);
     const tok = try g.chars(b64url, 40);
-    const short = try g.cat(&.{ "acme", try g.chars(digits, 6) });
+    const short = try g.cat(&.{ "brackwater", try g.chars(digits, 6) });
     const enc = std.base64.standard.Encoder;
-    const pair = "acme-user:Zq8vN2rT6pLx";
+    const pair = "brackwater-user:Zq8vN2rT6pLx";
     const basic = enc.encode(try a.alloc(u8, enc.calcSize(pair.len)), pair);
 
     try expectExact(a, try g.cat(&.{ "Authorization: Bearer ", tok }), "Authorization: Bearer [REDACTED:bearer]");
@@ -312,7 +312,7 @@ test "authorization headers and bare bearer or basic credentials" {
         "Basic usage of the CLI is documented in the README.",
         "Basic Authentication is weak.",
         "Authorization: Bearer <token>",
-        "Authorization: Bearer $ACME_TOKEN",
+        "Authorization: Bearer $BRACKWATER_TOKEN",
         "Authorization: Bearer ${TOKEN}",
         "Authorization: Bearer [REDACTED:bearer]",
     };
@@ -326,19 +326,19 @@ test "credentials in urls keep scheme, user and host" {
     var g = Gen.init(a, 6);
     const pw = try g.chars(b62, 14);
     try expectExact(a, try g.cat(&.{ "postgres://graf:", pw, "@db.example.test:5432/graf" }), "postgres://graf:[REDACTED:url_credentials]@db.example.test:5432/graf");
-    try expectExact(a, try g.cat(&.{ "git clone https://deploy:", pw, "@git.example.test/acme/repo.git" }), "git clone https://deploy:[REDACTED:url_credentials]@git.example.test/acme/repo.git");
+    try expectExact(a, try g.cat(&.{ "git clone https://deploy:", pw, "@git.example.test/brackwater/repo.git" }), "git clone https://deploy:[REDACTED:url_credentials]@git.example.test/brackwater/repo.git");
     try expectExact(a, try g.cat(&.{ "REDIS_URL=redis://:", pw, "@cache.example.test:6379/0" }), "REDIS_URL=redis://:[REDACTED:url_credentials]@cache.example.test:6379/0");
-    try expectExact(a, try g.cat(&.{ "amqp://acme:", pw, "@x", pw, "@mq.example.test" }), "amqp://acme:[REDACTED:url_credentials]@mq.example.test");
+    try expectExact(a, try g.cat(&.{ "amqp://brackwater:", pw, "@x", pw, "@mq.example.test" }), "amqp://brackwater:[REDACTED:url_credentials]@mq.example.test");
     try expectExact(a, try g.cat(&.{ "\"dsn\": \"postgresql://root:", pw, "@127.0.0.1/app\"" }), "\"dsn\": \"postgresql://root:[REDACTED:url_credentials]@127.0.0.1/app\"");
 
     const inputs = [_][]const u8{
-        "https://gateway.example.test/v1",
+        "https://mooring.example.test/v1",
         "http://localhost:8080/path?q=1#frag",
-        "git@git.example.test:acme/repo.git",
+        "git@git.example.test:brackwater/repo.git",
         "postgres://graf:<password>@db.example.test/graf",
         "postgres://graf:$DB_PASSWORD@db.example.test/graf",
-        "https://registry.example.test/@acme/pkg",
-        "ssh://git@git.example.test/acme/repo",
+        "https://registry.example.test/@brackwater/pkg",
+        "ssh://git@git.example.test/brackwater/repo",
         "postgres://graf:[REDACTED:url_credentials]@db.example.test/graf",
     };
     for (inputs) |input| try expectUnchanged(a, input);
@@ -359,7 +359,7 @@ test "high-entropy hex and base64 strings" {
     const url_safe = try g.chars(b64url, 43);
     try expectExact(a, try g.cat(&.{ "value ", url_safe, " end" }), "value [REDACTED:high_entropy] end");
     const segment = try g.chars(b62, 48);
-    try expectExact(a, try g.cat(&.{ "/var/cache/acme/", segment, "/data.bin" }), "/var/cache/acme/[REDACTED:high_entropy]/data.bin");
+    try expectExact(a, try g.cat(&.{ "/var/cache/brackwater/", segment, "/data.bin" }), "/var/cache/brackwater/[REDACTED:high_entropy]/data.bin");
 }
 
 test "random secrets of 56 or more characters never leak" {
@@ -385,7 +385,7 @@ const ordinary = [_][]const u8{
     "SCREAMING_SNAKE_CASE_CONSTANT_NAME",
     "550e8400-e29b-41d4-a716-446655440000",
     "F47AC10B-58CC-4372-A567-0E02B2C3D479",
-    "https://gateway.example.test/v1/chat/completions?model=acme-large&stream=true",
+    "https://mooring.example.test/v1/berths?pier=brackwater-north&stream=true",
     "See https://docs.example.test/guides/authentication#bearer-tokens for details.",
     "getUserAuthenticationTokenFromRequestContext(ctx)",
     "AbstractSingletonProxyFactoryBeanImplementation",
@@ -394,7 +394,7 @@ const ordinary = [_][]const u8{
     "x86_64-unknown-linux-gnu-toolchain-1.99.0",
     "node_modules/@types/node/globals.d.ts",
     "/Users/jane/Library/Application Support/Code/User/settings.json",
-    "C:\\Users\\jane\\AppData\\Local\\acme\\cache\\index.json",
+    "C:\\Users\\jane\\AppData\\Local\\brackwater\\cache\\index.json",
     "kubernetes-io-cluster-autoscaler-node-group-2",
     "testRedactLeavesOrdinaryProseUntouchedForAllInputs",
     "io_uring_prep_read_fixed_buffer_registration",
@@ -410,12 +410,12 @@ const ordinary = [_][]const u8{
     "ERROR: connection refused (os error 111) at 127.0.0.1:54329",
     "2026-11-24T10:15:30.123456Z INFO request_id=req_01HZX3 latency_ms=42",
     "| name | type | default |",
-    "import { useInfiniteQueryWithSuspense } from '@acme/react-query-extras';",
+    "import { useInfiniteQueryWithSuspense } from '@brackwater/react-query-extras';",
     "SELECT id, created_at FROM entries WHERE project_id = $1 ORDER BY created_at DESC;",
     "[REDACTED:api_key] and [REDACTED:high_entropy] are markers",
     "version = \"0.17.1\"",
-    "https://registry.example.test/@acme/pkg/-/pkg-1.2.3.tgz",
-    "git@git.example.test:acme/graf.git",
+    "https://registry.example.test/@brackwater/pkg/-/pkg-1.2.3.tgz",
+    "git@git.example.test:brackwater/graf.git",
     "The tokenizer splits text into tokens; the author documented the authority model.",
     "Set the password policy before you rotate credentials.",
     "Each turn is redacted before storage and before any model call.",
@@ -436,17 +436,17 @@ test "eval secret entry" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 9);
-    const gateway_key = try g.cat(&.{ "ak_", "live_", try g.chars(b62, 40) });
-    const turn1 = try g.cat(&.{ "Try hitting the gateway with ACME_GATEWAY_API_KEY=", gateway_key, " and verify https://gateway.example.test/v1 responds" });
-    try expectExact(a, turn1, "Try hitting the gateway with ACME_GATEWAY_API_KEY=[REDACTED:assignment] and verify https://gateway.example.test/v1 responds");
+    const mooring_key = try g.cat(&.{ "mr_", "live_", try g.chars(b62, 40) });
+    const turn1 = try g.cat(&.{ "Try hitting Mooring with MOORING_API_KEY=", mooring_key, " and verify the staging URL https://mooring.example.test/v1 responds" });
+    try expectExact(a, turn1, "Try hitting Mooring with MOORING_API_KEY=[REDACTED:assignment] and verify the staging URL https://mooring.example.test/v1 responds");
 
     const model_key = try g.cat(&.{ "sk-ant-", "api03-", try g.chars(b64url, 88), "AA" });
-    const turn2 = try g.cat(&.{ "Use this key for the fallback model: ", model_key, " and keep it out of the repo." });
-    try expectExact(a, turn2, "Use this key for the fallback model: [REDACTED:api_key] and keep it out of the repo.");
+    const turn2 = try g.cat(&.{ "Use this key for the fallback booking service: ", model_key, " and keep it out of the repo." });
+    try expectExact(a, turn2, "Use this key for the fallback booking service: [REDACTED:api_key] and keep it out of the repo.");
 
-    const tool_args = try g.cat(&.{ "{\"command\":\"curl -s -H \\\"x-api-key: ", model_key, "\\\" https://gateway.example.test/v1/models\"}" });
-    try expectRedacted(a, tool_args, &.{ model_key, model_key[20..60] }, .api_key, &.{ "https://gateway.example.test/v1/models", "x-api-key: " });
-    try expectRedacted(a, gateway_key, &.{gateway_key[8..]}, .high_entropy, &.{});
+    const tool_args = try g.cat(&.{ "{\"command\":\"curl -s -H \\\"x-api-key: ", model_key, "\\\" https://mooring.example.test/v1/berths\"}" });
+    try expectRedacted(a, tool_args, &.{ model_key, model_key[20..60] }, .api_key, &.{ "https://mooring.example.test/v1/berths", "x-api-key: " });
+    try expectRedacted(a, mooring_key, &.{mooring_key[8..]}, .high_entropy, &.{});
 }
 
 test "utf-8 sequences next to secrets stay intact" {

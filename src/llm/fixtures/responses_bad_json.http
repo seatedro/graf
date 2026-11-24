@@ -35,7 +35,7 @@ x-example-cost-usd: 0.00011160
           "type": "output_text",
           "annotations": [],
           "logprobs": [],
-          "text": "{\"entities\":[{\"name\":\"Dana\",\"type\":\"person\"},{\"name\":\"acme-indexer\",\"type\":\"project\""
+          "text": "{\"entities\":[{\"name\":\"Dana\",\"type\":\"person\"},{\"name\":\"brackwater-indexer\",\"type\":\"project\""
         }
       ],
       "role": "assistant"

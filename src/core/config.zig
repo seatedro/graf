@@ -280,7 +280,7 @@ test "file values, then env overrides, then inheritance" {
         \\[limits]
         \\daily_usd = 25
         \\[capture]
-        \\exclude_projects = ["github.com/acme/secret"]
+        \\exclude_projects = ["github.com/brackwater/secret"]
         \\
     ;
     var diag: toml.Diagnostic = .{};
@@ -302,7 +302,7 @@ test "file values, then env overrides, then inheritance" {
     try std.testing.expectEqualStrings("https://llm.example.test/v1", cfg.embed.base_url);
     try std.testing.expectEqualStrings("x-cost-usd", cfg.embed.cost_header);
     try std.testing.expectEqual(@as(f64, 25), cfg.limits.daily_usd);
-    try std.testing.expectEqualStrings("github.com/acme/secret", cfg.capture.exclude_projects[0]);
+    try std.testing.expectEqualStrings("github.com/brackwater/secret", cfg.capture.exclude_projects[0]);
 
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();

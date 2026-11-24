@@ -133,7 +133,7 @@ const Harness = struct {
         h.config.serve.listen = try std.fmt.allocPrint(h.arena(), "127.0.0.1:{d}", .{try closedPort()});
         h.out = .init(h.arena());
         try h.tmp.dir.createDirPath(testing.io, "repo/.git");
-        try h.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.git/config", .data = "[remote \"origin\"]\n\turl = git@git.example.test:acme/widgets.git\n" });
+        try h.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.git/config", .data = "[remote \"origin\"]\n\turl = git@git.example.test:brackwater/widgets.git\n" });
     }
 
     fn deinit(h: *Harness) void {
@@ -196,19 +196,19 @@ test "session-start over the unix socket prints the brief for claude-code with t
     h.config.serve.socket = try h.path("graf.sock");
     h.config.serve.token = "tok-example";
 
-    var stub: Stub = .{ .io = testing.io, .server = undefined, .body = "## Brief\nacme/widgets uses zig\n", .content_type = "text/markdown" };
+    var stub: Stub = .{ .io = testing.io, .server = undefined, .body = "## Brief\nbrackwater/widgets uses zig\n", .content_type = "text/markdown" };
     try stub.listenUnix(h.config.serve.socket);
     try stub.start();
     defer stub.stop();
 
     _ = try h.run(.@"claude-code", .@"session-start", try h.payload(",\"hook_event_name\":\"SessionStart\",\"source\":\"startup\""));
     const req = stub.request(0);
-    try expectContains(req, "GET /v1/brief?project=git.example.test%2Facme%2Fwidgets HTTP/1.1\r\n");
+    try expectContains(req, "GET /v1/brief?project=git.example.test%2Fbrackwater%2Fwidgets HTTP/1.1\r\n");
     try expectContains(req, "Authorization: Bearer tok-example\r\n");
 
     const parsed = try std.json.parseFromSliceLeaky(ParsedOutput, h.arena(), h.out.written(), .{});
     try testing.expectEqualStrings("SessionStart", parsed.hookSpecificOutput.hookEventName);
-    try testing.expectEqualStrings("## Brief\nacme/widgets uses zig", parsed.hookSpecificOutput.additionalContext);
+    try testing.expectEqualStrings("## Brief\nbrackwater/widgets uses zig", parsed.hookSpecificOutput.additionalContext);
 }
 
 test "session-start over tcp accepts a JSON body for codex and sends no token when unset" {
@@ -375,7 +375,7 @@ test "pi and fx are no-ops; paused, excluded, error bodies and bad stdin print n
     _ = try h.run(.@"claude-code", .stop, try h.payload(""));
     try state.setPaused(testing.io, state_dir, false);
 
-    h.config.capture.exclude_projects = &.{"git.example.test/acme/*"};
+    h.config.capture.exclude_projects = &.{"git.example.test/brackwater/*"};
     _ = try h.run(.@"claude-code", .@"session-start", try h.payload(""));
     h.config.capture.exclude_projects = &.{};
     try h.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.grafignore", .data = "" });

@@ -1,4 +1,4 @@
-{"type":"session","version":3,"id":"7f8e9d0c-1b2a-4c3d-8e9f-0a1b2c3d4e5f","timestamp":"2026-11-22T10:00:00.000Z","cwd":"/home/dev/acme/notes"}
+{"type":"session","version":3,"id":"7f8e9d0c-1b2a-4c3d-8e9f-0a1b2c3d4e5f","timestamp":"2026-11-22T10:00:00.000Z","cwd":"/home/dev/brackwater/notes"}
 {"type":"model_change","id":"a0000001","parentId":null,"timestamp":"2026-11-22T10:00:00.500Z","provider":"example","modelId":"example-model"}
 {"type":"message","id":"a0000002","parentId":"a0000001","timestamp":"2026-11-22T10:00:01.000Z","message":{"role":"system","content":"","sections":{"preamble":"You are an expert coding assistant."},"toolsAdded":[{"name":"read","description":"Read a file","parameters":{}}],"timestamp":1795341601000}}
 {"type":"message","id":"a0000003","parentId":"a0000002","timestamp":"2026-11-22T10:00:02.000Z","message":{"role":"user","content":"Rename the notes CLI to jot.","timestamp":1795341602000}}

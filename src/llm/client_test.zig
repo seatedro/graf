@@ -97,7 +97,7 @@ fn request(failure: ?*llm.Failure) llm.StructuredRequest {
     return .{
         .purpose = .extract,
         .system = "Extract the named entities from the note. Reply with JSON only.",
-        .user = "Note: Dana moved the acme-indexer project from the zork-db library to the pgvector extension.",
+        .user = "Note: Dana moved the brackwater-indexer project from the zork-db library to the pgvector extension.",
         .schema_name = "entities",
         .schema_json = schema,
         .failure = failure,
@@ -116,7 +116,7 @@ test "openai-responses: strict json_schema request, typed decode, header cost, o
     defer h.deinit();
     const out = try h.client.structuredAs(Entities, h.a(), request(null));
     try testing.expectEqual(@as(usize, 4), out.value.entities.len);
-    try testing.expectEqualStrings("acme-indexer", out.value.entities[1].name);
+    try testing.expectEqualStrings("brackwater-indexer", out.value.entities[1].name);
     try testing.expectEqual(core.types.CostStatus.priced, out.response.cost.status);
     try testing.expectEqual(@as(f64, 0.0001116), out.response.cost.usd);
     try testing.expectEqual(@as(u32, 103), out.response.usage.input_tokens);
@@ -364,7 +364,7 @@ test "embeddings: dimensions in the request, rows placed by index or by position
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{ fixture("embeddings_ok"), fixture("embeddings_no_index") });
     defer h.deinit();
-    const inputs = [_][]const u8{ "acme-indexer uses pgvector", "Dana owns acme-indexer" };
+    const inputs = [_][]const u8{ "brackwater-indexer uses pgvector", "Dana owns brackwater-indexer" };
     const a = try h.client.embed(h.a(), .{ .purpose = .embed_batch, .inputs = &inputs });
     try testing.expectEqual(@as(usize, 2), a.vectors.len);
     try testing.expectEqual(@as(usize, 512), a.vectors[1].len);
@@ -459,7 +459,7 @@ fn step(name: []const u8) Replay.Step {
     unreachable;
 }
 
-const embed_inputs = [_][]const u8{ "acme-indexer uses pgvector", "Dana owns acme-indexer" };
+const embed_inputs = [_][]const u8{ "brackwater-indexer uses pgvector", "Dana owns brackwater-indexer" };
 
 fn callRoute(h: *Harness, c: Case, failure: *llm.Failure) !void {
     if (c.route == null) {

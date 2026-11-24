@@ -230,10 +230,10 @@ test "default project fills requests that omit one" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var rec: Recorder = .{};
-    var d: service.DefaultProject = .{ .inner = rec.handler(), .project = "github.com/acme/app" };
+    var d: service.DefaultProject = .{ .inner = rec.handler(), .project = "github.com/brackwater/app" };
     const h = d.handler();
     _ = try h.handle(arena, .{ .op = .search, .body = "{\"query\":\"q\"}" });
-    try testing.expectEqualStrings("{\"query\":\"q\",\"project\":\"github.com/acme/app\"}", rec.body);
+    try testing.expectEqualStrings("{\"query\":\"q\",\"project\":\"github.com/brackwater/app\"}", rec.body);
     _ = try h.handle(arena, .{ .op = .search, .body = "{\"query\":\"q\",\"project\":\"*\"}" });
     try testing.expectEqualStrings("{\"query\":\"q\",\"project\":\"*\"}", rec.body);
     _ = try h.handle(arena, .{ .op = .remember, .body = "{\"text\":\"t\",\"scope\":\"global\"}" });
