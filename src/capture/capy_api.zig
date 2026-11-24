@@ -156,6 +156,13 @@ pub fn streamTarget(arena: Allocator, thread_id: []const u8) Allocator.Error![]c
     return out.written();
 }
 
+fn settle(req: *const http.Client.Request, err: anytype) (@TypeOf(err) || Io.Cancelable) {
+    const c = req.connection orelse return err;
+    if (c.stream_reader.err) |e| if (e == error.Canceled) return error.Canceled;
+    if (c.stream_writer.err) |e| if (e == error.Canceled) return error.Canceled;
+    return err;
+}
+
 pub const Client = struct {
     gpa: Allocator,
     io: Io,
@@ -197,6 +204,10 @@ pub const Client = struct {
         });
         defer req.deinit();
 
+        return receiveJson(T, &req, arena, diag) catch |err| return settle(&req, err);
+    }
+
+    fn receiveJson(comptime T: type, req: *http.Client.Request, arena: Allocator, diag: *Diag) !T {
         try req.sendBodiless();
         var response = try req.receiveHead(&.{});
         diag.status = @backingInt(response.head.status);
@@ -252,6 +263,11 @@ pub const Stream = struct {
         });
         errdefer s.req.deinit();
 
+        s.receiveHead(arena, diag) catch |err| return settle(&s.req, err);
+        s.line = .init(c.gpa);
+    }
+
+    fn receiveHead(s: *Stream, arena: Allocator, diag: *Diag) !void {
         try s.req.sendBodiless();
         s.response = try s.req.receiveHead(&.{});
         diag.status = @backingInt(s.response.head.status);
@@ -269,8 +285,6 @@ pub const Stream = struct {
             diag.retry_after_s = retryAfter(arena, header_retry, body);
             return err;
         };
-
-        s.line = .init(c.gpa);
     }
 
     pub fn close(s: *Stream) void {

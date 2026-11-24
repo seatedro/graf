@@ -98,7 +98,7 @@ pub const Capture = struct {
     pub fn step(c: *Capture, now: core.Micros) !void {
         try c.mutex.lock(c.io);
         defer c.mutex.unlock(c.io);
-        const paused = if (c.state_dir) |sd| state.isPaused(c.io, sd) else false;
+        const paused = if (c.state_dir) |sd| try state.isPaused(c.io, sd) else false;
         for (c.tailers) |*t| t.paused = paused;
 
         var scratch: std.heap.ArenaAllocator = .init(c.gpa);

@@ -244,7 +244,7 @@ pub const Source = struct {
     }
 
     pub fn runOnce(s: *Source, now: core.Micros) !void {
-        s.refreshPaused();
+        try s.refreshPaused();
         try s.discover();
 
         for (s.threads.values()) |t| {
@@ -263,7 +263,7 @@ pub const Source = struct {
     }
 
     fn step(s: *Source, now: core.Micros) !void {
-        s.refreshPaused();
+        try s.refreshPaused();
         if (s.isBlocked(now)) return s.tickAll(now);
 
         const every = @as(core.Micros, s.config.sources.capy.discover_every_s) * std.time.us_per_s;
@@ -335,8 +335,8 @@ pub const Source = struct {
         return now < s.blocked_until;
     }
 
-    fn refreshPaused(s: *Source) void {
-        const paused = if (s.state_dir) |sd| state.isPaused(s.io, sd) else false;
+    fn refreshPaused(s: *Source) Io.Cancelable!void {
+        const paused = if (s.state_dir) |sd| try state.isPaused(s.io, sd) else false;
         s.mutex.lockUncancelable(s.io);
         defer s.mutex.unlock(s.io);
         s.paused = paused;
