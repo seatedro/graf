@@ -4,6 +4,7 @@ pub const types = @import("types.zig");
 pub const ontology = @import("ontology.zig");
 pub const config = @import("config.zig");
 pub const toml = @import("toml.zig");
+pub const text = @import("text.zig");
 
 pub const Id = types.Id;
 pub const Micros = types.Micros;

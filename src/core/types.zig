@@ -242,6 +242,7 @@ pub const ChangeSet = struct {
     retractions: []const Retraction = &.{},
     provenance: []const Provenance = &.{},
     mentions: []const Id = &.{},
+    new_aliases: []const Alias = &.{},
     new_predicates: []const Predicate = &.{},
     warnings: []const []const u8 = &.{},
 
@@ -256,6 +257,8 @@ pub const ChangeSet = struct {
     };
 
     pub const Merge = struct { from: Id, into: Id, reason: []const u8 };
+
+    pub const Alias = struct { entity_id: Id, alias: []const u8, norm: []const u8 };
 
     pub const NewFact = struct {
         fact: Fact,

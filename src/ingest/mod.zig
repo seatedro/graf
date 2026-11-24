@@ -42,7 +42,11 @@ pub const ProposedPredicate = struct {
     object_kind: core.types.ObjectKind,
 };
 
-pub const ConflictKind = enum { changed, was_wrong };
+pub const rules = @import("rules.zig");
+pub const time = @import("time.zig");
+pub const extract = @import("extract.zig");
+
+pub const ConflictKind = rules.ConflictKind;
 
 pub const ResolveResult = struct {
     entity_links: []const EntityLink,
@@ -66,14 +70,7 @@ pub const Contradiction = struct {
     at: ?[]const u8,
 };
 
-pub fn resolveConflict(old: *core.Fact, new: *core.Fact, kind: ConflictKind, commit_time: core.Micros, new_reference_time: core.Micros) !void {
-    _ = old;
-    _ = new;
-    _ = kind;
-    _ = commit_time;
-    _ = new_reference_time;
-    return core.NotImplemented;
-}
+pub const resolveConflict = rules.resolveConflict;
 
 pub const Outcome = enum { committed, skipped, requeued, split, dead, fenced };
 
