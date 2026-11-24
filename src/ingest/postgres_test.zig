@@ -6,7 +6,6 @@ const postgres = @import("postgres.zig");
 const jobs = @import("jobs.zig");
 const workers = @import("workers.zig");
 const rebase = @import("rebase.zig");
-const pipeline = @import("pipeline.zig");
 
 const testing = std.testing;
 const Id = core.Id;
@@ -65,9 +64,9 @@ test "ingest SQL runs against the store schema" {
     const graph, const source, const done, const live, const cache, const sqlite, const fact = ids(io, 7);
     var bufs: [7][36]u8 = undefined;
     const t = [_][]const u8{
-        postgres.idText(graph, &bufs[0]), postgres.idText(source, &bufs[1]), postgres.idText(done, &bufs[2]),
-        postgres.idText(live, &bufs[3]),  postgres.idText(cache, &bufs[4]),  postgres.idText(sqlite, &bufs[5]),
-        postgres.idText(fact, &bufs[6]),
+        graph.toString(&bufs[0]), source.toString(&bufs[1]), done.toString(&bufs[2]),
+        live.toString(&bufs[3]),  cache.toString(&bufs[4]),  sqlite.toString(&bufs[5]),
+        fact.toString(&bufs[6]),
     };
     const conn = try s.pool.acquire();
     defer conn.release();
@@ -81,7 +80,7 @@ test "ingest SQL runs against the store schema" {
 
     const emb = try arena.alloc(f32, 512);
     @memset(emb, 0.1);
-    try b.saveRelationEmbeddings(lease, &.{ "cached_by", "chose" }, &.{ emb, emb });
+    try b.saveRelationEmbeddings(&.{ "cached_by", "chose" }, &.{ emb, emb });
 
     const ctx = try b.loadContext(arena, lease);
     try testing.expectEqual(@as(usize, 1), ctx.prior.len);
@@ -96,8 +95,7 @@ test "ingest SQL runs against the store schema" {
     try testing.expectEqual(@as(usize, 512), chose_emb);
     try testing.expect(ctx.relations.len >= core.ontology.core_relations.len + 1);
 
-    const pre = try b.prefetch(arena, lease, .{
-        .graph_id = graph,
+    const pre = try b.prefetch(arena, .{
         .entity_norms = &.{ &.{"brackwater cache service"}, &.{"postgres"} },
         .entity_embs = &.{ emb, emb },
         .fact_subject = &.{0},

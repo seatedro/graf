@@ -32,7 +32,6 @@ pub const Context = struct {
 };
 
 pub const PrefetchRequest = struct {
-    graph_id: Id,
     entity_norms: []const []const []const u8,
     entity_embs: []const []const f32,
     fact_subject: []const u32,
@@ -49,11 +48,6 @@ pub const Transition = union(enum) {
     dead: []const u8,
     split: [2]core.EntryBody,
 };
-
-pub fn now(io: std.Io) Micros {
-    const ns = std.Io.Timestamp.now(io, .real).nanoseconds;
-    return @intCast(@divFloor(ns, std.time.ns_per_us));
-}
 
 pub fn Driver(comptime Backend: type, comptime Model: type) type {
     return struct {
@@ -119,10 +113,10 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                     relations[k].emb = v;
                     try names.append(arena, relations[k].name);
                 }
-                try d.backend.saveRelationEmbeddings(lease, names.items, missing_vecs);
+                try d.backend.saveRelationEmbeddings(names.items, missing_vecs);
             }
 
-            var prefetched = try d.backend.prefetch(arena, lease, try d.prefetchRequest(arena, checked, ent_vecs, fact_vecs));
+            var prefetched = try d.backend.prefetch(arena, try prefetchRequest(arena, checked, ent_vecs, fact_vecs));
             prefetched.relations = relations;
 
             const p = try resolve.plan(arena, checked, prefetched);
@@ -136,8 +130,8 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             }
 
             var cs = try resolve.build(arena, .{
-                .entry = .{ .id = entry.id, .graph_id = d.graph_id, .reference_time = entry.reference_time, .project = entry.project },
-                .commit_time = now(d.io),
+                .entry = .{ .graph_id = d.graph_id, .reference_time = entry.reference_time, .project = entry.project },
+                .commit_time = core.time.now(d.io),
                 .io = d.io,
             }, checked, prefetched, p, .{ .entities = ent_vecs, .facts = fact_vecs, .relations = novel_vecs }, verdict);
             if (extra_warnings.items.len > 0) {
@@ -151,7 +145,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             return switch (try d.backend.commit(arena, lease, &cs)) {
                 .fenced => .fenced,
                 .committed => blk: {
-                    try d.backend.afterCommit(arena, lease, &cs);
+                    try d.backend.afterCommit(arena, &cs);
                     break :blk .committed;
                 },
             };
@@ -161,36 +155,28 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
 
         fn extractCall(d: *Self, arena: Allocator, lease: store.Lease, ctx: Context, body_text: []const u8) !ExtractOutcome {
             const entry = lease.entry;
-            const system = try prompt.extractionSystem(arena, ctx.relations);
-            const user = try prompt.extractionUser(arena, .{
-                .reference_time = entry.reference_time,
-                .project = entry.project,
-                .kind = entry.kind,
-                .author = entry.author,
-                .body = entry.body,
-            }, ctx.prior);
-            const resp = d.model.structured(arena, .{
+            const req: llm.StructuredRequest = .{
                 .purpose = .extract,
                 .entry_id = entry.id,
-                .system = system,
-                .user = user,
+                .system = try prompt.extractionSystem(arena, ctx.relations),
+                .user = try prompt.extractionUser(arena, .{
+                    .reference_time = entry.reference_time,
+                    .project = entry.project,
+                    .kind = entry.kind,
+                    .author = entry.author,
+                    .body = entry.body,
+                }, ctx.prior),
                 .schema_name = "extract_result",
                 .schema_json = schema.extract_result,
-            }) catch |err| return .{ .outcome = try d.providerFailure(arena, lease, err, .extraction) };
+            };
+            const resp = d.model.structured(arena, req) catch |err| return .{ .outcome = try d.providerFailure(arena, lease, err, .extraction) };
 
             const first = try decodeChecked(arena, resp.json, body_text, entry.reference_time);
             if (first.checked) |c| if (!c.needs_repair) return .{ .checked = c };
 
             if (!resp.repaired) {
                 const problem = first.problem orelse "more than half of the facts failed validation";
-                const repaired = d.model.repair(arena, .{
-                    .purpose = .extract,
-                    .entry_id = entry.id,
-                    .system = system,
-                    .user = user,
-                    .schema_name = "extract_result",
-                    .schema_json = schema.extract_result,
-                }, resp.json, problem) catch |err| return .{ .outcome = try d.providerFailure(arena, lease, err, .extraction) };
+                const repaired = d.model.repair(arena, req, resp.json, problem) catch |err| return .{ .outcome = try d.providerFailure(arena, lease, err, .extraction) };
                 const second = try decodeChecked(arena, repaired.json, body_text, entry.reference_time);
                 if (second.checked) |c| if (!c.needs_repair) return .{ .checked = c };
             }
@@ -237,15 +223,15 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 }) };
             }
 
-            const user = try prompt.resolutionUser(arena, p, checked, prefetched, lease.entry.reference_time);
-            const resp = d.model.structured(arena, .{
+            const req: llm.StructuredRequest = .{
                 .purpose = .resolve,
                 .entry_id = lease.entry.id,
                 .system = prompt.resolution_system,
-                .user = user,
+                .user = try prompt.resolutionUser(arena, p, checked, prefetched, lease.entry.reference_time),
                 .schema_name = "resolve_result",
                 .schema_json = schema.resolve_result,
-            }) catch |err| {
+            };
+            const resp = d.model.structured(arena, req) catch |err| {
                 if (try d.resolutionFallback(arena, lease, err)) |o| return .{ .outcome = o };
                 try warnings.append(arena, "resolution call failed; resolved deterministically");
                 return .{ .verdict = try resolve.Verdict.none(arena, p) };
@@ -256,14 +242,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 try warnings.append(arena, "resolution output invalid after one repair; resolved deterministically");
                 return .{ .verdict = try resolve.Verdict.none(arena, p) };
             }
-            const repaired = d.model.repair(arena, .{
-                .purpose = .resolve,
-                .entry_id = lease.entry.id,
-                .system = prompt.resolution_system,
-                .user = user,
-                .schema_name = "resolve_result",
-                .schema_json = schema.resolve_result,
-            }, resp.json, "the output did not match the resolution schema or named unknown labels") catch |err| {
+            const repaired = d.model.repair(arena, req, resp.json, "the output did not match the resolution schema or named unknown labels") catch |err| {
                 if (try d.resolutionFallback(arena, lease, err)) |o| return .{ .outcome = o };
                 try warnings.append(arena, "resolution repair failed; resolved deterministically");
                 return .{ .verdict = try resolve.Verdict.none(arena, p) };
@@ -336,50 +315,44 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 },
             }
         }
-
-        fn prefetchRequest(d: *Self, arena: Allocator, checked: extract.Checked, ent_vecs: []const []const f32, fact_vecs: []const []const f32) !PrefetchRequest {
-            const ents = checked.result.entities;
-            const norms = try arena.alloc([]const []const u8, ents.len);
-            for (ents, 0..) |e, i| {
-                var list: std.ArrayList([]const u8) = .empty;
-                try list.append(arena, try core.text.norm(arena, e.name));
-                for (e.aliases) |a| {
-                    const n = try core.text.norm(arena, a);
-                    if (n.len > 0) try list.append(arena, n);
-                }
-                norms[i] = list.items;
-            }
-            const facts = checked.result.facts;
-            const subj = try arena.alloc(u32, facts.len);
-            const obj = try arena.alloc(?u32, facts.len);
-            const rels = try arena.alloc([]const u8, facts.len);
-            const opp = try arena.alloc(?[]const u8, facts.len);
-            const texts = try arena.alloc([]const u8, facts.len);
-            for (facts, 0..) |f, j| {
-                subj[j] = @intCast(refIndex(checked, f.subject));
-                obj[j] = if (f.object) |o| @intCast(refIndex(checked, o)) else null;
-                rels[j] = f.relation;
-                opp[j] = if (core.ontology.find(f.relation)) |cp| cp.opposes else null;
-                texts[j] = f.text;
-            }
-            return .{
-                .graph_id = d.graph_id,
-                .entity_norms = norms,
-                .entity_embs = ent_vecs,
-                .fact_subject = subj,
-                .fact_object = obj,
-                .fact_relations = rels,
-                .fact_opposed = opp,
-                .fact_embs = fact_vecs,
-                .fact_texts = texts,
-            };
-        }
     };
 }
 
-fn refIndex(checked: extract.Checked, ref: []const u8) usize {
-    for (checked.result.entities, 0..) |e, i| if (std.mem.eql(u8, e.ref, ref)) return i;
-    unreachable;
+fn prefetchRequest(arena: Allocator, checked: extract.Checked, ent_vecs: []const []const f32, fact_vecs: []const []const f32) !PrefetchRequest {
+    const ents = checked.result.entities;
+    const norms = try arena.alloc([]const []const u8, ents.len);
+    for (ents, 0..) |e, i| {
+        var list: std.ArrayList([]const u8) = .empty;
+        try list.append(arena, try core.text.norm(arena, e.name));
+        for (e.aliases) |a| {
+            const n = try core.text.norm(arena, a);
+            if (n.len > 0) try list.append(arena, n);
+        }
+        norms[i] = list.items;
+    }
+    const facts = checked.result.facts;
+    const subj = try arena.alloc(u32, facts.len);
+    const obj = try arena.alloc(?u32, facts.len);
+    const rels = try arena.alloc([]const u8, facts.len);
+    const opp = try arena.alloc(?[]const u8, facts.len);
+    const texts = try arena.alloc([]const u8, facts.len);
+    for (facts, 0..) |f, j| {
+        subj[j] = @intCast(resolve.entityIndex(checked, f.subject));
+        obj[j] = if (f.object) |o| @intCast(resolve.entityIndex(checked, o)) else null;
+        rels[j] = f.relation;
+        opp[j] = if (core.ontology.find(f.relation)) |rel| rel.opposes else null;
+        texts[j] = f.text;
+    }
+    return .{
+        .entity_norms = norms,
+        .entity_embs = ent_vecs,
+        .fact_subject = subj,
+        .fact_object = obj,
+        .fact_relations = rels,
+        .fact_opposed = opp,
+        .fact_embs = fact_vecs,
+        .fact_texts = texts,
+    };
 }
 
 pub fn splitBody(arena: Allocator, body: core.EntryBody) Allocator.Error!?[2]core.EntryBody {

@@ -57,10 +57,6 @@ pub const ClientModel = struct {
     }
 };
 
-pub fn idText(id: Id, buf: *[36]u8) []const u8 {
-    return id.toString(buf);
-}
-
 pub fn jsonRow(comptime T: type, arena: Allocator, conn: *pg.Conn, sql: []const u8, args: anytype) !T {
     var row = (try conn.row(sql, args)) orelse return error.NoRows;
     defer row.deinit() catch {};
@@ -84,13 +80,13 @@ pub const context_sql =
     \\      WHERE me.source_id IS NOT NULL AND e.source_id = me.source_id AND e.status = 'committed' AND e.id <> $1::uuid
     \\      ORDER BY e.seq_in_source DESC, e.reference_time DESC LIMIT 3) p), '[]'::json),
     \\  'relations', COALESCE((SELECT json_agg(json_build_object(
-    \\      'name', p.name, 'cardinality', p.cardinality, 'opposes', p.opposes, 'status', p.status,
-    \\      'mapped_to', p.mapped_to, 'description', p.description,
-    \\      'emb', COALESCE(pe.emb::text::json, '[]'::json)) ORDER BY p.name)
-    \\    FROM relation p LEFT JOIN relation_embedding pe ON pe.graph_id = p.graph_id AND pe.name = p.name
-    \\    WHERE p.graph_id = $2::uuid), '[]'::json),
-    \\  'core_embeddings', COALESCE((SELECT json_agg(json_build_object('name', pe.name, 'emb', pe.emb::text::json))
-    \\    FROM relation_embedding pe WHERE pe.graph_id = $2::uuid), '[]'::json)
+    \\      'name', r.name, 'cardinality', r.cardinality, 'opposes', r.opposes, 'status', r.status,
+    \\      'mapped_to', r.mapped_to, 'description', r.description,
+    \\      'emb', COALESCE(re.emb::text::json, '[]'::json)) ORDER BY r.name)
+    \\    FROM relation r LEFT JOIN relation_embedding re ON re.graph_id = r.graph_id AND re.name = r.name
+    \\    WHERE r.graph_id = $2::uuid), '[]'::json),
+    \\  'core_embeddings', COALESCE((SELECT json_agg(json_build_object('name', re.name, 'emb', re.emb::text::json))
+    \\    FROM relation_embedding re WHERE re.graph_id = $2::uuid), '[]'::json)
     \\)::text
 ;
 
@@ -210,20 +206,20 @@ pub const PgBackend = struct {
         defer conn.release();
         var ebuf: [36]u8 = undefined;
         var gbuf: [36]u8 = undefined;
-        const row = jsonRow(ContextRow, arena, conn, context_sql, .{ idText(lease.entry_id, &ebuf), idText(b.graph_id, &gbuf) }) catch |err| return logPgError(conn, err);
+        const row = jsonRow(ContextRow, arena, conn, context_sql, .{ lease.entry_id.toString(&ebuf), b.graph_id.toString(&gbuf) }) catch |err| return logPgError(conn, err);
         var rels: std.ArrayList(resolve.RelationRow) = .empty;
         try rels.appendSlice(arena, row.relations);
-        for (core.ontology.core_relations) |cp| {
+        for (core.ontology.core_relations) |core_rel| {
             var present = false;
-            for (row.relations) |p| if (std.mem.eql(u8, p.name, cp.name)) {
+            for (row.relations) |rel| if (std.mem.eql(u8, rel.name, core_rel.name)) {
                 present = true;
             };
             if (present) continue;
             var emb: []const f32 = &.{};
-            for (row.core_embeddings) |ce| if (std.mem.eql(u8, ce.name, cp.name)) {
+            for (row.core_embeddings) |ce| if (std.mem.eql(u8, ce.name, core_rel.name)) {
                 emb = ce.emb;
             };
-            try rels.append(arena, .{ .name = cp.name, .cardinality = cp.cardinality, .opposes = cp.opposes, .status = .core, .description = cp.description, .emb = emb });
+            try rels.append(arena, .{ .name = core_rel.name, .cardinality = core_rel.cardinality, .opposes = core_rel.opposes, .status = .core, .description = core_rel.description, .emb = emb });
         }
         return .{ .prior = row.prior, .relations = rels.items };
     }
@@ -232,8 +228,7 @@ pub const PgBackend = struct {
         return b.store.saveExtraction(lease, json);
     }
 
-    pub fn saveRelationEmbeddings(b: *PgBackend, lease: store.Lease, names: []const []const u8, embs: []const []const f32) !void {
-        _ = lease;
+    pub fn saveRelationEmbeddings(b: *PgBackend, names: []const []const u8, embs: []const []const f32) !void {
         var arena_state = std.heap.ArenaAllocator.init(b.store.allocator);
         defer arena_state.deinit();
         const payload = try std.json.Stringify.valueAlloc(arena_state.allocator(), .{ .names = names, .embs = embs }, .{});
@@ -245,11 +240,10 @@ pub const PgBackend = struct {
             \\SELECT $1::uuid, n.value #>> '{}', (($2::jsonb)->'embs'->((n.ord - 1)::int))::text::halfvec(512)
             \\FROM jsonb_array_elements(($2::jsonb)->'names') WITH ORDINALITY n(value, ord)
             \\ON CONFLICT (graph_id, name) DO UPDATE SET emb = EXCLUDED.emb
-        , .{ idText(b.graph_id, &gbuf), payload }) catch |err| return logPgError(conn, err);
+        , .{ b.graph_id.toString(&gbuf), payload }) catch |err| return logPgError(conn, err);
     }
 
-    pub fn prefetch(b: *PgBackend, arena: Allocator, lease: store.Lease, req: pipeline.PrefetchRequest) !resolve.Prefetch {
-        _ = lease;
+    pub fn prefetch(b: *PgBackend, arena: Allocator, req: pipeline.PrefetchRequest) !resolve.Prefetch {
         const payload = try prefetchPayload(arena, req);
         const conn = try b.store.pool.acquire();
         defer conn.release();
@@ -257,7 +251,7 @@ pub const PgBackend = struct {
         try conn.begin();
         errdefer conn.rollback() catch {};
         _ = conn.exec("SET LOCAL hnsw.iterative_scan = relaxed_order", .{}) catch |err| return logPgError(conn, err);
-        const out = jsonRow(resolve.Prefetch, arena, conn, prefetch_sql, .{ payload, idText(b.graph_id, &gbuf) }) catch |err| return logPgError(conn, err);
+        const out = jsonRow(resolve.Prefetch, arena, conn, prefetch_sql, .{ payload, b.graph_id.toString(&gbuf) }) catch |err| return logPgError(conn, err);
         try conn.commit();
         return out;
     }
@@ -276,8 +270,8 @@ pub const PgBackend = struct {
         fn run(ptr: *anyopaque, conn: *pg.Conn, cs: *core.ChangeSet, base_seq: i64, latest_seq: i64) anyerror!void {
             const ctx: *RebaseCtx = @ptrCast(@alignCast(ptr));
             var gbuf: [36]u8 = undefined;
-            const touched = jsonRow(rebase.Touched, ctx.arena, conn, touched_sql, .{ idText(ctx.graph_id, &gbuf), base_seq, latest_seq }) catch |err| return logPgError(conn, err);
-            const out = try rebase.apply(ctx.arena, cs, touched, pipeline.now(ctx.io), ctx.reference_time);
+            const touched = jsonRow(rebase.Touched, ctx.arena, conn, touched_sql, .{ ctx.graph_id.toString(&gbuf), base_seq, latest_seq }) catch |err| return logPgError(conn, err);
+            const out = try rebase.apply(ctx.arena, cs, touched, core.time.now(ctx.io), ctx.reference_time);
             ctx.duplicates = out.possible_duplicates;
         }
     };
@@ -301,11 +295,10 @@ pub const PgBackend = struct {
             \\SELECT (d->>'id')::uuid, $1::uuid, (d->>'a')::uuid, (d->>'b')::uuid, (d->>'score')::real
             \\FROM jsonb_array_elements($2::jsonb) d
             \\WHERE EXISTS (SELECT 1 FROM entity WHERE id = (d->>'a')::uuid) AND EXISTS (SELECT 1 FROM entity WHERE id = (d->>'b')::uuid)
-        , .{ idText(b.graph_id, &gbuf), payload }) catch |err| return logPgError(conn, err);
+        , .{ b.graph_id.toString(&gbuf), payload }) catch |err| return logPgError(conn, err);
     }
 
-    pub fn afterCommit(b: *PgBackend, arena: Allocator, lease: store.Lease, cs: *const core.ChangeSet) !void {
-        _ = lease;
+    pub fn afterCommit(b: *PgBackend, arena: Allocator, cs: *const core.ChangeSet) !void {
         var entities: std.ArrayList(Id) = .empty;
         for (cs.new_facts) |nf| {
             try entities.append(arena, nf.fact.subject_id);
@@ -348,7 +341,7 @@ const release = ", lease_owner = NULL, lease_token = NULL, lease_until = NULL";
 
 pub fn finishOn(arena: Allocator, conn: *pg.Conn, io: std.Io, lease: store.Lease, t: pipeline.Transition) !void {
     var ebuf: [36]u8 = undefined;
-    const eid = idText(lease.entry_id, &ebuf);
+    const eid = lease.entry_id.toString(&ebuf);
     const affected: ?i64 = switch (t) {
         .skipped => |why| conn.exec("UPDATE entry SET status = 'skipped', warnings = warnings || jsonb_build_array($3::text)" ++ release ++ fence, .{ eid, lease.token, why }),
         .dead => |why| conn.exec("UPDATE entry SET status = 'dead', last_error = jsonb_build_object('reason', $3::text)" ++ release ++ fence, .{ eid, lease.token, why }),
@@ -373,7 +366,7 @@ pub fn finishOn(arena: Allocator, conn: *pg.Conn, io: std.Io, lease: store.Lease
                     \\SELECT $2::uuid, graph_id, source_id, seq_in_source, kind, project, author, $3::jsonb, sha256(convert_to($3::text, 'UTF8')), reference_time
                     \\FROM entry WHERE id = $1::uuid
                     \\ON CONFLICT (graph_id, content_hash) DO NOTHING
-                , .{ eid, idText(Id.v7(io), &cbuf), body }) catch |err| return logPgError(conn, err);
+                , .{ eid, Id.v7(io).toString(&cbuf), body }) catch |err| return logPgError(conn, err);
             }
             try conn.commit();
             break :blk n;

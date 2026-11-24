@@ -71,19 +71,15 @@ pub fn tokenJaccard(a_norm: []const u8, b_norm: []const u8) f32 {
 }
 
 fn isSoftware(t: EntityType) bool {
-    return switch (t) {
-        .software, .code => true,
-        else => false,
-    };
+    return t == .software or t == .code;
+}
+
+fn isGroup(t: EntityType) bool {
+    return t == .organization or t == .project;
 }
 
 pub fn hardBlocked(a: EntityType, b: EntityType) bool {
-    const groupish = struct {
-        fn f(t: EntityType) bool {
-            return t == .organization or t == .project;
-        }
-    }.f;
-    return (a == .person and groupish(b)) or (b == .person and groupish(a));
+    return (a == .person and isGroup(b)) or (b == .person and isGroup(a));
 }
 
 pub fn compatible(a: EntityType, b: EntityType) bool {
@@ -144,8 +140,8 @@ pub const ConflictReason = enum { one_per_subject, one_per_subject_qualifier, on
 
 pub fn conflict(new: Key, rule: RelationRule, old: Key) ?ConflictReason {
     if (!rangesOverlap(new.valid, old.valid)) return null;
-    const same_pred = std.mem.eql(u8, new.relation, old.relation);
-    if (same_pred) switch (rule.cardinality) {
+    const same_relation = std.mem.eql(u8, new.relation, old.relation);
+    if (same_relation) switch (rule.cardinality) {
         .many => {},
         .one_per_subject => if (new.subject.eql(old.subject) and !new.object.eql(old.object)) return .one_per_subject,
         .one_per_subject_qualifier => if (new.subject.eql(old.subject) and

@@ -56,8 +56,7 @@ const examples =
 
 pub fn extractionSystem(arena: Allocator, learned: []const resolve.RelationRow) Allocator.Error![]const u8 {
     var out: Writer.Allocating = .init(arena);
-    const w = &out.writer;
-    writeExtractionSystem(w, learned) catch return error.OutOfMemory;
+    writeExtractionSystem(&out.writer, learned) catch return error.OutOfMemory;
     return out.written();
 }
 
@@ -169,10 +168,8 @@ fn writeResolutionUser(w: *Writer, p: resolve.Plan, checked: extract.Checked, pr
     if (p.entity_labels.len > 0) {
         try w.writeAll("\nExisting entities:\n");
         for (p.entity_labels, 0..) |id, i| {
-            for (prefetch.entities) |c| if (c.id.eql(id)) {
-                try w.print("E{d}: {s} ({t})\n", .{ i + 1, c.name, c.type });
-                break;
-            };
+            const c = resolve.findEntity(prefetch, id) orelse continue;
+            try w.print("E{d}: {s} ({t})\n", .{ i + 1, c.name, c.type });
         }
         try w.writeAll("\nNew entities with candidates:\n");
         for (p.entities, checked.result.entities) |entry, e| {
@@ -238,7 +235,7 @@ test "the extraction message carries reference time, context and turns" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const msg = try extractionUser(arena, .{
-        .reference_time = try time.parse("2026-11-20T18:00:00Z"),
+        .reference_time = try core.time.parseRfc3339("2026-11-20T18:00:00Z"),
         .project = "lantern",
         .kind = .turns,
         .author = .user,
@@ -246,7 +243,7 @@ test "the extraction message carries reference time, context and turns" {
             .{ .role = .user, .text = "switch it to Postgres" },
             .{ .role = .assistant, .text = "done", .tool_calls = &.{.{ .name = "bash", .args_preview = "make migrate", .result_preview = "ok" }} },
         } },
-    }, &.{.{ .reference_time = try time.parse("2026-11-19T10:00:00Z"), .facts = &.{"Lantern uses SQLite."} }});
+    }, &.{.{ .reference_time = try core.time.parseRfc3339("2026-11-19T10:00:00Z"), .facts = &.{"Lantern uses SQLite."} }});
     try testing.expect(std.mem.startsWith(u8, msg, "Reference time: 2026-11-20T18:00:00Z (Friday, UTC)\n"));
     try testing.expect(std.mem.indexOf(u8, msg, "  - Lantern uses SQLite.\n") != null);
     try testing.expect(std.mem.indexOf(u8, msg, "[user] switch it to Postgres\n") != null);

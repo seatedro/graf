@@ -11,6 +11,20 @@ const Allocator = std.mem.Allocator;
 const Id = core.Id;
 const Micros = core.Micros;
 
+pub fn at(s: []const u8) Micros {
+    return core.time.parseRfc3339(s) catch unreachable;
+}
+
+pub fn turns(comptime text: []const u8) []const core.Turn {
+    return &.{.{ .role = .user, .text = text }};
+}
+
+pub const relay_hollis =
+    \\{"skip":null,"entities":[{"ref":"n1","name":"Relay","type":"software","aliases":[],"description":"Request gateway."},{"ref":"n2","name":"Hollis","type":"person","aliases":[],"description":"Engineer."}],
+    \\"facts":[{"subject":"n1","relation":"has_oncall","qualifier":null,"object":"n2","value":null,"text":"Hollis is on call for Relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"agent","quote":"Hollis is currently on call for Relay."},
+    \\{"subject":"n1","relation":"located_at","qualifier":null,"object":null,"value":"infra/relay","text":"Relay lives under infra/relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"agent","quote":"Relay lives under infra/relay"}],"new_relations":[]}
+;
+
 pub const FakeModel = struct {
     pub const Reply = union(enum) {
         json: []const u8,
@@ -161,12 +175,12 @@ pub const MemoryBackend = struct {
     pub fn init(gpa: Allocator, io: std.Io) !MemoryBackend {
         var b: MemoryBackend = .{ .arena_state = .init(gpa), .io = io };
         const a = b.arena_state.allocator();
-        for (core.ontology.core_relations) |p| try b.relations.append(a, .{
-            .name = p.name,
-            .cardinality = p.cardinality,
-            .opposes = p.opposes,
+        for (core.ontology.core_relations) |rel| try b.relations.append(a, .{
+            .name = rel.name,
+            .cardinality = rel.cardinality,
+            .opposes = rel.opposes,
             .status = .core,
-            .description = p.description,
+            .description = rel.description,
         });
         return b;
     }
@@ -179,7 +193,7 @@ pub const MemoryBackend = struct {
         return b.arena_state.allocator();
     }
 
-    pub fn add(b: *MemoryBackend, source: []const u8, reference_time: Micros, project: ?[]const u8, turns: []const core.Turn) !Id {
+    pub fn add(b: *MemoryBackend, source: []const u8, reference_time: Micros, project: ?[]const u8, entry_turns: []const core.Turn) !Id {
         const a = b.arena();
         const id = Id.v7(b.io);
         var seq: i32 = 0;
@@ -194,7 +208,7 @@ pub const MemoryBackend = struct {
                 .kind = .turns,
                 .project = if (project) |p| try a.dupe(u8, p) else null,
                 .author = .user,
-                .body = .{ .turns = try copy([]const core.Turn, a, turns) },
+                .body = .{ .turns = try copy([]const core.Turn, a, entry_turns) },
                 .content_hash = @splat(0),
                 .reference_time = reference_time,
             },
@@ -272,10 +286,9 @@ pub const MemoryBackend = struct {
         e.status = .extracted;
     }
 
-    pub fn saveRelationEmbeddings(b: *MemoryBackend, lease: store.Lease, names: []const []const u8, embs: []const []const f32) !void {
-        _ = lease;
-        for (names, embs) |n, v| for (b.relations.items) |*p| if (std.mem.eql(u8, p.name, n)) {
-            p.emb = try b.arena().dupe(f32, v);
+    pub fn saveRelationEmbeddings(b: *MemoryBackend, names: []const []const u8, embs: []const []const f32) !void {
+        for (names, embs) |n, v| for (b.relations.items) |*rel| if (std.mem.eql(u8, rel.name, n)) {
+            rel.emb = try b.arena().dupe(f32, v);
         };
     }
 
@@ -292,9 +305,8 @@ pub const MemoryBackend = struct {
         return null;
     }
 
-    pub fn prefetch(b: *MemoryBackend, a: Allocator, lease: store.Lease, req: pipeline.PrefetchRequest) !resolve.Prefetch {
+    pub fn prefetch(b: *MemoryBackend, a: Allocator, req: pipeline.PrefetchRequest) !resolve.Prefetch {
         if (b.crash_after_extraction) return error.SimulatedCrash;
-        _ = lease;
         var ents: std.ArrayList(resolve.CandidateEntity) = .empty;
         for (req.entity_norms, req.entity_embs, 0..) |norms, emb, i| {
             for (b.entities.items) |e| {
@@ -363,7 +375,7 @@ pub const MemoryBackend = struct {
         if (e.status != .staged) return .fenced;
         const al = b.arena();
         const cs = try copy(core.ChangeSet, al, cs_in.*);
-        const t = pipeline.now(b.io);
+        const t = core.time.now(b.io);
         for (cs.new_entities) |ne| {
             var aliases: std.ArrayList([]const u8) = .empty;
             for (ne.aliases) |x| try aliases.append(al, try core.text.norm(al, x));
@@ -401,13 +413,13 @@ pub const MemoryBackend = struct {
             f.fact.end_kind = r.end_kind;
             f.fact.ended_by = r.ended_by;
         };
-        for (cs.evidence) |p| try b.evidence.append(al, .{ .fact_id = p.fact_id, .entry_id = lease.entry_id, .kind = p.kind });
-        for (cs.new_relations) |p| {
+        for (cs.evidence) |ev| try b.evidence.append(al, .{ .fact_id = ev.fact_id, .entry_id = lease.entry_id, .kind = ev.kind });
+        for (cs.new_relations) |rel| {
             var seen = false;
-            for (b.relations.items) |q| if (std.mem.eql(u8, q.name, p.name)) {
+            for (b.relations.items) |known| if (std.mem.eql(u8, known.name, rel.name)) {
                 seen = true;
             };
-            if (!seen) try b.relations.append(al, .{ .name = p.name, .status = p.status, .mapped_to = p.mapped_to, .description = p.description });
+            if (!seen) try b.relations.append(al, .{ .name = rel.name, .status = rel.status, .mapped_to = rel.mapped_to, .description = rel.description });
         }
         b.seq += 1;
         e.status = .committed;
@@ -420,10 +432,9 @@ pub const MemoryBackend = struct {
         return null;
     }
 
-    pub fn afterCommit(b: *MemoryBackend, a: Allocator, lease: store.Lease, cs: *const core.ChangeSet) !void {
+    pub fn afterCommit(b: *MemoryBackend, a: Allocator, cs: *const core.ChangeSet) !void {
         _ = b;
         _ = a;
-        _ = lease;
         _ = cs;
     }
 

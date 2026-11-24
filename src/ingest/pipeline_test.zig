@@ -3,10 +3,12 @@ const core = @import("core");
 const ingest = @import("mod.zig");
 const pipeline = @import("pipeline.zig");
 const fakes = @import("testing.zig");
-const time = @import("time.zig");
 
 const testing = std.testing;
 const Driver = pipeline.Driver(fakes.MemoryBackend, fakes.FakeModel);
+const at = fakes.at;
+const turns = fakes.turns;
+const relay_hollis = fakes.relay_hollis;
 
 const Harness = struct {
     backend: fakes.MemoryBackend,
@@ -35,16 +37,6 @@ const Harness = struct {
     }
 };
 
-fn at(s: []const u8) core.Micros {
-    return time.parse(s) catch unreachable;
-}
-
-const relay_hollis =
-    \\{"skip":null,"entities":[{"ref":"n1","name":"Relay","type":"software","aliases":[],"description":"Request gateway."},{"ref":"n2","name":"Hollis","type":"person","aliases":[],"description":"Engineer."}],
-    \\"facts":[{"subject":"n1","relation":"has_oncall","qualifier":null,"object":"n2","value":null,"text":"Hollis is on call for Relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"agent","quote":"Hollis is currently on call for Relay."},
-    \\{"subject":"n1","relation":"located_at","qualifier":null,"object":null,"value":"infra/relay","text":"Relay lives under infra/relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"agent","quote":"Relay lives under infra/relay"}],"new_relations":[]}
-;
-
 const relay_juno =
     \\{"skip":null,"entities":[{"ref":"n1","name":"Relay","type":"software","aliases":[],"description":"Request gateway."},{"ref":"n2","name":"Juno","type":"person","aliases":[],"description":"Engineer."}],
     \\"facts":[{"subject":"n1","relation":"has_oncall","qualifier":null,"object":"n2","value":null,"text":"Juno is on call for Relay.","rationale":null,"valid_from":"2026-11-20T17:00:00Z","valid_to":null,"time_basis":"relative","scope":"project","author":"user","quote":"Juno took over on call for Relay starting today at 17:00 UTC."}],"new_relations":[]}
@@ -56,10 +48,6 @@ const juno_restated =
 ;
 
 const skip_json = "{\"skip\":\"test output only\",\"entities\":[],\"facts\":[],\"new_relations\":[]}";
-
-fn turns(comptime text: []const u8) []const core.Turn {
-    return &.{.{ .role = .user, .text = text }};
-}
 
 test "entries flow through extraction, resolution and commit into the expected graph" {
     var h = try Harness.init();
