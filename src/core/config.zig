@@ -1,5 +1,5 @@
 //! Runtime configuration: `~/.config/graf/config.toml` plus generic `GRAF_*`
-//! environment variables (spec 5.0). Precedence, lowest to highest: built-in
+//! environment variables. Precedence, lowest to highest: built-in
 //! defaults, the config file, environment variables, then command-line flags (applied
 //! by the caller). Provider URLs, keys, cost headers and model ids live only here,
 //! never in source.
@@ -9,11 +9,11 @@ const toml = @import("toml.zig");
 const Allocator = std.mem.Allocator;
 const Environ = std.process.Environ;
 
-/// Wire protocol for structured completions (spec 5.2).
+/// Wire protocol for structured completions.
 pub const Route = enum { @"openai-responses", @"anthropic-messages", @"openai-chat" };
 
 pub const Config = struct {
-    /// Graph name; the hard tenancy boundary (spec 1.4).
+    /// Graph name; the hard tenancy boundary.
     graph: []const u8 = "default",
     database: Database = .{},
     llm: Llm = .{},
@@ -39,7 +39,7 @@ pub const Config = struct {
         /// one. Empty falls back to `usage.cost`, then to a local rate table.
         cost_header: []const u8 = "",
         timeout_ms: u32 = 120_000,
-        /// Use streaming responses instead of the non-streaming default (spec 5.3).
+        /// Use streaming responses instead of the non-streaming default.
         stream: bool = false,
     };
 
@@ -55,7 +55,7 @@ pub const Config = struct {
         cost_header: []const u8 = "",
     };
 
-    /// Optional typed decision-model backend for Call 2 and reranking (spec 5.2).
+    /// Optional typed decision-model backend for resolution and reranking.
     /// Disabled while `base_url` is empty.
     pub const Decision = struct {
         base_url: []const u8 = "",

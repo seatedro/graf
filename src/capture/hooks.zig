@@ -1,4 +1,4 @@
-//! `graf hook <harness> <event>` (spec 4.1, 6.1): the brief on session start, instant
+//! `graf hook <harness> <event>`: the brief on session start, instant
 //! recall on prompt submit, and a flush request on stop / session end. Every path
 //! exits 0 within its budget and spools to disk when the daemon is down.
 

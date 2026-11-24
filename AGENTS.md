@@ -14,31 +14,31 @@ graf is a public-grade, vendor-neutral project. Nothing in this repository may n
 
 ## Layout and ownership
 
-Each workstream owns one or more modules under `src/`. A module is a directory with a root file `mod.zig` and may import only the modules declared for it in `build.zig`; the compiler rejects anything else. Add files freely inside your module. You never need to touch `build.zig` to add a file.
+Code is split into modules under `src/`. A module is a directory with a root file `mod.zig` and may import only the modules declared for it in `build.zig`; the compiler rejects anything else. Add files freely inside your module. You never need to touch `build.zig` to add a file.
 
-| Module | Directory | May import | Owner |
+| Module | Directory | May import | Covers |
 |---|---|---|---|
-| core | `src/core/` | (none) | integrator: shared types, ontology, config, TOML |
-| store | `src/store/` | core, pg | WS1 Storage & evals |
-| eval | `src/eval/`, `evals/` | core, store, llm, ingest, retrieve | WS1 Storage & evals |
-| llm | `src/llm/` | core | WS2 LLM client |
-| ingest | `src/ingest/` | core, store, llm, pg | WS3 Ingestion |
-| capture | `src/capture/` | core | WS4 Capture |
-| retrieve | `src/retrieve/` | core, store, llm, pg | WS5 Retrieval & surface |
-| surface | `src/surface/`, `src/main.zig` | everything | WS5 Retrieval & surface |
+| core | `src/core/` | (none) | shared types, ontology, config, TOML |
+| store | `src/store/` | core, pg | schema, migrations, queue, commit, ledger, managed Postgres |
+| eval | `src/eval/`, `evals/` | core, store, llm, ingest, retrieve | labeled eval suite and scorer |
+| llm | `src/llm/` | core | model and embeddings client, limiter, cost capture |
+| ingest | `src/ingest/` | core, store, llm, pg | extraction, resolution, workers |
+| capture | `src/capture/` | core | transcript tailers, redaction, segmenter, hooks |
+| retrieve | `src/retrieve/` | core, store, llm, pg | hybrid search, rerank, rendering, brief |
+| surface | `src/surface/`, `src/main.zig` | everything | CLI, MCP, HTTP daemon |
 
-Rules for parallel work:
+Rules for working across modules:
 
-- Stay inside your directories. If you need something from another module, code against its public declarations in `mod.zig`. If a declaration is missing or wrong, ask its owner (through your Captain) rather than editing their module.
+- Stay inside your directories. If you need something from another module, code against its public declarations in `mod.zig`. If a declaration is missing or wrong, change it in a PR for that module rather than from inside another module's change.
 - `core` is shared. You may add new declarations to `core` in your PR. Changing or removing an existing `core` declaration needs its own small PR that lands first.
 - Stubs return `error.NotImplemented` (`core.NotImplemented`). Replace them; keep the documented contract or update the doc comment with it.
 - Capture never imports `store`: it writes through `core.EpisodeSink`. The LLM client never imports `store`: it writes through `core.LlmLedger`. `store` implements both.
 
 ## Migrations
 
-SQL lives in `src/store/migrations/NNNN_name.sql` and is registered in `src/store/migrations.zig` (keep the list sorted). Migrations are append-only: never edit one that has merged. Version ranges avoid collisions between parallel branches:
+SQL lives in `src/store/migrations/NNNN_name.sql` and is registered in `src/store/migrations.zig` (keep the list sorted). Migrations are append-only: never edit one that has merged. Version ranges avoid collisions between concurrent branches:
 
-| Range | Owner |
+| Range | Module |
 |---|---|
 | 0001-0099 | store |
 | 0100-0199 | ingest |
@@ -67,7 +67,7 @@ Zig is pinned to 0.17.1 (`build.zig.zon`, the flake, CI). Use the `std.Io` inter
 ## Conventions
 
 - Match the spec. Where you make a call the spec leaves open, say why in your PR description.
-- Keep public interfaces documented with `///` comments; they are what the other workstreams read.
+- Keep public interfaces documented with `///` comments; they are what other modules code against.
 - Every LLM attempt writes an `llm_call` row, including failures. Nothing logs or stores secrets; redaction runs before storage and before any model call.
 - License: MIT. Files copied from Apache-2.0 projects keep their original license header, and the copy is recorded in `THIRD_PARTY_NOTICES.md` with the upstream URL, commit, and license text.
-- Open PRs with the repository's PR tooling against the branch your Captain names. Do not merge.
+- Agents never merge PRs.

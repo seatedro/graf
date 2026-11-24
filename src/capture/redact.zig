@@ -1,4 +1,4 @@
-//! Deterministic secret redaction (spec 4.1). Runs on every turn before anything
+//! Deterministic secret redaction. Runs on every turn before anything
 //! reaches an `EpisodeSink` or a model. The eval gate is zero leaks.
 
 const std = @import("std");

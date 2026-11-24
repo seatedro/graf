@@ -1,4 +1,4 @@
--- graf schema v1 (spec 3.2). Migrations are append-only: never edit a released
+-- graf schema v1. Migrations are append-only: never edit a released
 -- migration, add a new numbered file instead (see AGENTS.md).
 
 CREATE EXTENSION IF NOT EXISTS vector;

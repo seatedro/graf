@@ -1,5 +1,5 @@
-//! Capture (spec 4.1): transcript tailers for each local harness, the dialect
-//! parsers and tool-aware normalizer (thinking stripped), the deterministic
+//! Capture: transcript tailers for each local harness, the dialect parsers and the
+//! normalizer (tool-aware retention, thinking stripped), the deterministic
 //! redactor, the segmenter that seals turns into episodes, exclusions, and
 //! `graf hook` / `graf install`.
 //!
@@ -10,6 +10,8 @@ const std = @import("std");
 const core = @import("core");
 
 pub const redactor = @import("redact.zig");
+pub const normalize = @import("normalize.zig");
+pub const dialect = @import("dialect.zig");
 pub const state = @import("state.zig");
 pub const project = @import("project.zig");
 pub const hooks = @import("hooks.zig");
@@ -17,7 +19,7 @@ pub const install = @import("install.zig");
 
 pub const redact = redactor.redact;
 
-/// Where each harness writes its session logs, relative to `$HOME` (spec 1.1).
+/// Where each harness writes its session logs, relative to `$HOME`.
 pub const default_roots = [_]struct { core.Harness, []const u8 }{
     .{ .@"claude-code", ".claude/projects" },
     .{ .codex, ".codex/sessions" },

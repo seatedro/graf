@@ -1,4 +1,4 @@
-//! Project derivation and capture exclusions (spec 1.4, 4.1).
+//! Project derivation and capture exclusions.
 
 const std = @import("std");
 const core = @import("core");

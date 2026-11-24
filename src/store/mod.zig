@@ -1,4 +1,4 @@
-//! Storage workstream: Postgres schema and migrations, the episode queue and leases,
+//! Storage: Postgres schema and migrations, the episode queue and leases,
 //! the fenced commit, the LLM cost ledger, and managed local Postgres (`graf init`).
 //! See AGENTS.md for ownership.
 
@@ -40,7 +40,7 @@ pub const Store = struct {
     }
 
     /// Inserts a queued episode and advances its source cursor in one transaction,
-    /// then `NOTIFY graf_queue`. A repeated content hash is a no-op (spec 4.1).
+    /// then `NOTIFY graf_queue`. A repeated content hash is a no-op.
     pub fn enqueue(s: *Store, graph_id: core.Id, draft: *const core.EpisodeDraft) !core.EpisodeSink.Outcome {
         _ = s;
         _ = graph_id;
@@ -49,7 +49,7 @@ pub const Store = struct {
     }
 
     /// Claims the next eligible episode (per-source ordering, `FOR UPDATE SKIP LOCKED`)
-    /// and mints a lease (spec 4.3 step 2).
+    /// and mints a lease.
     pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: core.Id, worker: []const u8) !?Lease {
         _ = s;
         _ = arena;
@@ -58,7 +58,7 @@ pub const Store = struct {
         return core.NotImplemented;
     }
 
-    /// Persists a validated Call 1 result (`status = extracted`). The JSON is opaque here.
+    /// Persists a validated extraction result (`status = extracted`). The JSON is opaque here.
     pub fn saveExtraction(s: *Store, lease: Lease, extraction_json: []const u8) !void {
         _ = s;
         _ = lease;
@@ -74,7 +74,7 @@ pub const Store = struct {
         return core.NotImplemented;
     }
 
-    /// The fenced commit (spec 4.3 step 11): advisory lock, lease fence, optional
+    /// The fenced commit: advisory lock, lease fence, optional
     /// rebase through `rebase` when `commit_log` moved past `base_seq`, batched
     /// apply, `commit_log` row, `NOTIFY graf_commit`.
     pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase: ?Rebase) !CommitResult {
@@ -105,7 +105,7 @@ pub const Lease = struct {
     graph_id: core.Id,
     token: i64,
     episode: core.Episode,
-    /// Validated Call 1 output if a previous attempt already paid for it.
+    /// Validated extraction output if a previous attempt already paid for it.
     extraction_json: ?[]const u8 = null,
 };
 

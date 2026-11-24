@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// The module graph. Each workstream owns one directory, `src/<name>/`, whose root file
+/// The module graph. Each module owns one directory, `src/<name>/`, whose root file
 /// is `src/<name>/mod.zig`. A module may import only the modules named in its `deps`,
 /// so the compiler enforces the boundaries in AGENTS.md. Adding files inside a module
 /// never touches this file; adding a module is one line here.

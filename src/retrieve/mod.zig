@@ -1,4 +1,4 @@
-//! Retrieval workstream (spec 6): hybrid search (HNSW + tsvector + alias/1-hop in one
+//! Retrieval: hybrid search (HNSW + tsvector + alias/1-hop in one
 //! SQL round trip, fused with RRF), optional decision-model rerank with a
 //! deterministic fallback, MMR, the token-budgeted renderer, `memory_entity`, the
 //! session-start brief, and background-warmed per-prompt recall.
@@ -72,7 +72,7 @@ pub const Engine = struct {
     }
 };
 
-/// Renders results as compact Markdown within `max_tokens` (spec 6.3).
+/// Renders results as compact Markdown within `max_tokens`.
 pub fn render(result: *const SearchResult, params: SearchParams, out: *std.Io.Writer) !void {
     _ = result;
     _ = params;

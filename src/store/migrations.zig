@@ -1,4 +1,4 @@
-//! Embedded, append-only SQL migrations (spec 2.3). Each migration runs in one
+//! Embedded, append-only SQL migrations. Each migration runs in one
 //! implicit transaction together with its `schema_migrations` row, so a failed
 //! migration leaves no partial schema behind.
 
@@ -11,7 +11,7 @@ pub const Migration = struct {
     sql: []const u8,
 };
 
-/// Keep sorted by version. Version ranges are reserved per workstream in AGENTS.md.
+/// Keep sorted by version. Version ranges are reserved per module in AGENTS.md.
 pub const all = [_]Migration{
     .{ .version = 1, .name = "init", .sql = @embedFile("migrations/0001_init.sql") },
 };
