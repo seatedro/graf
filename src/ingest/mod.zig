@@ -42,7 +42,20 @@ pub const ProposedRelation = struct {
     object_kind: core.types.ObjectKind,
 };
 
-pub const ConflictKind = enum { changed, was_wrong };
+pub const rules = @import("rules.zig");
+pub const time = @import("time.zig");
+pub const extract = @import("extract.zig");
+pub const resolve = @import("resolve.zig");
+pub const schema = @import("schema.zig");
+pub const prompt = @import("prompt.zig");
+pub const pipeline = @import("pipeline.zig");
+pub const rebase = @import("rebase.zig");
+pub const postgres = @import("postgres.zig");
+pub const jobs = @import("jobs.zig");
+pub const workers = @import("workers.zig");
+pub const testing = @import("testing.zig");
+
+pub const ConflictKind = rules.ConflictKind;
 
 pub const ResolveResult = struct {
     entity_links: []const EntityLink,
@@ -66,14 +79,7 @@ pub const Contradiction = struct {
     at: ?[]const u8,
 };
 
-pub fn resolveConflict(old: *core.Fact, new: *core.Fact, kind: ConflictKind, commit_time: core.Micros, new_reference_time: core.Micros) !void {
-    _ = old;
-    _ = new;
-    _ = kind;
-    _ = commit_time;
-    _ = new_reference_time;
-    return core.NotImplemented;
-}
+pub const resolveConflict = rules.resolveConflict;
 
 pub const Outcome = enum { committed, skipped, requeued, split, dead, fenced };
 
@@ -84,19 +90,27 @@ pub const Pipeline = struct {
     graph_id: core.Id,
 
     pub fn process(p: *Pipeline, arena: std.mem.Allocator, lease: store.Lease) !Outcome {
-        _ = p;
-        _ = arena;
-        _ = lease;
-        return core.NotImplemented;
+        var backend: postgres.PgBackend = .{ .store = p.store, .graph_id = p.graph_id, .io = p.client.io };
+        var model: postgres.ClientModel = .{ .client = p.client };
+        var driver: pipeline.Driver(postgres.PgBackend, postgres.ClientModel) = .{
+            .backend = &backend,
+            .model = &model,
+            .config = p.config,
+            .graph_id = p.graph_id,
+            .io = p.client.io,
+        };
+        return driver.process(arena, lease);
     }
 
     pub fn runWorkers(p: *Pipeline, stop: *std.atomic.Value(bool)) !void {
-        _ = p;
-        _ = stop;
-        return core.NotImplemented;
+        return workers.run(p, stop);
     }
 };
 
 test {
     std.testing.refAllDecls(@This());
+    _ = @import("scenarios_test.zig");
+    _ = @import("pipeline_test.zig");
+    _ = @import("postgres_test.zig");
+    _ = @import("client_test.zig");
 }
