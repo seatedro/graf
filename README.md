@@ -2,7 +2,7 @@
 
 graf is an always-on, bi-temporal knowledge graph for coding agents. One Zig binary tails your agents' session transcripts, extracts entities and facts with any OpenAI- or Anthropic-compatible model, stores them in Postgres with pgvector, and serves them back to every agent over MCP, HTTP, and a CLI.
 
-Status: pre-alpha. The module skeleton is in place; see [AGENTS.md](AGENTS.md) for the layout and how work is split.
+Status: pre-alpha. See [AGENTS.md](AGENTS.md) for the layout and how work is split.
 
 ## Develop
 

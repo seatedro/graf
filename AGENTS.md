@@ -43,7 +43,8 @@ The runner applies every version missing from `schema_migrations`, each in its o
 nix develop                        # Zig 0.17.1 and Postgres 17 + pgvector on PATH
 nix run .#devdb                    # local Postgres on 127.0.0.1:54329 (databases graf, graf_test)
 eval "$(nix run .#devdb -- env)"   # exports GRAF_DATABASE_URL and GRAF_TEST_DATABASE_URL
-zig build test                     # all modules
+zig build test                     # all modules, plus the graf executable
+zig build test --test-timeout 2m   # fail a hung test instead of waiting on it (CI does this)
 zig build test-store               # one module (test-core, test-llm, test-ingest, ...)
 zig build test -Dtest-filter=toml  # tests whose names contain "toml"
 zig fmt build.zig src              # CI runs zig fmt --check
