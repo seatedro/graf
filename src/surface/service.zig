@@ -11,9 +11,9 @@ pub const remember_wait_ms = 8_000;
 
 pub const Flusher = struct {
     ptr: *anyopaque,
-    flushFn: *const fn (ptr: *anyopaque, req: FlushRequest) anyerror!void,
+    flushFn: *const fn (ptr: *anyopaque, req: FlushRequest) anyerror!bool,
 
-    pub fn flush(f: Flusher, req: FlushRequest) !void {
+    pub fn flush(f: Flusher, req: FlushRequest) !bool {
         return f.flushFn(f.ptr, req);
     }
 };
@@ -265,12 +265,12 @@ pub const Service = struct {
 
     fn flush(s: *Service, arena: Allocator, in: FlushRequest) !api.Reply {
         const f = s.flusher orelse return .{ .status = 202, .body = "{\"accepted\":true,\"flushed\":false}" };
-        f.flush(in) catch |err| {
+        const flushed = f.flush(in) catch |err| blk: {
             log.warn("flush failed: {s}", .{@errorName(err)});
-            return .{ .status = 202, .body = "{\"accepted\":true,\"flushed\":false}" };
+            break :blk false;
         };
         _ = arena;
-        return .{ .status = 202, .body = "{\"accepted\":true,\"flushed\":true}" };
+        return .{ .status = 202, .body = if (flushed) "{\"accepted\":true,\"flushed\":true}" else "{\"accepted\":true,\"flushed\":false}" };
     }
 
     const PromptInput = struct {

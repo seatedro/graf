@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const capture = @import("capture");
 
 pub const Op = enum { search, entity, remember, forget, entries, brief, flush, warm, recall };
 
@@ -34,10 +35,7 @@ pub fn errorReply(arena: std.mem.Allocator, status: u16, message: []const u8) !R
 }
 
 pub fn socketPath(arena: std.mem.Allocator, env: *const std.process.Environ.Map, config: *const core.Config) !?[]const u8 {
-    if (config.serve.socket.len > 0) return config.serve.socket;
-    if (env.get("XDG_STATE_HOME")) |xdg| if (xdg.len > 0) return try std.fs.path.join(arena, &.{ xdg, "graf", "graf.sock" });
-    if (env.get("HOME")) |home| if (home.len > 0) return try std.fs.path.join(arena, &.{ home, ".local", "state", "graf", "graf.sock" });
-    return null;
+    return capture.state.socketPath(arena, config, env);
 }
 
 test "socket path precedence" {

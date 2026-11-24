@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const store = @import("store");
 const retrieve = @import("retrieve");
+const capture = @import("capture");
 const api = @import("api.zig");
 const http = @import("http.zig");
 const mcp = @import("mcp.zig");
@@ -44,10 +45,11 @@ const FakeFlusher = struct {
         return .{ .ptr = f, .flushFn = flush };
     }
 
-    fn flush(ptr: *anyopaque, req: service.FlushRequest) anyerror!void {
+    fn flush(ptr: *anyopaque, req: service.FlushRequest) anyerror!bool {
         const f: *FakeFlusher = @ptrCast(@alignCast(ptr));
         f.calls += 1;
         f.harness = req.harness;
+        return true;
     }
 };
 
@@ -198,6 +200,16 @@ test "serve and hook round trip over the Unix socket" {
     try testing.expectEqual(@as(u16, 202), flush.status);
     try testing.expectEqual(@as(u32, 1), f.flusher.calls);
     try testing.expectEqual(core.Harness.codex, f.flusher.harness.?);
+
+    var env = std.process.Environ.Map.init(testing.allocator);
+    defer env.deinit();
+    try env.put("XDG_STATE_HOME", dir);
+    var hook_config = f.config;
+    hook_config.serve.socket = socket;
+    var hook_out: std.Io.Writer.Allocating = .init(arena);
+    try capture.hooks.run(arena, io, &env, &hook_config, .@"claude-code", .stop, "{\"session_id\":\"s-1\",\"transcript_path\":\"/tmp/y.jsonl\"}", &hook_out.writer);
+    try testing.expectEqual(@as(u32, 2), f.flusher.calls);
+    try testing.expectEqual(core.Harness.@"claude-code", f.flusher.harness.?);
 
     const entry = try c.request(arena, .POST, "/v1/entries", "{\"kind\":\"turns\",\"author\":\"mixed\",\"body\":{\"turns\":[{\"role\":\"user\",\"text\":\"hi\"}]},\"reference_time\":1795910400000000,\"project\":\"graf\"}");
     try testing.expectEqual(@as(u16, 200), entry.status);
