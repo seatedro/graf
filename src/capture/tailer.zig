@@ -145,7 +145,8 @@ pub const Tailer = struct {
         };
         defer file.close(t.io);
         const st = try file.stat(t.io);
-        const inode = try std.fmt.allocPrint(t.scratch.allocator(), "{d}", .{st.inode});
+        var inode_buf: [40]u8 = undefined;
+        const inode = std.fmt.bufPrint(&inode_buf, "{d}", .{st.inode}) catch unreachable;
         if (!f.loaded) {
             try t.load(f, file, st, inode);
         } else if (!std.mem.eql(u8, inode, f.inode) or st.size < f.read_off) {

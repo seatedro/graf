@@ -183,7 +183,10 @@ fn edit(arena: Allocator, original: []const u8, e: Edit, command: []const u8) js
         else => if (blank) "{}\n" else original,
     };
     switch (e) {
-        .mcp_json => |m| text = try ensureMcpServer(arena, text, m.keys, m.stdio_type, command, &changes),
+        .mcp_json => |m| text = if (m.stdio_type)
+            try ensureMcpServer(arena, text, m.keys, StdioServer{ .command = command }, &changes)
+        else
+            try ensureMcpServer(arena, text, m.keys, PlainServer{ .command = command }, &changes),
         .hooks_json => |harness| for (hook_events) |event| {
             text = try ensureHook(arena, text, harness, event, command, &changes);
         },
@@ -193,11 +196,11 @@ fn edit(arena: Allocator, original: []const u8, e: Edit, command: []const u8) js
     return .{ .text = text, .changes = changes.items };
 }
 
-const StdioServer = struct { type: []const u8 = "stdio", command: []const u8, args: []const []const u8 };
-const PlainServer = struct { command: []const u8, args: []const []const u8 };
+const mcp_args: []const []const u8 = &.{"mcp"};
+const StdioServer = struct { type: []const u8 = "stdio", command: []const u8, args: []const []const u8 = mcp_args };
+const PlainServer = struct { command: []const u8, args: []const []const u8 = mcp_args };
 
-fn ensureMcpServer(arena: Allocator, text: []const u8, keys: []const []const u8, stdio_type: bool, command: []const u8, changes: *std.ArrayList([]const u8)) json.Error![]const u8 {
-    const args: []const []const u8 = &.{"mcp"};
+fn ensureMcpServer(arena: Allocator, text: []const u8, keys: []const []const u8, server: anytype, changes: *std.ArrayList([]const u8)) json.Error![]const u8 {
     const doc = try json.root(text);
     if (!json.isObject(text, doc)) return error.InvalidJson;
 
@@ -208,26 +211,17 @@ fn ensureMcpServer(arena: Allocator, text: []const u8, keys: []const []const u8,
     };
     const servers_member = servers orelse {
         try changes.append(arena, try std.fmt.allocPrint(arena, "add {s}.graf", .{keys[0]}));
-        return if (stdio_type)
-            json.insertMember(arena, text, doc, keys[0], .{ .graf = StdioServer{ .command = command, .args = args } })
-        else
-            json.insertMember(arena, text, doc, keys[0], .{ .graf = PlainServer{ .command = command, .args = args } });
+        return json.insertMember(arena, text, doc, keys[0], .{ .graf = server });
     };
     if (!json.isObject(text, servers_member.value)) return error.InvalidJson;
 
     const existing = try json.find(arena, text, servers_member.value, "graf") orelse {
         try changes.append(arena, try std.fmt.allocPrint(arena, "add {s}.graf", .{servers_member.key}));
-        return if (stdio_type)
-            json.insertMember(arena, text, servers_member.value, "graf", StdioServer{ .command = command, .args = args })
-        else
-            json.insertMember(arena, text, servers_member.value, "graf", PlainServer{ .command = command, .args = args });
+        return json.insertMember(arena, text, servers_member.value, "graf", server);
     };
-    if (try serverMatches(arena, text, existing.value, command)) return text;
+    if (try serverMatches(arena, text, existing.value, server.command)) return text;
     try changes.append(arena, try std.fmt.allocPrint(arena, "update {s}.graf", .{servers_member.key}));
-    return if (stdio_type)
-        json.replaceValue(arena, text, existing.value, StdioServer{ .command = command, .args = args })
-    else
-        json.replaceValue(arena, text, existing.value, PlainServer{ .command = command, .args = args });
+    return json.replaceValue(arena, text, existing.value, server);
 }
 
 fn serverMatches(arena: Allocator, text: []const u8, value: json.Span, command: []const u8) json.Error!bool {
