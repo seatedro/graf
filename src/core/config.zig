@@ -15,6 +15,7 @@ pub const Config = struct {
     ingest: Ingest = .{},
     serve: Serve = .{},
     capture: Capture = .{},
+    eval: Eval = .{},
 
     pub const Database = struct {
         url: []const u8 = "",
@@ -76,6 +77,13 @@ pub const Config = struct {
         exclude_paths: []const []const u8 = &.{},
     };
 
+    pub const Eval = struct {
+        judge_model: []const u8 = "",
+        judge_route: []const u8 = "",
+        judge_base_url: []const u8 = "",
+        judge_api_key: []const u8 = "",
+    };
+
     pub fn decisionEnabled(c: *const Config) bool {
         return c.decision.base_url.len > 0;
     }
@@ -92,6 +100,10 @@ pub const env_vars = [_]struct { []const u8, []const u8, []const u8 }{
     .{ "GRAF_EMBED_MODEL", "embed", "model" },
     .{ "GRAF_DECISION_BASE_URL", "decision", "base_url" },
     .{ "GRAF_DECISION_API_KEY", "decision", "api_key" },
+    .{ "GRAF_EVAL_JUDGE_MODEL", "eval", "judge_model" },
+    .{ "GRAF_EVAL_JUDGE_ROUTE", "eval", "judge_route" },
+    .{ "GRAF_EVAL_JUDGE_BASE_URL", "eval", "judge_base_url" },
+    .{ "GRAF_EVAL_JUDGE_API_KEY", "eval", "judge_api_key" },
 };
 
 pub const config_path_env = "GRAF_CONFIG";
@@ -240,7 +252,7 @@ fn writeField(comptime T: type, comptime name: []const u8, value: T, w: *std.Io.
 }
 
 fn isSecret(comptime name: []const u8) bool {
-    return std.mem.eql(u8, name, "api_key") or std.mem.eql(u8, name, "token");
+    return std.mem.endsWith(u8, name, "api_key") or std.mem.eql(u8, name, "token");
 }
 
 pub const MaskedUrl = struct {
@@ -292,6 +304,8 @@ test "file values, then env overrides, then inheritance" {
     try env.put("GRAF_LLM_API_KEY", "k-123");
     try env.put("GRAF_DATABASE_URL", "postgres://graf:pw@db.example.test:5432/graf");
     try env.put("GRAF_GRAPH", "");
+    try env.put("GRAF_EVAL_JUDGE_MODEL", "judge-model");
+    try env.put("GRAF_EVAL_JUDGE_API_KEY", "jk-456");
     applyEnv(&cfg, &env);
     resolveInheritance(&cfg);
 
@@ -303,12 +317,15 @@ test "file values, then env overrides, then inheritance" {
     try std.testing.expectEqualStrings("x-cost-usd", cfg.embed.cost_header);
     try std.testing.expectEqual(@as(f64, 25), cfg.limits.daily_usd);
     try std.testing.expectEqualStrings("github.com/brackwater/secret", cfg.capture.exclude_projects[0]);
+    try std.testing.expectEqualStrings("judge-model", cfg.eval.judge_model);
 
     var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
     try writeMasked(&cfg, &out.writer);
     const text = out.written();
     try std.testing.expect(std.mem.indexOf(u8, text, "k-123") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "jk-456") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "judge_api_key = \"<set>\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, ":pw@") == null);
     try std.testing.expect(std.mem.indexOf(u8, text, "postgres://graf:***@db.example.test:5432/graf") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "[llm]") != null);
