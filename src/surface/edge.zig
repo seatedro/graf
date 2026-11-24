@@ -329,8 +329,10 @@ pub const Edge = struct {
             .entries => {
                 const draft = std.json.parseFromSliceLeaky(core.EntryDraft, arena, req.body, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch
                     return api.errorReply(arena, 400, "request body must be an entry");
-                const outcome = try e.spool.sink().enqueue(&draft);
-                return .{ .body = try std.json.Stringify.valueAlloc(arena, .{ .id = outcome.queued, .spooled = true }, .{}) };
+                return switch (try e.spool.sink().enqueue(&draft)) {
+                    .queued => |id| .{ .body = try std.json.Stringify.valueAlloc(arena, .{ .id = id, .spooled = true }, .{}) },
+                    .duplicate => .{ .body = "{\"duplicate\":true}" },
+                };
             },
             .flush => {
                 const f = e.flusher orelse return .{ .status = 202, .body = "{\"accepted\":true,\"flushed\":false}" };
