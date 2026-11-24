@@ -3,6 +3,7 @@ const core = @import("core");
 const tailer_mod = @import("tailer.zig");
 const watch = @import("watch.zig");
 const state = @import("state.zig");
+const hooks = @import("hooks.zig");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Environ = std.process.Environ;
@@ -135,6 +136,19 @@ pub const Capture = struct {
         return false;
     }
 
+    pub fn replaySpool(c: *Capture) !usize {
+        const sd = c.state_dir orelse return 0;
+        var arena: std.heap.ArenaAllocator = .init(c.gpa);
+        defer arena.deinit();
+        return hooks.drainSpool(arena.allocator(), c.io, sd, c, replayOne);
+    }
+
+    fn replayOne(c: *Capture, entry: hooks.SpoolEntry) anyerror!void {
+        const harness = std.meta.stringToEnum(core.Harness, entry.harness) orelse return;
+        const path = entry.transcript_path orelse return;
+        _ = try c.flush(harness, path);
+    }
+
     pub fn stats(c: *Capture) tailer_mod.Stats {
         c.mutex.lockUncancelable(c.io);
         defer c.mutex.unlock(c.io);
@@ -188,4 +202,33 @@ test "capture tails every configured root and answers hook flushes" {
     try tmp.dir.writeFile(io, .{ .sub_path = "claude/proj/s.jsonl", .data = "" });
     try testing.expect(try c.flush(.@"claude-code", transcript));
     try testing.expect(!try c.flush(.codex, transcript));
+}
+
+test "spooled flushes replay into the matching tailer" {
+    const io = testing.io;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "claude/proj");
+    try tmp.dir.createDirPath(io, "state/graf");
+    const base = try tmp.dir.realPathFileAlloc(io, ".", arena);
+    const roots = [_]Root{.{ .harness = .@"claude-code", .path = try std.fs.path.join(arena, &.{ base, "claude" }) }};
+    const transcript = try std.fs.path.join(arena, &.{ base, "claude", "proj", "s.jsonl" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "claude/proj/s.jsonl", .data = @embedFile("testdata/claude-code/session.jsonl") });
+    const line = try std.fmt.allocPrint(arena, "{{\"ts\":1,\"harness\":\"claude-code\",\"event\":\"stop\",\"session_id\":\"s\",\"transcript_path\":\"{s}\",\"cwd\":null}}\n", .{transcript});
+    try tmp.dir.writeFile(io, .{ .sub_path = "state/graf/spool.jsonl", .data = line, .flags = .{} });
+
+    var sink: tailer_mod.FakeSink = .init(testing.allocator);
+    defer sink.deinit();
+    var env = Environ.Map.init(testing.allocator);
+    defer env.deinit();
+    try env.put("XDG_STATE_HOME", try std.fs.path.join(arena, &.{ base, "state" }));
+    const config: core.Config = .{};
+    var c: Capture = try .init(testing.allocator, io, &env, &config, sink.entrySink(), .{ .roots = &roots, .backfill = true });
+    defer c.deinit();
+    try testing.expectEqual(@as(usize, 1), try c.replaySpool());
+    try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
+    try testing.expectEqual(@as(usize, 0), try c.replaySpool());
 }

@@ -848,3 +848,26 @@ test "files untouched since the capture epoch are skipped until they grow" {
     try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
     try testing.expect(std.mem.indexOf(u8, sink.entries.items[0].body, "Resumed a day later.") != null);
 }
+
+test "excluded projects and paths are never read into entries" {
+    var h: Harness = try .init();
+    defer h.deinit();
+    var sink: FakeSink = .init(testing.allocator);
+    defer sink.deinit();
+    try h.write(claude_fixture);
+    h.config.capture.exclude_paths = &.{"/home/dev/acme"};
+    var t = h.tailer(&sink, .{});
+    defer t.deinit();
+    try t.scan(t0 + 3 * std.time.us_per_min);
+    try t.tick(t0 + 10 * std.time.us_per_min);
+    try testing.expectEqual(@as(usize, 0), sink.entries.items.len);
+    try testing.expectEqual(@as(usize, 1), t.stats.excluded_files);
+
+    h.config.capture.exclude_paths = &.{};
+    h.config.capture.exclude_projects = &.{"/home/dev/acme/*"};
+    var again = h.tailer(&sink, .{});
+    defer again.deinit();
+    try again.scan(t0 + 3 * std.time.us_per_min);
+    try again.tick(t0 + 10 * std.time.us_per_min);
+    try testing.expectEqual(@as(usize, 0), sink.entries.items.len);
+}
