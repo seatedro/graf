@@ -303,5 +303,6 @@ test "a run against unbuilt pipeline pieces reports unmeasured gates instead of 
     const report = try run(arena, std.testing.io, &config, .{ .graph = graph, .suite_dir = try fixtures.shippedSuiteDir(arena, std.testing.io) });
     try std.testing.expect(!report.metrics.passes());
     try std.testing.expect(report.metrics.crash_resume_pass_rate == null);
+    try std.testing.expectEqual(@as(?u32, 0), report.metrics.secret_leaks);
     try std.testing.expect(report.findings.len > 0);
 }

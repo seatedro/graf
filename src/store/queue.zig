@@ -40,7 +40,11 @@ pub fn ensureGraph(s: *Store, name: []const u8) !Id {
     return id;
 }
 
-pub fn enqueue(s: *Store, graph_id: Id, draft: *const core.EntryDraft) !core.EntrySink.Outcome {
+pub fn enqueue(s: *Store, graph_id: Id, draft_in: *const core.EntryDraft) !core.EntrySink.Outcome {
+    var arena_state = std.heap.ArenaAllocator.init(s.allocator);
+    defer arena_state.deinit();
+    const redacted = try core.redactDraft(arena_state.allocator(), draft_in.*);
+    const draft = &redacted;
     const hash = try store.contentHash(s.allocator, draft);
     const body = try std.json.Stringify.valueAlloc(s.allocator, draft.body, .{});
     defer s.allocator.free(body);

@@ -97,6 +97,24 @@ test "ensureGraph is idempotent and seeds the core relations once" {
     try testing.expectEqual(@as(i64, 1), opposed);
 }
 
+test "enqueue redacts the entry before hashing and storing it" {
+    var s = try store.testing.open();
+    defer s.close();
+    const g = try store.testing.freshGraph(&s);
+    const secret = "sk-proj-Q7f2LmN9pR4sT8vW1xY5zA3bC6dE0gH2jK4mN7pQ";
+    const raw = note("sess-redact", "the key is " ++ secret, 1_000);
+    const id = try enqueueNew(&s, g, raw);
+
+    var row = (try s.pool.row("SELECT body::text FROM entry WHERE id = $1", .{@as([]const u8, &id.bytes)})).?;
+    defer row.deinit() catch {};
+    try testing.expect(std.mem.indexOf(u8, try row.get([]const u8, 0), secret) == null);
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const redacted = try core.redactDraft(arena.allocator(), raw);
+    try testing.expect(try s.enqueue(g, &redacted) == .duplicate);
+}
+
 test "enqueue dedupes on content, advances the cursor, numbers the source and notifies" {
     var s = try store.testing.open();
     defer s.close();
