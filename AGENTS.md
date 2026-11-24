@@ -31,7 +31,7 @@ Rules for working across modules:
 
 - Stay inside your directories. If you need something from another module, code against its public declarations in `mod.zig`. If a declaration is missing or wrong, change it in a PR for that module rather than from inside another module's change.
 - `core` is shared. You may add new declarations to `core` in your PR. Changing or removing an existing `core` declaration needs its own small PR that lands first.
-- Stubs return `error.NotImplemented` (`core.NotImplemented`). Replace them; keep the documented contract or update the doc comment with it.
+- Stubs return `error.NotImplemented` (`core.NotImplemented`). Replace them with real implementations.
 - Capture never imports `store`: it writes through `core.EpisodeSink`. The LLM client never imports `store`: it writes through `core.LlmLedger`. `store` implements both.
 
 ## Migrations
@@ -67,7 +67,7 @@ Zig is pinned to 0.17.1 (`build.zig.zon`, the flake, CI). Use the `std.Io` inter
 ## Conventions
 
 - Match the spec. Where you make a call the spec leaves open, say why in your PR description.
-- Keep public interfaces documented with `///` comments; they are what other modules code against.
+- No comments by default. Names and types should carry the meaning; add a comment only for something the code cannot say.
 - Every LLM attempt writes an `llm_call` row, including failures. Nothing logs or stores secrets; redaction runs before storage and before any model call.
 - License: MIT. Files copied from Apache-2.0 projects keep their original license header, and the copy is recorded in `THIRD_PARTY_NOTICES.md` with the upstream URL, commit, and license text.
 - Agents never merge PRs.

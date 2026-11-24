@@ -1,6 +1,3 @@
-//! The `graf` command line. Global flags come before the command:
-//! `graf [--config PATH] <command> [args...]`.
-
 const std = @import("std");
 const core = @import("core");
 const store = @import("store");

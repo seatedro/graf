@@ -1,14 +1,9 @@
-//! Eval: replays the labeled episode suite through graf, reads
-//! the resulting graph and ledger, runs the retrieval queries, and scores the release
-//! gates. Fixtures live in `evals/` at the repo root.
-
 const std = @import("std");
 const core = @import("core");
 const store = @import("store");
 const ingest = @import("ingest");
 const retrieve = @import("retrieve");
 
-/// One line of `evals/episodes.jsonl`.
 pub const EvalEpisode = struct {
     id: []const u8,
     seq: u32,
@@ -23,7 +18,6 @@ pub const EvalEpisode = struct {
     turns: []const core.Turn = &.{},
 };
 
-/// Release bar for v1: every gate must pass.
 pub const gates = struct {
     pub const entity_f1_min = 0.85;
     pub const merge_accuracy_min = 0.90;
@@ -70,7 +64,6 @@ pub const Metrics = struct {
 };
 
 pub const RunOptions = struct {
-    /// Directory holding `episodes.jsonl`, `expected.json`.
     suite_dir: []const u8 = "evals",
 };
 

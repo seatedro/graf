@@ -1,9 +1,5 @@
 const std = @import("std");
 
-/// The module graph. Each module owns one directory, `src/<name>/`, whose root file
-/// is `src/<name>/mod.zig`. A module may import only the modules named in its `deps`,
-/// so the compiler enforces the boundaries in AGENTS.md. Adding files inside a module
-/// never touches this file; adding a module is one line here.
 const modules = [_]struct { name: []const u8, deps: []const []const u8 }{
     .{ .name = "core", .deps = &.{} },
     .{ .name = "store", .deps = &.{ "core", "pg" } },
@@ -24,8 +20,6 @@ pub fn build(b: *std.Build) void {
     const pg = b.dependency("pg", .{ .target = target, .optimize = optimize }).module("pg");
     registry.put(b.allocator, "pg", pg) catch @panic("OOM");
 
-    // Integration tests run against this database and skip when it is unset. They
-    // touch external state, so they never come from the build cache.
     const test_db = b.graph.environ_map.get("GRAF_TEST_DATABASE_URL");
 
     const test_step = b.step("test", "Run every module's unit and integration tests");

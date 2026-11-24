@@ -1,37 +1,22 @@
-//! Dialect parsers: one JSONL line of a harness transcript in, zero or more
-//! normalized turns out. Thinking and reasoning blocks are dropped, every string is
-//! redacted, and tool calls go through tool-aware retention (`normalize.zig`).
-//!
-//! A model step (assistant text plus the tool calls it made) is held back until its
-//! tool results arrive, so one turn carries each call with its result. The step is
-//! emitted when the next step or a user message starts, when the harness marks the
-//! turn complete, or when the caller flushes it.
-
 const std = @import("std");
 const core = @import("core");
 const normalize = @import("normalize.zig");
 const Allocator = std.mem.Allocator;
 const Value = std.json.Value;
 
-/// Bytes kept from one user or assistant message (head and tail). Large pastes would
-/// otherwise turn a single turn into an oversized episode.
 pub const text_budget: usize = 12_000;
 
-/// Session metadata a transcript reveals as it is read.
 pub const Meta = struct {
     session_id: ?[]const u8 = null,
     cwd: ?[]const u8 = null,
     model: ?[]const u8 = null,
 };
 
-/// A normalized turn and the byte offset of the first transcript line it came from.
 pub const Item = struct {
     turn: core.Turn,
     start: u64,
 };
 
-/// Where a parser writes: turns go to `out`, retained strings to `arena`, and
-/// throwaway parse state to `scratch` (reset by the caller after every line).
 pub const Sink = struct {
     arena: Allocator,
     scratch: Allocator,
@@ -40,7 +25,6 @@ pub const Sink = struct {
 
 pub const Parser = struct {
     harness: core.Harness,
-    /// Owns the strings in `meta`; lives as long as the parser.
     keep: Allocator,
     meta: Meta = .{},
     pending: ?Pending = null,
@@ -71,8 +55,6 @@ pub const Parser = struct {
         return .{ .harness = harness, .keep = keep };
     }
 
-    /// Parses one line (without its newline) that starts at byte `start` of the
-    /// transcript. Lines that are not JSON objects are counted and skipped.
     pub fn feed(p: *Parser, sink: Sink, line: []const u8, start: u64) Allocator.Error!void {
         p.lines += 1;
         const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -97,29 +79,24 @@ pub const Parser = struct {
         }
     }
 
-    /// Emits the held-back step if every tool call in it has its result.
     pub fn flushResolved(p: *Parser, sink: Sink) Allocator.Error!void {
         const pending = p.pending orelse return;
         for (pending.calls.items) |c| if (c.result == null) return;
         try p.emitPending(sink);
     }
 
-    /// Emits the held-back step even if some calls never got results.
     pub fn flushAll(p: *Parser, sink: Sink) Allocator.Error!void {
         try p.emitPending(sink);
     }
 
-    /// Offset of the first line of the held-back step, if any.
     pub fn pendingStart(p: *const Parser) ?u64 {
         return if (p.pending) |pending| pending.start else null;
     }
 
-    /// Timestamp of the held-back step, if any.
     pub fn pendingTs(p: *const Parser) ?core.Micros {
         return if (p.pending) |pending| pending.ts else null;
     }
 
-    /// Copies the held-back step into `arena` so the caller can free the old one.
     pub fn rehome(p: *Parser, arena: Allocator) Allocator.Error!void {
         const old = p.pending orelse return;
         var fresh: Pending = .{ .start = old.start, .ts = old.ts, .got_result = old.got_result };
@@ -153,8 +130,6 @@ pub const Parser = struct {
         if (slot.*) |current| if (std.mem.eql(u8, current, v.string)) return;
         slot.* = try p.keep.dupe(u8, v.string);
     }
-
-    // ---- building blocks shared by the dialects ----
 
     fn emitPending(p: *Parser, sink: Sink) Allocator.Error!void {
         const pending = p.pending orelse return;
@@ -202,7 +177,6 @@ pub const Parser = struct {
         });
     }
 
-    /// A call whose outcome is already known (or never reported).
     fn toolCallDone(p: *Parser, ctx: Ctx, raw: normalize.RawTool, result: ?[]const u8, is_error: bool) Allocator.Error!void {
         const pending = try p.ensurePending(ctx);
         const call = try normalize.prepareCall(ctx.sink.arena, ctx.sink.scratch, raw);
@@ -222,16 +196,12 @@ pub const Parser = struct {
                 return;
             }
         }
-        // A result whose call is not held (it arrived before the window we resumed
-        // in): keep the output as a tool turn of its own.
         try p.emitPending(ctx.sink);
         const call = try normalize.prepareCall(ctx.sink.arena, ctx.sink.scratch, .{ .name = name_hint orelse "tool" });
         const calls = try ctx.sink.arena.alloc(core.ToolCall, 1);
         calls[0] = try normalize.finishCall(ctx.sink.arena, ctx.sink.scratch, call, text, is_error);
         try ctx.sink.out.append(ctx.sink.arena, .{ .turn = .{ .role = .tool, .text = "", .tool_calls = calls, .ts = ctx.ts }, .start = ctx.start });
     }
-
-    // ---- Claude Code: ~/.claude/projects/<dir>/<session>.jsonl ----
 
     fn claudeCode(p: *Parser, sink: Sink, root: Value, start: u64) Allocator.Error!void {
         try p.setMeta(.cwd, root.object.get("cwd"));
@@ -275,8 +245,6 @@ pub const Parser = struct {
         }
     }
 
-    // ---- Codex: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl ----
-
     fn codex(p: *Parser, sink: Sink, root: Value, start: u64) Allocator.Error!void {
         const ctx: Ctx = .{ .sink = sink, .start = start, .ts = normalize.jsonTimestamp(root.object.get("timestamp")) };
         if (obj(root, "payload")) |payload| {
@@ -292,7 +260,6 @@ pub const Parser = struct {
             }
             return;
         }
-        // Older rollouts: a bare header object, then bare response items.
         if (root.object.get("record_type") != null) return;
         if (str(root, "type") == null) {
             try p.setMeta(.session_id, root.object.get("id"));
@@ -331,7 +298,6 @@ pub const Parser = struct {
             switch (output) {
                 .string => |s| {
                     text = s;
-                    // Some tools wrap their output as {"output": ..., "metadata": {"exit_code": n}}.
                     if (s.len > 0 and s[0] == '{') {
                         if (std.json.parseFromSliceLeaky(Value, scratch, s, .{})) |wrapped| {
                             if (str(wrapped, "output")) |inner| text = inner;
@@ -350,8 +316,6 @@ pub const Parser = struct {
             try p.toolResult(ctx, str(item, "call_id") orelse "", null, text, is_error);
         }
     }
-
-    // ---- pi: ~/.pi/agent/sessions/--<path>--/<ts>_<id>.jsonl ----
 
     fn pi(p: *Parser, sink: Sink, root: Value, start: u64) Allocator.Error!void {
         const kind = str(root, "type") orelse return;
@@ -384,7 +348,6 @@ pub const Parser = struct {
             const text = try textOf(sink.scratch, content) orelse "";
             try p.toolResult(ctx, str(message, "toolCallId") orelse "", str(message, "toolName"), text, boolField(message, "isError"));
         } else if (std.mem.eql(u8, role, "bashExecution")) {
-            // A command the user ran from pi's prompt.
             try p.emitPending(sink);
             const command = str(message, "command") orelse "";
             const output = str(message, "output") orelse "";
@@ -395,8 +358,6 @@ pub const Parser = struct {
             try sink.out.append(sink.arena, .{ .turn = .{ .role = .tool, .text = "", .tool_calls = calls, .ts = ts }, .start = start });
         }
     }
-
-    // ---- fx: ~/.fx/sessions/<id>/events.jsonl ----
 
     fn fx(p: *Parser, sink: Sink, root: Value, start: u64) Allocator.Error!void {
         const ctx: Ctx = .{ .sink = sink, .start = start, .ts = normalize.jsonTimestamp(root.object.get("timestamp_ms")) };
@@ -470,7 +431,6 @@ fn fxRawTool(scratch: Allocator, call: Value, name_key: []const u8) Allocator.Er
     return .{ .name = str(call, name_key) orelse "tool", .args = parsed, .args_text = arguments };
 }
 
-/// Claude Code writes slash-command bookkeeping and reminders as user text.
 fn isHarnessNoise(text: []const u8) bool {
     const t = std.mem.trimStart(u8, text, " \t\r\n");
     const prefixes = [_][]const u8{ "<command-name>", "<command-message>", "<command-args>", "<local-command-stdout>", "<local-command-stderr>", "<system-reminder>", "Caveat: The messages below were generated by the user while running local commands" };
@@ -478,7 +438,6 @@ fn isHarnessNoise(text: []const u8) bool {
     return false;
 }
 
-/// Codex records its environment and instruction preamble as user messages.
 fn isCodexInjected(text: []const u8) bool {
     const t = std.mem.trimStart(u8, text, " \t\r\n");
     const prefixes = [_][]const u8{ "<environment_context>", "<user_instructions>", "<permissions instructions>", "# AGENTS.md instructions", "<user_shell_command>", "<turn_aborted>" };
@@ -515,8 +474,6 @@ fn isType(block: Value, kind: []const u8) bool {
     return std.mem.eql(u8, t, kind);
 }
 
-/// The text of a content value: a string, or the text blocks of an array joined by
-/// newlines (`text`, `input_text` and `output_text` blocks; images are skipped).
 fn textOf(scratch: Allocator, content: ?Value) Allocator.Error!?[]const u8 {
     const v = content orelse return null;
     switch (v) {

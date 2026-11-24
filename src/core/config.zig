@@ -1,19 +1,11 @@
-//! Runtime configuration: `~/.config/graf/config.toml` plus generic `GRAF_*`
-//! environment variables. Precedence, lowest to highest: built-in
-//! defaults, the config file, environment variables, then command-line flags (applied
-//! by the caller). Provider URLs, keys, cost headers and model ids live only here,
-//! never in source.
-
 const std = @import("std");
 const toml = @import("toml.zig");
 const Allocator = std.mem.Allocator;
 const Environ = std.process.Environ;
 
-/// Wire protocol for structured completions.
 pub const Route = enum { @"openai-responses", @"anthropic-messages", @"openai-chat" };
 
 pub const Config = struct {
-    /// Graph name; the hard tenancy boundary.
     graph: []const u8 = "default",
     database: Database = .{},
     llm: Llm = .{},
@@ -25,7 +17,6 @@ pub const Config = struct {
     capture: Capture = .{},
 
     pub const Database = struct {
-        /// `postgres://user:pass@host:port/db`. Empty means graf manages a local cluster.
         url: []const u8 = "",
     };
 
@@ -33,30 +24,20 @@ pub const Config = struct {
         base_url: []const u8 = "https://api.openai.com/v1",
         api_key: []const u8 = "",
         route: Route = .@"openai-responses",
-        /// Required for ingestion; there is deliberately no built-in default model.
         model: []const u8 = "",
-        /// Response header carrying the exact USD cost of a call, if the endpoint sends
-        /// one. Empty falls back to `usage.cost`, then to a local rate table.
         cost_header: []const u8 = "",
         timeout_ms: u32 = 120_000,
-        /// Use streaming responses instead of the non-streaming default.
         stream: bool = false,
     };
 
     pub const Embed = struct {
-        /// Empty inherits `llm.base_url`.
         base_url: []const u8 = "",
-        /// Empty inherits `llm.api_key`.
         api_key: []const u8 = "",
         model: []const u8 = "text-embedding-3-large",
-        /// Fixed by the schema (`halfvec(512)`); changing it needs a migration.
         dimensions: u32 = 512,
-        /// Empty inherits `llm.cost_header`.
         cost_header: []const u8 = "",
     };
 
-    /// Optional typed decision-model backend for resolution and reranking.
-    /// Disabled while `base_url` is empty.
     pub const Decision = struct {
         base_url: []const u8 = "",
         api_key: []const u8 = "",
@@ -79,9 +60,7 @@ pub const Config = struct {
 
     pub const Serve = struct {
         listen: []const u8 = "127.0.0.1:7420",
-        /// Empty means `$XDG_STATE_HOME/graf/graf.sock` (or `~/.local/state/graf/graf.sock`).
         socket: []const u8 = "",
-        /// Bearer token required on HTTP requests when set (hub mode).
         token: []const u8 = "",
     };
 
@@ -95,8 +74,6 @@ pub const Config = struct {
     }
 };
 
-/// Every environment variable graf reads, as `{ name, table, key }`. An empty table
-/// means a top-level key.
 pub const env_vars = [_]struct { []const u8, []const u8, []const u8 }{
     .{ "GRAF_GRAPH", "", "graph" },
     .{ "GRAF_DATABASE_URL", "database", "url" },
@@ -110,26 +87,21 @@ pub const env_vars = [_]struct { []const u8, []const u8, []const u8 }{
     .{ "GRAF_DECISION_API_KEY", "decision", "api_key" },
 };
 
-/// Overrides the config file path.
 pub const config_path_env = "GRAF_CONFIG";
 
 pub const LoadOptions = struct {
-    /// Explicit path (e.g. `--config`). A missing explicit file is an error; a missing
-    /// default file just means defaults.
     path: ?[]const u8 = null,
     diag: ?*toml.Diagnostic = null,
 };
 
 pub const Loaded = struct {
     config: Config,
-    /// The file consulted, whether or not it existed.
     path: ?[]const u8,
     file_found: bool,
 };
 
 pub const LoadError = error{ InvalidConfig, ConfigNotFound, OutOfMemory } || std.Io.Dir.ReadFileAllocError;
 
-/// Loads the effective config. Everything returned is allocated in `arena`.
 pub fn load(arena: Allocator, io: std.Io, env: *const Environ.Map, opts: LoadOptions) LoadError!Loaded {
     var local_diag: toml.Diagnostic = .{};
     const diag = opts.diag orelse &local_diag;
@@ -152,7 +124,6 @@ pub fn load(arena: Allocator, io: std.Io, env: *const Environ.Map, opts: LoadOpt
     return .{ .config = cfg, .path = path, .file_found = found };
 }
 
-/// Parses a config document and applies defaults and inheritance, without env.
 pub fn parse(arena: Allocator, src: []const u8, diag: *toml.Diagnostic) toml.Error!Config {
     var cfg: Config = .{};
     try toml.parseInto(Config, arena, src, &cfg, diag);
@@ -160,7 +131,6 @@ pub fn parse(arena: Allocator, src: []const u8, diag: *toml.Diagnostic) toml.Err
     return cfg;
 }
 
-/// `$XDG_CONFIG_HOME/graf/config.toml`, else `$HOME/.config/graf/config.toml`.
 pub fn defaultPath(arena: Allocator, env: *const Environ.Map) Allocator.Error!?[]const u8 {
     if (env.get("XDG_CONFIG_HOME")) |xdg| if (xdg.len > 0) return try std.fs.path.join(arena, &.{ xdg, "graf", "config.toml" });
     if (env.get("HOME")) |home| if (home.len > 0) return try std.fs.path.join(arena, &.{ home, ".config", "graf", "config.toml" });
@@ -185,7 +155,6 @@ fn resolveInheritance(cfg: *Config) void {
     if (cfg.embed.cost_header.len == 0) cfg.embed.cost_header = cfg.llm.cost_header;
 }
 
-/// Writes the effective config as TOML with secrets masked, for `graf config`.
 pub fn writeMasked(cfg: *const Config, w: *std.Io.Writer) std.Io.Writer.Error!void {
     try writeTable(Config, cfg, "", w);
 }
@@ -226,7 +195,6 @@ fn isSecret(comptime name: []const u8) bool {
     return std.mem.eql(u8, name, "api_key") or std.mem.eql(u8, name, "token");
 }
 
-/// Formats a connection URL with any password replaced by `***`.
 pub const MaskedUrl = struct {
     url: []const u8,
 

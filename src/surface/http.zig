@@ -1,6 +1,3 @@
-//! `graf serve`: the long-running daemon. Listens on `serve.listen` and the Unix
-//! socket, serves `/v1/*` and `/mcp`, and supervises ingestion and capture.
-
 const std = @import("std");
 const core = @import("core");
 

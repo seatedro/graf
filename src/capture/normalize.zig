@@ -1,24 +1,12 @@
-//! The normalizer shared by every dialect: tool-aware retention, timestamp parsing,
-//! token estimates, and deep copies of turns.
-//!
-//! Retention keeps what extraction needs and drops what lives elsewhere. A file read
-//! collapses to `path:first-last` (the source is in git); command, search, git and
-//! benchmark output keeps its head and tail so root causes and result tables survive.
-
 const std = @import("std");
 const core = @import("core");
 const redactor = @import("redact.zig");
 const Allocator = std.mem.Allocator;
 
-/// Bytes of tool output kept, split between head and tail.
 pub const result_budget: usize = 1500;
-/// Bytes of tool arguments kept, split between head and tail.
 pub const args_budget: usize = 600;
-/// Bytes kept from a failed file read's error message.
 pub const read_error_budget: usize = 300;
 
-/// Keeps the first and last `budget / 2` bytes of `text` with an elision marker
-/// between them, never splitting a UTF-8 sequence. Returns `text` when it fits.
 pub fn headTail(arena: Allocator, text: []const u8, budget: usize) Allocator.Error![]const u8 {
     if (text.len <= budget) return text;
     const half = budget / 2;
@@ -37,32 +25,23 @@ fn isContinuation(byte: u8) bool {
     return byte & 0xC0 == 0x80;
 }
 
-/// Redacts `text` and copies the result into `arena`, so nothing retained points into
-/// a parser's scratch memory.
 pub fn clean(arena: Allocator, scratch: Allocator, text: []const u8) Allocator.Error![]const u8 {
     return arena.dupe(u8, try redactor.redact(scratch, text));
 }
 
-/// Redacts, then keeps head and tail within `budget`, copied into `arena`. Redaction
-/// runs on the whole text first so a cut can never leave half a secret behind.
 pub fn cleanBounded(arena: Allocator, scratch: Allocator, text: []const u8, budget: usize) Allocator.Error![]const u8 {
     const redacted = try redactor.redact(scratch, text);
     return arena.dupe(u8, try headTail(scratch, redacted, budget));
 }
 
-/// A tool invocation as a dialect sees it, before retention.
 pub const RawTool = struct {
     name: []const u8,
-    /// Parsed arguments, when the harness logged them as JSON.
     args: ?std.json.Value = null,
-    /// Arguments logged as text (a JSON string that did not parse, a patch, a command).
     args_text: ?[]const u8 = null,
 };
 
-/// What retention needs to remember about a call until its result arrives.
 pub const Call = struct {
     name: []const u8,
-    /// Set for file reads; the result only contributes its line count.
     read: ?Read = null,
     args_preview: []const u8 = "",
 
@@ -73,7 +52,6 @@ pub const Call = struct {
     };
 };
 
-/// Applies retention to a call's arguments. Strings are copied into `arena`.
 pub fn prepareCall(arena: Allocator, scratch: Allocator, raw: RawTool) Allocator.Error!Call {
     const name = try arena.dupe(u8, raw.name);
     if (isReadTool(raw.name)) {
@@ -102,7 +80,6 @@ pub fn prepareCall(arena: Allocator, scratch: Allocator, raw: RawTool) Allocator
     return .{ .name = name, .args_preview = try cleanBounded(arena, scratch, text, args_budget) };
 }
 
-/// Builds the normalized tool call once the result (if any) is known.
 pub fn finishCall(arena: Allocator, scratch: Allocator, call: Call, result: ?[]const u8, is_error: bool) Allocator.Error!core.ToolCall {
     if (call.read) |read| {
         const first = read.offset orelse 1;
@@ -129,7 +106,6 @@ pub fn finishCall(arena: Allocator, scratch: Allocator, call: Call, result: ?[]c
     };
 }
 
-/// Lines in a read result.
 pub fn countLines(text: []const u8) u64 {
     if (text.len == 0) return 0;
     var n: u64 = std.mem.count(u8, text, "\n");
@@ -139,7 +115,6 @@ pub fn countLines(text: []const u8) u64 {
 
 const read_tools = [_][]const u8{ "read", "read_file", "readfile", "view", "view_file", "open_file" };
 
-/// True for tools whose whole job is to return a file's contents.
 pub fn isReadTool(name: []const u8) bool {
     for (read_tools) |t| if (std.ascii.eqlIgnoreCase(name, t)) return true;
     return false;
@@ -164,8 +139,6 @@ fn intField(args: std.json.Value, keys: []const []const u8) ?u64 {
     return null;
 }
 
-/// The shell command a call runs, for harnesses whose tools take one: a `command` or
-/// `cmd` string, or an argv array (`["bash", "-lc", "<script>"]` yields the script).
 pub fn commandText(raw: RawTool) ?[]const u8 {
     const args = raw.args orelse return null;
     if (args != .object) return null;
@@ -193,9 +166,6 @@ fn isShell(argv0: []const u8) bool {
 
 pub const ShellRead = struct { path: []const u8, first: ?u64 = null, last: ?u64 = null };
 
-/// Recognizes single-file reads written as shell commands: `cat FILE`, `nl -ba FILE`,
-/// and `sed -n 'A,Bp' FILE`. Anything with pipes, redirects or several files is not a
-/// plain read and keeps its output.
 pub fn shellRead(command: []const u8) ?ShellRead {
     const cmd = std.mem.trim(u8, command, " \t\r\n");
     if (std.mem.indexOfAny(u8, cmd, "|;&<>`$\n") != null) return null;
@@ -228,15 +198,12 @@ fn unquote(s: []const u8) []const u8 {
     return s;
 }
 
-/// Token estimate used for segmentation: `ceil(bytes / 3.8)` over everything the
-/// extraction prompt will carry for this turn.
 pub fn estimateTokens(turn: core.Turn) usize {
     var bytes: usize = turn.text.len;
     for (turn.tool_calls) |tc| bytes += tc.name.len + tc.args_preview.len + tc.result_preview.len + 8;
     return (bytes * 10 + 37) / 38;
 }
 
-/// Deep-copies a turn into `arena`.
 pub fn dupeTurn(arena: Allocator, turn: core.Turn) Allocator.Error!core.Turn {
     const calls = try arena.alloc(core.ToolCall, turn.tool_calls.len);
     for (turn.tool_calls, calls) |src, *dst| dst.* = .{
@@ -247,8 +214,6 @@ pub fn dupeTurn(arena: Allocator, turn: core.Turn) Allocator.Error!core.Turn {
     return .{ .role = turn.role, .text = try arena.dupe(u8, turn.text), .tool_calls = calls, .ts = turn.ts };
 }
 
-/// Parses an RFC 3339 timestamp (`2026-11-20T17:00:00.123Z`, `...+02:00`) into
-/// microseconds since the epoch. Returns null for anything else.
 pub fn parseTimestamp(s: []const u8) ?core.Micros {
     if (s.len < 19 or s[4] != '-' or s[7] != '-' or (s[10] != 'T' and s[10] != ' ' and s[10] != 't') or s[13] != ':' or s[16] != ':') return null;
     const year = std.fmt.parseInt(i64, s[0..4], 10) catch return null;
@@ -300,7 +265,6 @@ fn daysFromCivil(year: i64, month: u8, day: u8) i64 {
     return era * 146097 + doe - 719468;
 }
 
-/// Microseconds from a JSON number of milliseconds or an RFC 3339 string.
 pub fn jsonTimestamp(v: ?std.json.Value) ?core.Micros {
     const value = v orelse return null;
     return switch (value) {

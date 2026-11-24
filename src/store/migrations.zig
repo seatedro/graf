@@ -1,7 +1,3 @@
-//! Embedded, append-only SQL migrations. Each migration runs in one
-//! implicit transaction together with its `schema_migrations` row, so a failed
-//! migration leaves no partial schema behind.
-
 const std = @import("std");
 const pg = @import("pg");
 
@@ -11,7 +7,6 @@ pub const Migration = struct {
     sql: []const u8,
 };
 
-/// Keep sorted by version. Version ranges are reserved per module in AGENTS.md.
 pub const all = [_]Migration{
     .{ .version = 1, .name = "init", .sql = @embedFile("migrations/0001_init.sql") },
 };
@@ -57,7 +52,6 @@ pub fn run(allocator: std.mem.Allocator, pool: *pg.Pool) !Report {
     return .{ .applied = applied, .total = all.len };
 }
 
-/// Simple-query execution: allows multi-statement scripts and logs server errors.
 fn exec(conn: *pg.Conn, sql: []const u8) !void {
     conn.execIgnoringState(sql) catch |err| {
         if (err == error.PG) if (conn.err) |pge| std.log.err("postgres: {s}", .{pge.message});
