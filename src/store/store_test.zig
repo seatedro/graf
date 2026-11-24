@@ -545,3 +545,18 @@ test "the ledger records every attempt and sums spend from a point in time" {
     try testing.expectEqual(@as(i64, 3), try scalarI64(&s, "SELECT count(*) FROM llm_call WHERE graph_id = $1", .{@as([]const u8, &g.bytes)}));
     try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM llm_call WHERE graph_id = $1 AND outcome = 'error' AND http_status = 429", .{@as([]const u8, &g.bytes)}));
 }
+
+test "the ledger fills a missing graph id from the episode, then from the bound graph" {
+    var s = try store.testing.open();
+    defer s.close();
+    const g = try store.testing.freshGraph(&s);
+    const gid: []const u8 = &g.bytes;
+    const ep = try enqueueNew(&s, g, note("ledger", "ledger episode", 1_000));
+
+    const ledger = s.ledger();
+    try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .episode_id = ep, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = nowMicros(s.io) });
+    try testing.expectError(error.PG, ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = nowMicros(s.io) }));
+    _ = s.sink(g);
+    try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = nowMicros(s.io) });
+    try testing.expectEqual(@as(i64, 2), try scalarI64(&s, "SELECT count(*) FROM llm_call WHERE graph_id = $1", .{gid}));
+}

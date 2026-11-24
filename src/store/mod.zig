@@ -21,7 +21,7 @@ pub const Store = struct {
     io: std.Io,
     pool: *pg.Pool,
     lease_ms: u32,
-    sink_graph: Id = .nil,
+    default_graph: Id = .nil,
 
     pub const OpenOptions = struct {
         pool_size: u16 = 4,
@@ -89,6 +89,9 @@ pub const Store = struct {
     pub fn recordCall(s: *Store, call: *const core.LlmCall) !void {
         var id_buf: [16]u8 = call.id.bytes;
         var graph_buf: [16]u8 = call.graph_id.bytes;
+        const graph: ?[]const u8 = if (call.graph_id.eql(.nil)) null else &graph_buf;
+        var fallback_buf: [16]u8 = s.default_graph.bytes;
+        const fallback: ?[]const u8 = if (s.default_graph.eql(.nil)) null else &fallback_buf;
         var ep_buf: [16]u8 = undefined;
         const episode: ?[]const u8 = if (call.episode_id) |e| blk: {
             ep_buf = e.bytes;
@@ -98,19 +101,21 @@ pub const Store = struct {
             \\INSERT INTO llm_call (id, graph_id, episode_id, purpose, route, model, attempt, outcome,
             \\  error_class, http_status, input_tokens, output_tokens, cache_read_tokens,
             \\  cache_write_tokens, cost_usd, cost_status, latency_ms, started_at)
-            \\VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            \\VALUES ($1, COALESCE($2, (SELECT graph_id FROM episode WHERE id = $3), $19), $3, $4, $5, $6, $7, $8,
+            \\  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         , .{
-            @as([]const u8, &id_buf),   @as([]const u8, &graph_buf),    episode,
+            @as([]const u8, &id_buf),   graph,                          episode,
             @tagName(call.purpose),     call.route,                     call.model,
             call.attempt,               if (call.ok) "ok" else "error", call.error_class,
             call.http_status,           call.input_tokens,              call.output_tokens,
             call.cache_read_tokens,     call.cache_write_tokens,        call.cost_usd,
             @tagName(call.cost_status), call.latency_ms,                call.started_at,
+            fallback,
         });
     }
 
     pub fn sink(s: *Store, graph_id: Id) core.EpisodeSink {
-        s.sink_graph = graph_id;
+        s.default_graph = graph_id;
         return .{ .ptr = s, .vtable = &sink_vtable };
     }
 
@@ -125,12 +130,12 @@ pub const Store = struct {
 
     fn sinkEnqueue(ptr: *anyopaque, draft: *const core.EpisodeDraft) anyerror!core.EpisodeSink.Outcome {
         const s: *Store = @ptrCast(@alignCast(ptr));
-        return s.enqueue(s.sink_graph, draft);
+        return s.enqueue(s.default_graph, draft);
     }
 
     fn sinkLoadCursor(ptr: *anyopaque, arena: std.mem.Allocator, source: *const core.SourceKey) anyerror!?[]const u8 {
         const s: *Store = @ptrCast(@alignCast(ptr));
-        return s.loadCursor(arena, s.sink_graph, source);
+        return s.loadCursor(arena, s.default_graph, source);
     }
 
     const ledger_vtable: core.LlmLedger.VTable = .{
