@@ -17,13 +17,13 @@ pub const RunOptions = struct {
     graph: ?[]const u8 = null,
     serve_bin: ?[]const u8 = null,
     environ: ?*const std.process.Environ.Map = null,
-    crash_episode: []const u8 = "ep06",
-    episode_timeout_ms: u32 = 300_000,
+    crash_entry: []const u8 = "e06",
+    entry_timeout_ms: u32 = 300_000,
     poll_ms: u32 = 50,
     worker: []const u8 = "graf-eval",
 };
 
-pub fn toDraft(ep: mod.EvalEpisode) !core.EpisodeDraft {
+pub fn toDraft(ep: mod.EvalEntry) !core.EntryDraft {
     return .{
         .source = .{
             .harness = ep.harness,
@@ -35,13 +35,13 @@ pub fn toDraft(ep: mod.EvalEpisode) !core.EpisodeDraft {
         .seq_in_source = @intCast(ep.seq),
         .kind = ep.kind,
         .project = ep.project,
-        .asserted_by = ep.asserted_by,
+        .author = ep.author,
         .body = .{ .turns = ep.turns },
         .reference_time = try time.parseRfc3339(ep.reference_time),
     };
 }
 
-fn isTerminal(s: core.types.EpisodeStatus) bool {
+fn isTerminal(s: core.types.EntryStatus) bool {
     return switch (s) {
         .committed, .skipped, .dead, .split => true,
         else => false,
@@ -68,12 +68,12 @@ const Notes = struct {
 const Drive = enum { finished, unavailable, timed_out };
 
 fn drive(io: std.Io, s: *store.Store, pipeline: *ingest.Pipeline, graph_id: core.Id, id: core.Id, opts: RunOptions, notes: *Notes, eval_id: []const u8) !Drive {
-    const deadline = nowMs(io) + opts.episode_timeout_ms;
+    const deadline = nowMs(io) + opts.entry_timeout_ms;
     while (true) {
-        const status = (try pgload.episodeStatus(s.pool, id)) orelse return error.EpisodeMissing;
+        const status = (try pgload.entryStatus(s.pool, id)) orelse return error.EntryMissing;
         if (isTerminal(status)) return .finished;
         if (nowMs(io) > deadline) {
-            try notes.add("ingest: {s} still {s} after {d} ms", .{ eval_id, @tagName(status), opts.episode_timeout_ms });
+            try notes.add("ingest: {s} still {s} after {d} ms", .{ eval_id, @tagName(status), opts.entry_timeout_ms });
             return .timed_out;
         }
         var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -115,10 +115,10 @@ pub fn run(arena: Allocator, io: std.Io, config: *const core.Config, opts: RunOp
     defer client.deinit();
     var pipeline: ingest.Pipeline = .{ .store = &s, .client = &client, .config = config, .graph_id = graph_id };
 
-    var links: std.ArrayList(pgload.EpisodeLink) = .empty;
+    var links: std.ArrayList(pgload.EntryLink) = .empty;
     var ingesting = true;
     var enqueued = true;
-    for (suite.episodes) |ep| {
+    for (suite.entries) |ep| {
         const draft = try toDraft(ep);
         const outcome = s.enqueue(graph_id, &draft) catch |err| {
             if (err != error.NotImplemented) return err;
@@ -129,7 +129,7 @@ pub fn run(arena: Allocator, io: std.Io, config: *const core.Config, opts: RunOp
         const id = switch (outcome) {
             .queued => |id| id,
             .duplicate => {
-                try notes.add("replay: {s} was a duplicate of an earlier episode", .{ep.id});
+                try notes.add("replay: {s} was a duplicate of an earlier entry", .{ep.id});
                 continue;
             },
         };
@@ -139,7 +139,7 @@ pub fn run(arena: Allocator, io: std.Io, config: *const core.Config, opts: RunOp
             .finished, .timed_out => {},
             .unavailable => {
                 ingesting = false;
-                try notes.add("ingest: the pipeline is not implemented yet; episodes stay queued", .{});
+                try notes.add("ingest: the pipeline is not implemented yet; entries stay queued", .{});
             },
         }
     }
@@ -222,11 +222,11 @@ fn crashResume(arena: Allocator, io: std.Io, s: *store.Store, config: *const cor
         try notes.add("crash-resume: no serve binary given (--serve-bin); unmeasured", .{});
         return null;
     };
-    const index = suite.episodeIndex(opts.crash_episode) orelse {
-        try notes.add("crash-resume: unknown episode {s}", .{opts.crash_episode});
+    const index = suite.entryIndex(opts.crash_entry) orelse {
+        try notes.add("crash-resume: unknown entry {s}", .{opts.crash_entry});
         return null;
     };
-    const ep = suite.episodes[index];
+    const ep = suite.entries[index];
     const graph = try std.fmt.allocPrint(arena, "{s}-crash", .{base_graph});
     const graph_id = s.ensureGraph(graph) catch |err| {
         if (err != error.NotImplemented) return err;
@@ -249,9 +249,9 @@ fn crashResume(arena: Allocator, io: std.Io, s: *store.Store, config: *const cor
 
     var env = try serveEnv(arena, config, opts, graph);
     var first = try spawnServe(io, bin, &env);
-    const deadline = nowMs(io) + opts.episode_timeout_ms;
+    const deadline = nowMs(io) + opts.entry_timeout_ms;
     while (true) {
-        const status = (try pgload.episodeStatus(s.pool, id)) orelse return error.EpisodeMissing;
+        const status = (try pgload.entryStatus(s.pool, id)) orelse return error.EntryMissing;
         if (status == .extracted) break;
         if (isTerminal(status) or nowMs(io) > deadline) {
             stop(io, &first, false);
@@ -265,10 +265,10 @@ fn crashResume(arena: Allocator, io: std.Io, s: *store.Store, config: *const cor
 
     var second = try spawnServe(io, bin, &env);
     defer stop(io, &second, false);
-    const restart_deadline = nowMs(io) + 2 * @as(i64, opts.episode_timeout_ms);
-    var final: core.types.EpisodeStatus = .extracted;
+    const restart_deadline = nowMs(io) + 2 * @as(i64, opts.entry_timeout_ms);
+    var final: core.types.EntryStatus = .extracted;
     while (nowMs(io) <= restart_deadline) {
-        final = (try pgload.episodeStatus(s.pool, id)) orelse return error.EpisodeMissing;
+        final = (try pgload.entryStatus(s.pool, id)) orelse return error.EntryMissing;
         if (isTerminal(final)) break;
         sleepMs(io, opts.poll_ms);
     }
@@ -278,11 +278,11 @@ fn crashResume(arena: Allocator, io: std.Io, s: *store.Store, config: *const cor
     return .{ .trials = 1, .passed = if (passed) 1 else 0 };
 }
 
-test "episodes convert to drafts with their source key and reference time" {
+test "entries convert to drafts with their source key and reference time" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const suite = try fixtures.loadShippedSuite(arena_state.allocator(), std.testing.io);
-    const draft = try toDraft(suite.episodes[1]);
+    const draft = try toDraft(suite.entries[1]);
     try std.testing.expectEqual(core.Harness.capy, draft.source.?.harness);
     try std.testing.expectEqualStrings("capy-thread-0012", draft.source.?.external_id);
     try std.testing.expectEqualStrings("github.com/seatedro/graf", draft.project.?);

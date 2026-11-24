@@ -14,7 +14,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
     const a = arena_state.allocator();
 
     const gid: []const u8 = &lease.graph_id.bytes;
-    const eid: []const u8 = &lease.episode_id.bytes;
+    const eid: []const u8 = &lease.entry_id.bytes;
 
     const conn = try s.pool.acquire();
     defer conn.release();
@@ -25,7 +25,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
     _ = try conn.exec("SELECT pg_advisory_xact_lock(hashtextextended('graf:' || $1::uuid::text, 0))", .{gid});
 
     const fenced = try conn.exec(
-        "UPDATE episode SET status = 'committing' WHERE id = $1 AND graph_id = $2 AND lease_token = $3 AND status = 'staged'",
+        "UPDATE entry SET status = 'committing' WHERE id = $1 AND graph_id = $2 AND lease_token = $3 AND status = 'staged'",
         .{ eid, gid, lease.token },
     );
     if ((fenced orelse 0) == 0) {
@@ -56,10 +56,10 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
     for (cs.merges) |*m| try applyMerge(s, a, conn, gid, seq, m, &touched_entities, &touched_facts);
     try insertFacts(a, conn, gid, seq, commit_ts, cs.new_facts, &touched_facts);
 
-    if (cs.reaffirmations.len != 0) {
-        const ids = try a.alloc([]const u8, cs.reaffirmations.len);
-        const conf = try a.alloc(f32, cs.reaffirmations.len);
-        for (cs.reaffirmations, ids, conf) |*r, *id, *c| {
+    if (cs.restatements.len != 0) {
+        const ids = try a.alloc([]const u8, cs.restatements.len);
+        const conf = try a.alloc(f32, cs.restatements.len);
+        for (cs.restatements, ids, conf) |*r, *id, *c| {
             id.* = &r.fact_id.bytes;
             c.* = r.confidence;
         }
@@ -109,43 +109,43 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
             by.* = if (r.ended_by) |*e| &e.bytes else null;
         }
         const applied = try collectIds(a, conn,
-            \\UPDATE fact f SET sys = tstzrange(lower(f.sys), $2), end_kind = t.end_kind, ended_by = t.ended_by
+            \\UPDATE fact f SET known = tstzrange(lower(f.known), $2), end_kind = t.end_kind, ended_by = t.ended_by
             \\FROM unnest($3::uuid[], $4::text[], $5::uuid[]) AS t(id, end_kind, ended_by)
-            \\WHERE f.id = t.id AND f.graph_id = $1 AND upper_inf(f.sys)
+            \\WHERE f.id = t.id AND f.graph_id = $1 AND upper_inf(f.known)
             \\RETURNING f.id
         , .{ gid, commit_ts, ids, kinds, ended_by });
         try touched_facts.appendSlice(a, applied);
     }
 
-    if (cs.provenance.len != 0) {
-        const ids = try a.alloc([]const u8, cs.provenance.len);
-        const roles = try a.alloc([]const u8, cs.provenance.len);
-        const quotes = try a.alloc(?[]const u8, cs.provenance.len);
-        for (cs.provenance, ids, roles, quotes) |*p, *id, *role, *q| {
+    if (cs.evidence.len != 0) {
+        const ids = try a.alloc([]const u8, cs.evidence.len);
+        const evidence_kinds = try a.alloc([]const u8, cs.evidence.len);
+        const quotes = try a.alloc(?[]const u8, cs.evidence.len);
+        for (cs.evidence, ids, evidence_kinds, quotes) |*p, *id, *kind, *q| {
             id.* = &p.fact_id.bytes;
-            role.* = @tagName(p.role);
+            kind.* = @tagName(p.kind);
             q.* = p.quote;
         }
         _ = try conn.exec(
-            \\INSERT INTO fact_provenance (fact_id, episode_id, role, quote)
-            \\SELECT t.fact_id, $1, t.role, t.quote FROM unnest($2::uuid[], $3::text[], $4::text[]) AS t(fact_id, role, quote)
+            \\INSERT INTO fact_evidence (fact_id, entry_id, kind, quote)
+            \\SELECT t.fact_id, $1, t.kind, t.quote FROM unnest($2::uuid[], $3::text[], $4::text[]) AS t(fact_id, kind, quote)
             \\ON CONFLICT DO NOTHING
-        , .{ eid, ids, roles, quotes });
+        , .{ eid, ids, evidence_kinds, quotes });
     }
 
     if (cs.mentions.len != 0) {
         const ids = try a.alloc([]const u8, cs.mentions.len);
         for (cs.mentions, ids) |*m, *id| id.* = &m.bytes;
         _ = try conn.exec(
-            \\INSERT INTO entity_mention (entity_id, episode_id)
+            \\INSERT INTO entity_mention (entity_id, entry_id)
             \\SELECT DISTINCT t.id, $1::uuid FROM unnest($2::uuid[]) AS t(id)
             \\ON CONFLICT DO NOTHING
         , .{ eid, ids });
         try touched_entities.appendSlice(a, ids);
     }
 
-    if (cs.new_predicates.len != 0) {
-        const n = cs.new_predicates.len;
+    if (cs.new_relations.len != 0) {
+        const n = cs.new_relations.len;
         const names = try a.alloc([]const u8, n);
         const descriptions = try a.alloc([]const u8, n);
         const cardinalities = try a.alloc([]const u8, n);
@@ -153,7 +153,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
         const object_kinds = try a.alloc([]const u8, n);
         const statuses = try a.alloc([]const u8, n);
         const mapped = try a.alloc(?[]const u8, n);
-        for (cs.new_predicates, 0..) |p, i| {
+        for (cs.new_relations, 0..) |p, i| {
             names[i] = p.name;
             descriptions[i] = p.description;
             cardinalities[i] = @tagName(p.cardinality);
@@ -163,7 +163,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
             mapped[i] = p.mapped_to;
         }
         _ = try conn.exec(
-            \\INSERT INTO predicate (graph_id, name, description, cardinality, opposes, object_kind, status, mapped_to)
+            \\INSERT INTO relation (graph_id, name, description, cardinality, opposes, object_kind, status, mapped_to)
             \\SELECT $1, t.* FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[])
             \\  AS t(name, description, cardinality, opposes, object_kind, status, mapped_to)
             \\ON CONFLICT (graph_id, name) DO NOTHING
@@ -171,7 +171,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
     }
 
     _ = try conn.exec(
-        \\INSERT INTO commit_log (graph_id, seq, episode_id, committed_at, touched_entities, touched_facts)
+        \\INSERT INTO commit_log (graph_id, seq, entry_id, committed_at, touched_entities, touched_facts)
         \\SELECT $1, $2, $3, $4,
         \\  ARRAY(SELECT DISTINCT x FROM (
         \\    SELECT unnest($5::uuid[]) AS x
@@ -183,15 +183,15 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
     const final_json = try std.json.Stringify.valueAlloc(a, cs, .{});
     const warnings_json = try std.json.Stringify.valueAlloc(a, warnings.items, .{});
     _ = try conn.exec(
-        \\UPDATE episode SET status = 'committed', commit_seq = $2, change_set = $3::jsonb,
+        \\UPDATE entry SET status = 'committed', commit_seq = $2, change_set = $3::jsonb,
         \\  warnings = warnings || $4::jsonb, lease_until = NULL,
-        \\  cost_usd = (SELECT COALESCE(sum(cost_usd), 0) FROM llm_call WHERE episode_id = $1)
+        \\  cost_usd = (SELECT COALESCE(sum(cost_usd), 0) FROM llm_call WHERE entry_id = $1)
         \\WHERE id = $1
     , .{ eid, seq, final_json, warnings_json });
 
     _ = try conn.exec(
         \\SELECT pg_notify('graf_commit', json_build_object(
-        \\  'graph_id', $1::uuid, 'seq', $2::int8, 'project', (SELECT project FROM episode WHERE id = $3))::text)
+        \\  'graph_id', $1::uuid, 'seq', $2::int8, 'project', (SELECT project FROM entry WHERE id = $3))::text)
     , .{ gid, seq, eid });
 
     done = true;
@@ -278,8 +278,8 @@ fn applyMerge(s: *Store, a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, 
         \\  SELECT graph_id, norm, $3, alias FROM entity_alias WHERE entity_id = $2
         \\  ON CONFLICT DO NOTHING RETURNING 1
         \\), mentions AS (
-        \\  INSERT INTO entity_mention (entity_id, episode_id)
-        \\  SELECT $3, episode_id FROM entity_mention WHERE entity_id = $2
+        \\  INSERT INTO entity_mention (entity_id, entry_id)
+        \\  SELECT $3, entry_id FROM entity_mention WHERE entity_id = $2
         \\  ON CONFLICT DO NOTHING RETURNING 1
         \\), logged AS (
         \\  INSERT INTO merge_log (id, graph_id, seq, from_id, into_id, reason, moved_facts)
@@ -298,7 +298,7 @@ fn insertFacts(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, 
     const n = facts.len;
     const ids = try a.alloc([]const u8, n);
     const subjects = try a.alloc([]const u8, n);
-    const predicates = try a.alloc([]const u8, n);
+    const relations = try a.alloc([]const u8, n);
     const qualifiers = try a.alloc([]const u8, n);
     const object_ids = try a.alloc(?[]const u8, n);
     const object_values = try a.alloc(?[]const u8, n);
@@ -310,7 +310,7 @@ fn insertFacts(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, 
     const uppers = try a.alloc(?i64, n);
     const end_kinds = try a.alloc(?[]const u8, n);
     const ended_by = try a.alloc(?[]const u8, n);
-    const asserted = try a.alloc([]const u8, n);
+    const authors = try a.alloc([]const u8, n);
     const confidence = try a.alloc(f32, n);
     const flat = try a.alloc(f32, n * dims);
     for (facts, 0..) |*nf, i| {
@@ -319,7 +319,7 @@ fn insertFacts(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, 
         @memcpy(flat[i * dims ..][0..dims], nf.emb);
         ids[i] = &f.id.bytes;
         subjects[i] = &f.subject_id.bytes;
-        predicates[i] = f.predicate;
+        relations[i] = f.relation;
         qualifiers[i] = f.qualifier;
         switch (f.object) {
             .entity => |*e| {
@@ -339,26 +339,26 @@ fn insertFacts(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, 
         uppers[i] = f.valid.upper;
         end_kinds[i] = if (f.end_kind) |k| @tagName(k) else null;
         ended_by[i] = if (f.ended_by) |*e| &e.bytes else null;
-        asserted[i] = @tagName(f.asserted_by);
+        authors[i] = @tagName(f.author);
         confidence[i] = f.confidence;
     }
     _ = try conn.exec(
-        \\INSERT INTO fact (id, graph_id, subject_id, predicate, qualifier, object_id, object_value, text,
-        \\  rationale, project, scope, valid, sys, end_kind, ended_by, asserted_by, confidence, emb, created_seq)
-        \\SELECT t.id, $1, t.subject_id, t.predicate, t.qualifier, t.object_id, t.object_value, t.text,
+        \\INSERT INTO fact (id, graph_id, subject_id, relation, qualifier, object_id, object_value, text,
+        \\  rationale, project, scope, valid, known, end_kind, ended_by, author, confidence, emb, created_seq)
+        \\SELECT t.id, $1, t.subject_id, t.relation, t.qualifier, t.object_id, t.object_value, t.text,
         \\  t.rationale, t.project, t.scope, tstzrange(t.lo, t.hi), tstzrange($2, NULL), t.end_kind, t.ended_by,
-        \\  t.asserted_by, t.confidence, ($3::float4[])[(t.i - 1) * 512 + 1 : t.i * 512]::halfvec(512), $4
+        \\  t.author, t.confidence, ($3::float4[])[(t.i - 1) * 512 + 1 : t.i * 512]::halfvec(512), $4
         \\FROM unnest($5::uuid[], $6::uuid[], $7::text[], $8::text[], $9::uuid[], $10::text[], $11::text[],
         \\  $12::text[], $13::text[], $14::text[], $15::timestamptz[], $16::timestamptz[], $17::text[],
         \\  $18::uuid[], $19::text[], $20::float4[]) WITH ORDINALITY
-        \\  AS t(id, subject_id, predicate, qualifier, object_id, object_value, text, rationale, project, scope,
-        \\       lo, hi, end_kind, ended_by, asserted_by, confidence, i)
+        \\  AS t(id, subject_id, relation, qualifier, object_id, object_value, text, rationale, project, scope,
+        \\       lo, hi, end_kind, ended_by, author, confidence, i)
     , .{
-        gid,        commit_ts,     flat,       seq,
-        ids,        subjects,      predicates, qualifiers,
-        object_ids, object_values, texts,      rationales,
-        projects,   scopes,        lowers,     uppers,
-        end_kinds,  ended_by,      asserted,   confidence,
+        gid,        commit_ts,     flat,      seq,
+        ids,        subjects,      relations, qualifiers,
+        object_ids, object_values, texts,     rationales,
+        projects,   scopes,        lowers,    uppers,
+        end_kinds,  ended_by,      authors,   confidence,
     });
     try touched.appendSlice(a, ids);
 }

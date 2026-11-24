@@ -49,7 +49,7 @@ pub const Store = struct {
         return queue.ensureGraph(s, name);
     }
 
-    pub fn enqueue(s: *Store, graph_id: Id, draft: *const core.EpisodeDraft) !core.EpisodeSink.Outcome {
+    pub fn enqueue(s: *Store, graph_id: Id, draft: *const core.EntryDraft) !core.EntrySink.Outcome {
         return queue.enqueue(s, graph_id, draft);
     }
 
@@ -93,18 +93,18 @@ pub const Store = struct {
         var fallback_buf: [16]u8 = s.default_graph.bytes;
         const fallback: ?[]const u8 = if (s.default_graph.eql(.nil)) null else &fallback_buf;
         var ep_buf: [16]u8 = undefined;
-        const episode: ?[]const u8 = if (call.episode_id) |e| blk: {
+        const entry: ?[]const u8 = if (call.entry_id) |e| blk: {
             ep_buf = e.bytes;
             break :blk &ep_buf;
         } else null;
         _ = try s.pool.exec(
-            \\INSERT INTO llm_call (id, graph_id, episode_id, purpose, route, model, attempt, outcome,
+            \\INSERT INTO llm_call (id, graph_id, entry_id, purpose, route, model, attempt, outcome,
             \\  error_class, http_status, input_tokens, output_tokens, cache_read_tokens,
             \\  cache_write_tokens, cost_usd, cost_status, latency_ms, started_at)
-            \\VALUES ($1, COALESCE($2, (SELECT graph_id FROM episode WHERE id = $3), $19), $3, $4, $5, $6, $7, $8,
+            \\VALUES ($1, COALESCE($2, (SELECT graph_id FROM entry WHERE id = $3), $19), $3, $4, $5, $6, $7, $8,
             \\  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         , .{
-            @as([]const u8, &id_buf),   graph,                          episode,
+            @as([]const u8, &id_buf),   graph,                          entry,
             @tagName(call.purpose),     call.route,                     call.model,
             call.attempt,               if (call.ok) "ok" else "error", call.error_class,
             call.http_status,           call.input_tokens,              call.output_tokens,
@@ -114,7 +114,7 @@ pub const Store = struct {
         });
     }
 
-    pub fn sink(s: *Store, graph_id: Id) core.EpisodeSink {
+    pub fn sink(s: *Store, graph_id: Id) core.EntrySink {
         s.default_graph = graph_id;
         return .{ .ptr = s, .vtable = &sink_vtable };
     }
@@ -123,12 +123,12 @@ pub const Store = struct {
         return .{ .ptr = s, .vtable = &ledger_vtable };
     }
 
-    const sink_vtable: core.EpisodeSink.VTable = .{
+    const sink_vtable: core.EntrySink.VTable = .{
         .enqueue = sinkEnqueue,
         .loadCursor = sinkLoadCursor,
     };
 
-    fn sinkEnqueue(ptr: *anyopaque, draft: *const core.EpisodeDraft) anyerror!core.EpisodeSink.Outcome {
+    fn sinkEnqueue(ptr: *anyopaque, draft: *const core.EntryDraft) anyerror!core.EntrySink.Outcome {
         const s: *Store = @ptrCast(@alignCast(ptr));
         return s.enqueue(s.default_graph, draft);
     }
@@ -155,10 +155,10 @@ pub const Store = struct {
 };
 
 pub const Lease = struct {
-    episode_id: Id,
+    entry_id: Id,
     graph_id: Id,
     token: i64,
-    episode: core.Episode,
+    entry: core.Entry,
     extraction_json: ?[]const u8 = null,
 };
 
@@ -172,7 +172,7 @@ pub const CommitResult = union(enum) {
     fenced,
 };
 
-pub fn contentHash(gpa: std.mem.Allocator, draft: *const core.EpisodeDraft) ![32]u8 {
+pub fn contentHash(gpa: std.mem.Allocator, draft: *const core.EntryDraft) ![32]u8 {
     const Key = struct { harness: core.Harness, external_id: []const u8 };
     const canonical = try std.json.Stringify.valueAlloc(gpa, .{
         .source = if (draft.source) |src| Key{ .harness = src.harness, .external_id = src.external_id } else null,
@@ -318,10 +318,10 @@ test "normalizeAlias folds case, punctuation and whitespace" {
 
 test "content hash ignores reference time and cursor but not the source" {
     const gpa = std.testing.allocator;
-    var a: core.EpisodeDraft = .{
+    var a: core.EntryDraft = .{
         .source = .{ .harness = .codex, .external_id = "s1" },
         .kind = .note,
-        .asserted_by = .user,
+        .author = .user,
         .body = .{ .text = "graf uses Postgres" },
         .reference_time = 1,
         .cursor = "10",

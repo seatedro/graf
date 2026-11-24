@@ -1,181 +1,181 @@
 {
   "suite_version": "1.0",
-  "description": "Starter 20-episode labeled evaluation suite for the graf release gates.",
+  "description": "Starter 20-entry labeled evaluation suite for the graf release gates.",
   "canonical_entities": [
-    {"id": "ent_graf", "name": "graf", "type": "project", "aliases": ["graf repo", "graf hub"], "first_seen": "ep01"},
-    {"id": "ent_potion", "name": "Potion", "type": "project", "aliases": ["potion"], "first_seen": "ep01"},
-    {"id": "ent_zig", "name": "Zig", "type": "tool", "aliases": ["Zig 0.17.1"], "first_seen": "ep01"},
-    {"id": "ent_postgres", "name": "Postgres 17", "type": "tool", "aliases": ["Postgres", "pgvector", "Postgres 17 with pgvector"], "first_seen": "ep01"},
-    {"id": "ent_pgzig", "name": "pg.zig", "type": "library", "aliases": ["pg-zig", "karlseguin's driver", "karlseguin's pg.zig driver"], "first_seen": "ep01"},
-    {"id": "ent_tollgate", "name": "Tollgate", "type": "service", "aliases": ["Acme gateway"], "first_seen": "ep03"},
-    {"id": "ent_monorepo", "name": "acme-labs/monorepo", "type": "repository", "aliases": ["monorepo"], "first_seen": "ep03"},
-    {"id": "ent_marco", "name": "Marco", "type": "person", "aliases": [], "first_seen": "ep03"},
-    {"id": "ent_elena", "name": "Elena", "type": "person", "aliases": [], "first_seen": "ep06"},
-    {"id": "ent_rust", "name": "Rust", "type": "tool", "aliases": [], "first_seen": "ep07"},
-    {"id": "ent_rohit", "name": "rohit", "type": "person", "aliases": ["seatedro"], "first_seen": "ep08"},
-    {"id": "ent_haiku", "name": "claude-haiku-5-5", "type": "ai_model", "aliases": [], "first_seen": "ep08"},
-    {"id": "ent_acme", "name": "Acme", "type": "organization", "aliases": [], "first_seen": "ep09"},
-    {"id": "ent_acmebox", "name": "acme-box", "type": "tool", "aliases": [], "first_seen": "ep09"},
-    {"id": "ent_gpt41mini", "name": "gpt-4.1-mini", "type": "ai_model", "aliases": [], "first_seen": "ep11"},
-    {"id": "ent_priya", "name": "Priya", "type": "person", "aliases": [], "first_seen": "ep12"},
-    {"id": "ent_axum", "name": "axum", "type": "library", "aliases": [], "first_seen": "ep13"},
-    {"id": "ent_age", "name": "Apache AGE", "type": "tool", "aliases": [], "first_seen": "ep15"},
-    {"id": "ent_lighthouse", "name": "lighthouse", "type": "place", "aliases": ["devbox lighthouse"], "first_seen": "ep16"},
-    {"id": "ent_fx_agent", "name": "fx", "type": "tool", "aliases": ["fx agent", "Vercel Labs coding agent"], "first_seen": "ep20"},
-    {"id": "ent_pi", "name": "pi", "type": "tool", "aliases": [], "first_seen": "ep20"},
-    {"id": "ent_fx_dataset", "name": "FX currency rates dataset", "type": "dataset", "aliases": ["FX dataset"], "first_seen": "ep20"}
+    {"id": "ent_graf", "name": "graf", "type": "project", "aliases": ["graf repo", "graf hub"], "first_seen": "e01"},
+    {"id": "ent_potion", "name": "Potion", "type": "project", "aliases": ["potion"], "first_seen": "e01"},
+    {"id": "ent_zig", "name": "Zig", "type": "software", "aliases": ["Zig 0.17.1"], "first_seen": "e01"},
+    {"id": "ent_postgres", "name": "Postgres 17", "type": "software", "aliases": ["Postgres", "pgvector", "Postgres 17 with pgvector"], "first_seen": "e01"},
+    {"id": "ent_pgzig", "name": "pg.zig", "type": "software", "aliases": ["pg-zig", "karlseguin's driver", "karlseguin's pg.zig driver"], "first_seen": "e01"},
+    {"id": "ent_tollgate", "name": "Tollgate", "type": "software", "aliases": ["Acme gateway"], "first_seen": "e03"},
+    {"id": "ent_monorepo", "name": "acme-labs/monorepo", "type": "repository", "aliases": ["monorepo"], "first_seen": "e03"},
+    {"id": "ent_marco", "name": "Marco", "type": "person", "aliases": [], "first_seen": "e03"},
+    {"id": "ent_elena", "name": "Elena", "type": "person", "aliases": [], "first_seen": "e06"},
+    {"id": "ent_rust", "name": "Rust", "type": "software", "aliases": [], "first_seen": "e07"},
+    {"id": "ent_rohit", "name": "rohit", "type": "person", "aliases": ["seatedro"], "first_seen": "e08"},
+    {"id": "ent_haiku", "name": "claude-haiku-5-5", "type": "ai_model", "aliases": [], "first_seen": "e08"},
+    {"id": "ent_acme", "name": "Acme", "type": "organization", "aliases": [], "first_seen": "e09"},
+    {"id": "ent_acmebox", "name": "acme-box", "type": "software", "aliases": [], "first_seen": "e09"},
+    {"id": "ent_gpt41mini", "name": "gpt-4.1-mini", "type": "ai_model", "aliases": [], "first_seen": "e11"},
+    {"id": "ent_priya", "name": "Priya", "type": "person", "aliases": [], "first_seen": "e12"},
+    {"id": "ent_axum", "name": "axum", "type": "software", "aliases": [], "first_seen": "e13"},
+    {"id": "ent_age", "name": "Apache AGE", "type": "software", "aliases": [], "first_seen": "e15"},
+    {"id": "ent_lighthouse", "name": "lighthouse", "type": "environment", "aliases": ["devbox lighthouse"], "first_seen": "e16"},
+    {"id": "ent_fx_agent", "name": "fx", "type": "software", "aliases": ["fx agent", "Vercel Labs coding agent"], "first_seen": "e20"},
+    {"id": "ent_pi", "name": "pi", "type": "software", "aliases": [], "first_seen": "e20"},
+    {"id": "ent_fx_dataset", "name": "FX currency rates dataset", "type": "dataset", "aliases": ["FX dataset"], "first_seen": "e20"}
   ],
   "expected_merges": [
-    {"episode": "ep05", "mention": "pg-zig", "must_resolve_to": "ent_pgzig", "rule": "E2_normalized_alias"},
-    {"episode": "ep05", "mention": "karlseguin's driver", "must_resolve_to": "ent_pgzig", "rule": "E1_or_alias"},
-    {"episode": "ep08", "mention": "seatedro", "must_resolve_to": "ent_rohit", "rule": "alias_on_person"},
-    {"episode": "ep19", "mention": "Tollgate", "must_resolve_to": "ent_tollgate", "rule": "cross_project_graph_wide_entity"}
+    {"entry": "e05", "mention": "pg-zig", "must_resolve_to": "ent_pgzig", "rule": "E2_normalized_alias"},
+    {"entry": "e05", "mention": "karlseguin's driver", "must_resolve_to": "ent_pgzig", "rule": "E1_or_alias"},
+    {"entry": "e08", "mention": "seatedro", "must_resolve_to": "ent_rohit", "rule": "alias_on_person"},
+    {"entry": "e19", "mention": "Tollgate", "must_resolve_to": "ent_tollgate", "rule": "cross_project_graph_wide_entity"}
   ],
   "must_not_merge": [
-    {"episode": "ep09", "entity_a": "ent_acme", "entity_b": "ent_acmebox", "reason": "organization vs tool; distinct entities"},
-    {"episode": "ep20", "entity_a": "ent_fx_agent", "entity_b": "ent_fx_dataset", "reason": "tool vs dataset; acronym collision"},
-    {"episode": "ep01", "entity_a": "ent_graf", "entity_b": "ent_potion", "reason": "explicitly separate projects"}
+    {"entry": "e09", "entity_a": "ent_acme", "entity_b": "ent_acmebox", "reason": "organization vs tool; distinct entities"},
+    {"entry": "e20", "entity_a": "ent_fx_agent", "entity_b": "ent_fx_dataset", "reason": "tool vs dataset; acronym collision"},
+    {"entry": "e01", "entity_a": "ent_graf", "entity_b": "ent_potion", "reason": "explicitly separate projects"}
   ],
-  "episodes": {
-    "ep01": {
+  "entries": {
+    "e01": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_uses_zig", "subject": "ent_graf", "predicate": "uses", "object": "ent_zig", "valid_from": "2026-11-18T18:00:00Z"},
-        {"id": "f_graf_zig_ver", "subject": "ent_graf", "predicate": "has_setting", "qualifier": "zig_version", "object_value": "0.17.1", "valid_from": "2026-11-18T18:00:00Z"},
-        {"id": "f_graf_uses_pg", "subject": "ent_graf", "predicate": "uses", "object": "ent_postgres", "valid_from": "2026-11-18T18:00:00Z"},
-        {"id": "f_graf_uses_pgzig", "subject": "ent_graf", "predicate": "uses", "object": "ent_pgzig", "valid_from": "2026-11-18T18:00:00Z"}
+        {"id": "f_graf_uses_zig", "subject": "ent_graf", "relation": "uses", "object": "ent_zig", "valid_from": "2026-11-18T18:00:00Z"},
+        {"id": "f_graf_zig_ver", "subject": "ent_graf", "relation": "has_setting", "qualifier": "zig_version", "object_value": "0.17.1", "valid_from": "2026-11-18T18:00:00Z"},
+        {"id": "f_graf_uses_pg", "subject": "ent_graf", "relation": "uses", "object": "ent_postgres", "valid_from": "2026-11-18T18:00:00Z"},
+        {"id": "f_graf_uses_pgzig", "subject": "ent_graf", "relation": "uses", "object": "ent_pgzig", "valid_from": "2026-11-18T18:00:00Z"}
       ]
     },
-    "ep02": {
+    "e02": {
       "skip": false,
       "facts_added": [
-        {"id": "f_pgzig_supports_vec", "subject": "ent_pgzig", "predicate": "supports_feature", "object_value": "pgvector", "valid_from": "2026-11-19T20:15:00Z"},
-        {"id": "f_pgzig_lacks_copy", "subject": "ent_pgzig", "predicate": "lacks_feature", "object_value": "COPY", "valid_from": "2026-11-19T20:15:00Z"},
-        {"id": "f_pgzig_lacks_pipe", "subject": "ent_pgzig", "predicate": "lacks_feature", "object_value": "pipelining", "valid_from": "2026-11-19T20:15:00Z"}
+        {"id": "f_pgzig_supports_vec", "subject": "ent_pgzig", "relation": "supports_feature", "object_value": "pgvector", "valid_from": "2026-11-19T20:15:00Z"},
+        {"id": "f_pgzig_lacks_copy", "subject": "ent_pgzig", "relation": "lacks_feature", "object_value": "COPY", "valid_from": "2026-11-19T20:15:00Z"},
+        {"id": "f_pgzig_lacks_pipe", "subject": "ent_pgzig", "relation": "lacks_feature", "object_value": "pipelining", "valid_from": "2026-11-19T20:15:00Z"}
       ]
     },
-    "ep03": {
+    "e03": {
       "skip": false,
       "facts_added": [
-        {"id": "f_tollgate_part_mono", "subject": "ent_tollgate", "predicate": "part_of", "object": "ent_monorepo", "valid_from": "2026-11-19T22:00:00Z"},
-        {"id": "f_tollgate_loc", "subject": "ent_tollgate", "predicate": "located_at", "object_value": "infra/tollgate", "valid_from": "2026-11-19T22:00:00Z"},
-        {"id": "f_tollgate_oncall_marco", "subject": "ent_tollgate", "predicate": "has_oncall", "object": "ent_marco", "valid_from": "2026-11-19T22:00:00Z"}
+        {"id": "f_tollgate_part_mono", "subject": "ent_tollgate", "relation": "part_of", "object": "ent_monorepo", "valid_from": "2026-11-19T22:00:00Z"},
+        {"id": "f_tollgate_loc", "subject": "ent_tollgate", "relation": "located_at", "object_value": "infra/tollgate", "valid_from": "2026-11-19T22:00:00Z"},
+        {"id": "f_tollgate_oncall_marco", "subject": "ent_tollgate", "relation": "has_oncall", "object": "ent_marco", "valid_from": "2026-11-19T22:00:00Z"}
       ]
     },
-    "ep04": {"skip": true, "reason": "Transient test execution output only; must produce 0 facts.", "facts_added": []},
-    "ep05": {
+    "e04": {"skip": true, "reason": "Transient test execution output only; must produce 0 facts.", "facts_added": []},
+    "e05": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_unnest", "subject": "ent_graf", "predicate": "uses", "object_value": "unnest batch inserts", "valid_from": "2026-11-20T16:30:00Z"}
+        {"id": "f_graf_unnest", "subject": "ent_graf", "relation": "uses", "object_value": "unnest batch inserts", "valid_from": "2026-11-20T16:30:00Z"}
       ],
-      "reaffirmed": ["f_pgzig_lacks_copy"]
+      "restated": ["f_pgzig_lacks_copy"]
     },
-    "ep06": {
+    "e06": {
       "skip": false,
       "facts_added": [
-        {"id": "f_tollgate_oncall_elena", "subject": "ent_tollgate", "predicate": "has_oncall", "object": "ent_elena", "valid_from": "2026-11-20T17:00:00Z", "time_basis": "explicit"}
+        {"id": "f_tollgate_oncall_elena", "subject": "ent_tollgate", "relation": "has_oncall", "object": "ent_elena", "valid_from": "2026-11-20T17:00:00Z", "time_basis": "explicit"}
       ],
       "invalidations": [
         {"fact_id": "f_tollgate_oncall_marco", "end_kind": "changed", "valid_to": "2026-11-20T17:00:00Z", "mechanism": "deterministic_one_per_subject"}
       ]
     },
-    "ep07": {
+    "e07": {
       "skip": false,
       "facts_added": [
-        {"id": "f_potion_uses_rust", "subject": "ent_potion", "predicate": "uses", "object": "ent_rust", "valid_from": "2026-11-20T19:00:00Z"}
+        {"id": "f_potion_uses_rust", "subject": "ent_potion", "relation": "uses", "object": "ent_rust", "valid_from": "2026-11-20T19:00:00Z"}
       ],
       "must_not_contain_facts": ["Potion uses Go"],
-      "note": "Assistant's refuted claim ('Potion uses Go') must either never be written (intra-episode correction) or be immediately retracted (end_kind=retracted)."
+      "note": "Assistant's refuted claim ('Potion uses Go') must either never be written (intra-entry correction) or be immediately retracted (end_kind=retracted)."
     },
-    "ep08": {
+    "e08": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_ext_haiku", "subject": "ent_graf", "predicate": "has_setting", "qualifier": "extraction_model", "object": "ent_haiku", "valid_from": "2026-11-20T21:00:00Z"},
-        {"id": "f_graf_owned_rohit", "subject": "ent_graf", "predicate": "owned_by", "object": "ent_rohit", "valid_from": "2026-11-20T21:00:00Z"}
+        {"id": "f_graf_ext_haiku", "subject": "ent_graf", "relation": "has_setting", "qualifier": "extraction_model", "object": "ent_haiku", "valid_from": "2026-11-20T21:00:00Z"},
+        {"id": "f_graf_owned_rohit", "subject": "ent_graf", "relation": "owned_by", "object": "ent_rohit", "valid_from": "2026-11-20T21:00:00Z"}
       ]
     },
-    "ep09": {
+    "e09": {
       "skip": false,
       "facts_added": [
-        {"id": "f_acme_maintains_acmebox", "subject": "ent_acme", "predicate": "maintains", "object": "ent_acmebox", "valid_from": "2026-11-21T01:00:00Z"}
+        {"id": "f_acme_maintains_acmebox", "subject": "ent_acme", "relation": "maintains", "object": "ent_acmebox", "valid_from": "2026-11-21T01:00:00Z"}
       ]
     },
-    "ep10": {
+    "e10": {
       "skip": false,
       "facts_added": [
-        {"id": "f_pgzig_supports_copy", "subject": "ent_pgzig", "predicate": "supports_feature", "object_value": "COPY", "valid_from": "2026-11-21T17:00:00Z"}
+        {"id": "f_pgzig_supports_copy", "subject": "ent_pgzig", "relation": "supports_feature", "object_value": "COPY", "valid_from": "2026-11-21T17:00:00Z"}
       ],
       "invalidations": [
-        {"fact_id": "f_pgzig_lacks_copy", "end_kind": "changed", "valid_to": "2026-11-21T17:00:00Z", "mechanism": "deterministic_opposed_predicate"}
+        {"fact_id": "f_pgzig_lacks_copy", "end_kind": "changed", "valid_to": "2026-11-21T17:00:00Z", "mechanism": "deterministic_opposed_relation"}
       ]
     },
-    "ep11": {
+    "e11": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_ext_gpt41", "subject": "ent_graf", "predicate": "has_setting", "qualifier": "extraction_model", "object": "ent_gpt41mini", "valid_from": "2026-11-21T19:00:00Z"}
+        {"id": "f_graf_ext_gpt41", "subject": "ent_graf", "relation": "has_setting", "qualifier": "extraction_model", "object": "ent_gpt41mini", "valid_from": "2026-11-21T19:00:00Z"}
       ],
       "invalidations": [
         {"fact_id": "f_graf_ext_haiku", "end_kind": "changed", "valid_to": "2026-11-21T19:00:00Z", "mechanism": "deterministic_one_per_subject_qualifier"}
       ]
     },
-    "ep12": {
+    "e12": {
       "skip": false,
       "facts_added": [
-        {"id": "f_tollgate_oncall_priya", "subject": "ent_tollgate", "predicate": "has_oncall", "object": "ent_priya", "valid_from": "2026-11-10T00:00:00Z", "valid_to": "2026-11-17T00:00:00Z", "time_basis": "explicit"}
+        {"id": "f_tollgate_oncall_priya", "subject": "ent_tollgate", "relation": "has_oncall", "object": "ent_priya", "valid_from": "2026-11-10T00:00:00Z", "valid_to": "2026-11-17T00:00:00Z", "time_basis": "explicit"}
       ],
       "invalidations": [],
       "must_remain_active": ["f_tollgate_oncall_elena"],
       "note": "Out-of-order historical fact must NOT invalidate Elena's current oncall status."
     },
-    "ep13": {
+    "e13": {
       "skip": false,
       "facts_added": [
-        {"id": "f_potion_uses_axum", "subject": "ent_potion", "predicate": "uses", "object": "ent_axum", "valid_from": "2026-11-21T21:30:00Z"}
+        {"id": "f_potion_uses_axum", "subject": "ent_potion", "relation": "uses", "object": "ent_axum", "valid_from": "2026-11-21T21:30:00Z"}
       ],
       "must_not_contain_facts": ["Potion uses actix"],
-      "note": "Intra-episode self-correction (F2): actix must never be persisted as an active fact."
+      "note": "Intra-entry self-correction (F2): actix must never be persisted as an active fact."
     },
-    "ep14": {"skip": true, "reason": "Hypothetical brainstorming with explicit non-commitment; must produce 0 facts.", "facts_added": [], "must_not_contain_facts": ["graf uses Neo4j", "graf uses Apache AGE"]},
-    "ep15": {
+    "e14": {"skip": true, "reason": "Hypothetical brainstorming with explicit non-commitment; must produce 0 facts.", "facts_added": [], "must_not_contain_facts": ["graf uses Neo4j", "graf uses Apache AGE"]},
+    "e15": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_rejected_age", "subject": "ent_graf", "predicate": "rejected", "object": "ent_age", "valid_from": "2026-11-22T16:00:00Z"}
+        {"id": "f_graf_rejected_age", "subject": "ent_graf", "relation": "rejected", "object": "ent_age", "valid_from": "2026-11-22T16:00:00Z"}
       ],
-      "reaffirmed": ["f_graf_uses_pg"],
-      "note": "Postgres 17 + pgvector must be reaffirmed (confidence increased, provenance appended), not duplicated."
+      "restated": ["f_graf_uses_pg"],
+      "note": "Postgres 17 + pgvector must be restated (confidence increased, evidence appended), not duplicated."
     },
-    "ep16": {
+    "e16": {
       "skip": false,
       "facts_added": [
-        {"id": "f_graf_loc_lighthouse", "subject": "ent_graf", "predicate": "located_at", "object": "ent_lighthouse", "valid_from": "2026-11-22T18:00:00Z"},
-        {"id": "f_graf_migration_sched", "subject": "ent_graf", "predicate": "scheduled_for", "object_value": "2026-12-03", "valid_from": "2026-11-22T18:00:00Z", "time_basis": "explicit"}
+        {"id": "f_graf_loc_lighthouse", "subject": "ent_graf", "relation": "located_at", "object": "ent_lighthouse", "valid_from": "2026-11-22T18:00:00Z"},
+        {"id": "f_graf_migration_sched", "subject": "ent_graf", "relation": "scheduled_for", "object_value": "2026-12-03", "valid_from": "2026-11-22T18:00:00Z", "time_basis": "explicit"}
       ]
     },
-    "ep17": {
+    "e17": {
       "skip": false,
       "facts_added": [
-        {"id": "f_rohit_prefers_zig", "subject": "ent_rohit", "predicate": "prefers", "object": "ent_zig", "scope": "global", "valid_from": "2026-11-22T19:00:00Z"},
-        {"id": "f_rohit_avoids_py", "subject": "ent_rohit", "predicate": "avoids", "object_value": "Python sidecars", "scope": "global", "valid_from": "2026-11-22T19:00:00Z"}
+        {"id": "f_rohit_prefers_zig", "subject": "ent_rohit", "relation": "prefers", "object": "ent_zig", "scope": "global", "valid_from": "2026-11-22T19:00:00Z"},
+        {"id": "f_rohit_avoids_py", "subject": "ent_rohit", "relation": "avoids", "object_value": "Python sidecars", "scope": "global", "valid_from": "2026-11-22T19:00:00Z"}
       ]
     },
-    "ep18": {
+    "e18": {
       "skip": false,
       "facts_added": [
-        {"id": "f_tollgate_url", "subject": "ent_tollgate", "predicate": "located_at", "object_value": "https://tollgate.example.test/v1", "valid_from": "2026-11-22T20:00:00Z"}
+        {"id": "f_tollgate_url", "subject": "ent_tollgate", "relation": "located_at", "object_value": "https://tollgate.example.test/v1", "valid_from": "2026-11-22T20:00:00Z"}
       ],
       "forbidden_substrings_anywhere": ["SUPERSECRETKEY", "tg_live_SUPERSECRETKEY0123456789abcdef"],
-      "note": "Hard security gate: the API key must be redacted before episode storage and model calls, and never appear in any table."
+      "note": "Hard security gate: the API key must be redacted before entry storage and model calls, and never appear in any table."
     },
-    "ep19": {
+    "e19": {
       "skip": false,
       "facts_added": [
-        {"id": "f_potion_uses_tollgate", "subject": "ent_potion", "predicate": "uses", "object": "ent_tollgate", "valid_from": "2026-11-23T01:00:00Z"}
+        {"id": "f_potion_uses_tollgate", "subject": "ent_potion", "relation": "uses", "object": "ent_tollgate", "valid_from": "2026-11-23T01:00:00Z"}
       ]
     },
-    "ep20": {
+    "e20": {
       "skip": false,
       "facts_added": [
-        {"id": "f_fx_compared_pi", "subject": "ent_fx_agent", "predicate": "related_to", "object": "ent_fx_dataset", "valid_from": "2026-11-23T03:00:00Z"}
+        {"id": "f_fx_compared_pi", "subject": "ent_fx_agent", "relation": "related_to", "object": "ent_fx_dataset", "valid_from": "2026-11-23T03:00:00Z"}
       ],
       "note": "Primary test here is entity disambiguation: fx (tool) and FX currency rates dataset (dataset) must remain distinct."
     }

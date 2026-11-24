@@ -16,7 +16,7 @@ pub const run = runner.run;
 pub const loadGraphState = pgload.loadGraphState;
 pub const main = cli.main;
 
-pub const EvalEpisode = struct {
+pub const EvalEntry = struct {
     id: []const u8,
     seq: u32,
     harness: core.Harness,
@@ -25,8 +25,8 @@ pub const EvalEpisode = struct {
     agent: ?[]const u8 = null,
     model: ?[]const u8 = null,
     reference_time: []const u8,
-    kind: core.types.EpisodeKind,
-    asserted_by: core.types.AssertedBy,
+    kind: core.types.EntryKind,
+    author: core.types.Author,
     turns: []const core.Turn = &.{},
 };
 
@@ -40,8 +40,8 @@ pub const gates = struct {
     pub const temporal_accuracy_min = 0.90;
     pub const secret_leaks_max = 0;
     pub const retrieval_recall_at_5_min = 0.85;
-    pub const calls_per_episode_max = 2.00;
-    pub const cost_per_episode_max_usd = 0.02;
+    pub const calls_per_entry_max = 2.00;
+    pub const cost_per_entry_max_usd = 0.02;
     pub const crash_resume_pass_rate_min = 1.0;
 };
 
@@ -55,8 +55,8 @@ pub const Metrics = struct {
     temporal_accuracy: ?f64 = null,
     secret_leaks: ?u32 = null,
     retrieval_recall_at_5: ?f64 = null,
-    calls_per_episode: ?f64 = null,
-    cost_per_episode_usd: ?f64 = null,
+    calls_per_entry: ?f64 = null,
+    cost_per_entry_usd: ?f64 = null,
     crash_resume_pass_rate: ?f64 = null,
 
     pub fn gateList(m: Metrics) [12]Gate {
@@ -70,8 +70,8 @@ pub const Metrics = struct {
             .{ .metric = "temporal_accuracy", .value = m.temporal_accuracy, .bound = .at_least, .limit = gates.temporal_accuracy_min, .unit = .ratio },
             .{ .metric = "secret_leaks", .value = count(m.secret_leaks), .bound = .at_most, .limit = gates.secret_leaks_max, .unit = .count },
             .{ .metric = "retrieval_recall_at_5", .value = m.retrieval_recall_at_5, .bound = .at_least, .limit = gates.retrieval_recall_at_5_min, .unit = .ratio },
-            .{ .metric = "calls_per_episode", .value = m.calls_per_episode, .bound = .at_most, .limit = gates.calls_per_episode_max, .unit = .calls },
-            .{ .metric = "cost_per_episode_usd", .value = m.cost_per_episode_usd, .bound = .at_most, .limit = gates.cost_per_episode_max_usd, .unit = .usd },
+            .{ .metric = "calls_per_entry", .value = m.calls_per_entry, .bound = .at_most, .limit = gates.calls_per_entry_max, .unit = .calls },
+            .{ .metric = "cost_per_entry_usd", .value = m.cost_per_entry_usd, .bound = .at_most, .limit = gates.cost_per_entry_max_usd, .unit = .usd },
             .{ .metric = "crash_resume_pass_rate", .value = m.crash_resume_pass_rate, .bound = .at_least, .limit = gates.crash_resume_pass_rate_min, .unit = .ratio },
         };
     }
@@ -127,8 +127,8 @@ test "every gate must be measured and within bounds to pass" {
         .temporal_accuracy = 1,
         .secret_leaks = 0,
         .retrieval_recall_at_5 = 0.9,
-        .calls_per_episode = 2.0,
-        .cost_per_episode_usd = 0.02,
+        .calls_per_entry = 2.0,
+        .cost_per_entry_usd = 0.02,
         .crash_resume_pass_rate = 1,
     };
     try std.testing.expect(m.passes());

@@ -1,7 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 
-pub const CorePredicate = struct {
+pub const CoreRelation = struct {
     name: []const u8,
     cardinality: types.Cardinality,
     opposes: ?[]const u8 = null,
@@ -9,7 +9,7 @@ pub const CorePredicate = struct {
     description: []const u8,
 };
 
-pub const core_predicates = [_]CorePredicate{
+pub const core_relations = [_]CoreRelation{
     .{ .name = "uses", .cardinality = .many, .description = "Subject uses the object (a tool, library, service, or technique)." },
     .{ .name = "depends_on", .cardinality = .many, .object_kind = .entity, .description = "Subject requires the object to build or run." },
     .{ .name = "chose", .cardinality = .many, .opposes = "rejected", .description = "Subject decided in favor of the object." },
@@ -32,16 +32,16 @@ pub const core_predicates = [_]CorePredicate{
     .{ .name = "blocked_by", .cardinality = .many, .description = "Subject cannot proceed until the object is resolved." },
     .{ .name = "caused_by", .cardinality = .many, .description = "Subject was caused by the object." },
     .{ .name = "fixed_by", .cardinality = .many, .description = "Subject was fixed by the object." },
-    .{ .name = "related_to", .cardinality = .many, .description = "Fallback: a relation no other predicate captures. Avoid." },
+    .{ .name = "related_to", .cardinality = .many, .description = "Fallback when no other relation fits. Avoid." },
 };
 
-pub fn find(name: []const u8) ?*const CorePredicate {
-    for (&core_predicates) |*p| if (std.mem.eql(u8, p.name, name)) return p;
+pub fn find(name: []const u8) ?*const CoreRelation {
+    for (&core_relations) |*p| if (std.mem.eql(u8, p.name, name)) return p;
     return null;
 }
 
-test "opposed predicates are symmetric" {
-    for (core_predicates) |p| {
+test "opposed relations are symmetric" {
+    for (core_relations) |p| {
         const other_name = p.opposes orelse continue;
         const other = find(other_name) orelse return error.MissingOpposite;
         try std.testing.expectEqualStrings(p.name, other.opposes.?);

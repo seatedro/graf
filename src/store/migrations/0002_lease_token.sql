@@ -1,1 +1,1 @@
-CREATE SEQUENCE episode_lease_token;
+CREATE SEQUENCE entry_lease_token;

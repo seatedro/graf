@@ -40,9 +40,9 @@ pub const Entity = struct {
     merged_into: ?[]const u8 = null,
 };
 
-pub const Provenance = struct {
-    episode: []const u8,
-    role: core.types.ProvenanceRole,
+pub const Evidence = struct {
+    entry: []const u8,
+    kind: core.types.EvidenceKind,
 };
 
 pub const Object = union(enum) {
@@ -53,23 +53,23 @@ pub const Object = union(enum) {
 pub const Fact = struct {
     key: []const u8,
     subject: []const u8,
-    predicate: []const u8,
+    relation: []const u8,
     qualifier: []const u8 = "",
     object: Object,
     text: []const u8 = "",
     valid: core.Range = .{},
-    sys: core.Range = .{},
+    known: core.Range = .{},
     end_kind: ?EndKind = null,
-    provenance: []const Provenance = &.{},
+    evidence: []const Evidence = &.{},
 };
 
-pub const Episode = struct {
+pub const Entry = struct {
     eval_id: []const u8,
-    status: core.types.EpisodeStatus,
+    status: core.types.EntryStatus,
 };
 
 pub const LlmCall = struct {
-    episode: ?[]const u8 = null,
+    entry: ?[]const u8 = null,
     purpose: core.types.LlmPurpose,
     cost_usd: f64 = 0,
 };
@@ -97,7 +97,7 @@ pub const CrashResume = struct {
 pub const GraphState = struct {
     entities: []const Entity = &.{},
     facts: []const Fact = &.{},
-    episodes: []const Episode = &.{},
+    entries: []const Entry = &.{},
     llm_calls: []const LlmCall = &.{},
     scanned: ?[]const ScannedText = null,
     retrieval: ?[]const QueryResult = null,
@@ -105,8 +105,8 @@ pub const GraphState = struct {
 };
 
 pub const Detail = struct {
-    suite_episodes: u32 = 0,
-    terminal_episodes: u32 = 0,
+    suite_entries: u32 = 0,
+    terminal_entries: u32 = 0,
     entity_tp: u32 = 0,
     entity_fp: u32 = 0,
     entity_fn: u32 = 0,
@@ -139,15 +139,15 @@ pub const Report = struct {
     findings: []const []const u8,
 };
 
-const TypeClass = enum { person, group, software, data, event, concept, other };
+const TypeClass = enum { person, group, software, data, activity, concept, other };
 
 fn typeClass(t: core.EntityType) TypeClass {
     return switch (t) {
         .person => .person,
-        .organization, .team => .group,
-        .project, .repository, .code_artifact, .service, .library, .tool, .ai_model, .place => .software,
+        .organization => .group,
+        .project, .repository, .code, .software, .ai_model, .environment => .software,
         .dataset, .document => .data,
-        .event => .event,
+        .decision, .task, .change, .session, .run, .problem, .event => .activity,
         .concept => .concept,
         .other => .other,
     };
@@ -161,7 +161,7 @@ pub fn typesCompatible(a: core.EntityType, b: core.EntityType) bool {
 
 const Canon = struct { name: []const u8, inverse: bool };
 
-const predicate_equivalents = [_]struct { []const u8, []const u8, bool }{
+const relation_equivalents = [_]struct { []const u8, []const u8, bool }{
     .{ "owns", "owned_by", true },
     .{ "maintained_by", "maintains", true },
     .{ "has_part", "part_of", true },
@@ -195,11 +195,11 @@ const predicate_equivalents = [_]struct { []const u8, []const u8, bool }{
     .{ "scheduled_at", "scheduled_for", false },
 };
 
-pub fn canonicalPredicate(arena: Allocator, predicate: []const u8) Allocator.Error!Canon {
-    const norm = try normalize(arena, predicate);
+pub fn canonicalRelation(arena: Allocator, relation: []const u8) Allocator.Error!Canon {
+    const norm = try normalize(arena, relation);
     const name = try arena.dupe(u8, norm);
     std.mem.replaceScalar(u8, name, ' ', '_');
-    for (predicate_equivalents) |e| {
+    for (relation_equivalents) |e| {
         if (std.mem.eql(u8, e[0], name)) return .{ .name = e[1], .inverse = e[2] };
     }
     return .{ .name = name, .inverse = false };
@@ -246,7 +246,7 @@ fn f1(tp: u32, fp: u32, fn_: u32) f64 {
     return @as(f64, @floatFromInt(2 * tp)) / @as(f64, @floatFromInt(den));
 }
 
-fn isTerminal(s: core.types.EpisodeStatus) bool {
+fn isTerminal(s: core.types.EntryStatus) bool {
     return switch (s) {
         .committed, .skipped, .dead, .split => true,
         else => false,
@@ -274,7 +274,7 @@ const Scorer = struct {
     label: []?usize = &.{},
     gold_set: [][]bool = &.{},
     fact_gold: []?usize = &.{},
-    fact_episode: []?[]const u8 = &.{},
+    fact_entry: []?[]const u8 = &.{},
     forgiven: []bool = &.{},
     claimed: []?usize = &.{},
     patterns: []const fixtures.Pattern = &.{},
@@ -434,7 +434,7 @@ const Scorer = struct {
             const g = sc.suite.entityIndex(m.must_resolve_to).?;
             const found = sc.survivorsLabeled(g);
             if (found.count != 1) {
-                try sc.note("merge: {s} '{s}' -> {s}: {d} surviving entities, want 1", .{ m.episode, m.mention, m.must_resolve_to, found.count });
+                try sc.note("merge: {s} '{s}' -> {s}: {d} surviving entities, want 1", .{ m.entry, m.mention, m.must_resolve_to, found.count });
                 continue;
             }
             const target = found.first.?;
@@ -444,7 +444,7 @@ const Scorer = struct {
                 if (!contains(sc.entity_names[i], mention)) continue;
                 if (sc.survivor[i] != target) {
                     ok = false;
-                    try sc.note("merge: {s} '{s}' landed in '{s}', not in {s}", .{ m.episode, m.mention, e.name, m.must_resolve_to });
+                    try sc.note("merge: {s} '{s}' landed in '{s}', not in {s}", .{ m.entry, m.mention, e.name, m.must_resolve_to });
                 }
             }
             if (ok) correct += 1;
@@ -491,8 +491,8 @@ const Scorer = struct {
 
     fn matchStrength(sc: *Scorer, d: Fact, gi: usize) !u8 {
         const g = sc.suite.facts[gi].fact;
-        const cp = try canonicalPredicate(sc.arena, d.predicate);
-        const gp = try canonicalPredicate(sc.arena, g.predicate);
+        const cp = try canonicalRelation(sc.arena, d.relation);
+        const gp = try canonicalRelation(sc.arena, g.relation);
         if (!std.mem.eql(u8, cp.name, gp.name)) return 0;
         var subject = d.subject;
         var object = d.object;
@@ -528,37 +528,37 @@ const Scorer = struct {
         }
     }
 
-    fn prefers(sc: *Scorer, gi: usize, episode: ?[]const u8) bool {
-        const ep = episode orelse return false;
+    fn prefers(sc: *Scorer, gi: usize, entry: ?[]const u8) bool {
+        const ep = entry orelse return false;
         const ref = sc.suite.facts[gi];
-        if (std.mem.eql(u8, ref.episode, ep)) return true;
+        if (std.mem.eql(u8, ref.entry, ep)) return true;
         const gold = sc.suite.gold(ep) orelse return false;
-        return contains(gold.reaffirmed, ref.fact.id);
+        return contains(gold.restated, ref.fact.id);
     }
 
-    fn assertingEpisode(d: Fact) ?[]const u8 {
-        for (d.provenance) |p| if (p.role == .asserted) return p.episode;
-        if (d.provenance.len > 0) return d.provenance[0].episode;
+    fn statingEntry(d: Fact) ?[]const u8 {
+        for (d.evidence) |p| if (p.kind == .stated) return p.entry;
+        if (d.evidence.len > 0) return d.evidence[0].entry;
         return null;
     }
 
     fn retracted(d: Fact) bool {
         if (d.end_kind) |k| return k == .retracted or k == .forgotten;
-        return d.sys.upper != null;
+        return d.known.upper != null;
     }
 
     fn ended(d: Fact) ?EndKind {
         if (d.end_kind) |k| return k;
-        if (d.sys.upper != null) return .retracted;
+        if (d.known.upper != null) return .retracted;
         if (d.valid.upper != null) return .changed;
         return null;
     }
 
     fn patternHit(sc: *Scorer, d: Fact) !?usize {
-        const cp = try canonicalPredicate(sc.arena, d.predicate);
+        const cp = try canonicalRelation(sc.arena, d.relation);
         if (cp.inverse) return null;
         for (sc.patterns, 0..) |p, pi| {
-            const pp = try canonicalPredicate(sc.arena, p.predicate);
+            const pp = try canonicalRelation(sc.arena, p.relation);
             if (!std.mem.eql(u8, cp.name, pp.name)) continue;
             if (sc.entityLabel(d.subject) != p.subject) continue;
             const hit = switch (d.object) {
@@ -573,27 +573,27 @@ const Scorer = struct {
         return null;
     }
 
-    fn episodeOrder(sc: *Scorer, episode: ?[]const u8) usize {
-        const ep = episode orelse return std.math.maxInt(usize);
-        return sc.suite.episodeIndex(ep) orelse std.math.maxInt(usize);
+    fn entryOrder(sc: *Scorer, entry: ?[]const u8) usize {
+        const ep = entry orelse return std.math.maxInt(usize);
+        return sc.suite.entryIndex(ep) orelse std.math.maxInt(usize);
     }
 
     fn prepareFacts(sc: *Scorer) !void {
         const a = sc.arena;
         const facts = sc.state.facts;
         var patterns: std.ArrayList(fixtures.Pattern) = .empty;
-        for (sc.suite.expected.episodes.map.values()) |g| {
+        for (sc.suite.expected.entries.map.values()) |g| {
             for (g.must_not_contain_facts) |text| {
                 if (try fixtures.parsePattern(a, sc.suite, text)) |p| try patterns.append(a, p);
             }
         }
         sc.patterns = patterns.items;
         sc.fact_gold = try a.alloc(?usize, facts.len);
-        sc.fact_episode = try a.alloc(?[]const u8, facts.len);
+        sc.fact_entry = try a.alloc(?[]const u8, facts.len);
         sc.forgiven = try a.alloc(bool, facts.len);
         for (facts, 0..) |d, i| {
             try sc.fact_index.put(a, d.key, i);
-            sc.fact_episode[i] = assertingEpisode(d);
+            sc.fact_entry[i] = statingEntry(d);
             sc.forgiven[i] = retracted(d) and try sc.patternHit(d) != null;
             var best: ?usize = null;
             var best_strength: u8 = 0;
@@ -601,7 +601,7 @@ const Scorer = struct {
             for (sc.suite.facts, 0..) |_, gi| {
                 const strength = try sc.matchStrength(d, gi);
                 if (strength == 0) continue;
-                const pref = sc.prefers(gi, sc.fact_episode[i]);
+                const pref = sc.prefers(gi, sc.fact_entry[i]);
                 if (strength > best_strength or (strength == best_strength and pref and !best_pref)) {
                     best = gi;
                     best_strength = strength;
@@ -616,8 +616,8 @@ const Scorer = struct {
         const Ctx = struct {
             sc: *Scorer,
             fn lessThan(ctx: @This(), l: usize, r: usize) bool {
-                const ol = ctx.sc.episodeOrder(ctx.sc.fact_episode[l]);
-                const or_ = ctx.sc.episodeOrder(ctx.sc.fact_episode[r]);
+                const ol = ctx.sc.entryOrder(ctx.sc.fact_entry[l]);
+                const or_ = ctx.sc.entryOrder(ctx.sc.fact_entry[r]);
                 return if (ol != or_) ol < or_ else l < r;
             }
         };
@@ -625,14 +625,14 @@ const Scorer = struct {
         sc.claimed = try a.alloc(?usize, sc.suite.facts.len);
         @memset(sc.claimed, null);
         for (order) |i| {
-            if (sc.forgiven[i] or sc.fromSkipEpisode(i)) continue;
+            if (sc.forgiven[i] or sc.fromSkipEntry(i)) continue;
             const g = sc.fact_gold[i] orelse continue;
             if (sc.claimed[g] == null) sc.claimed[g] = i;
         }
     }
 
-    fn fromSkipEpisode(sc: *Scorer, i: usize) bool {
-        const ep = sc.fact_episode[i] orelse return false;
+    fn fromSkipEntry(sc: *Scorer, i: usize) bool {
+        const ep = sc.fact_entry[i] orelse return false;
         return sc.suite.isSkip(ep);
     }
 
@@ -641,17 +641,17 @@ const Scorer = struct {
         var fp: u32 = 0;
         for (sc.state.facts, 0..) |d, i| {
             if (sc.forgiven[i]) continue;
-            const ep = sc.fact_episode[i] orelse "?";
-            if (sc.fromSkipEpisode(i)) {
+            const ep = sc.fact_entry[i] orelse "?";
+            if (sc.fromSkipEntry(i)) {
                 fp += 1;
-                try sc.note("fact: skip episode {s} produced '{s}'", .{ ep, d.text });
+                try sc.note("fact: skip entry {s} produced '{s}'", .{ ep, d.text });
                 continue;
             }
             const g = sc.fact_gold[i] orelse {
                 fp += 1;
                 if (try sc.patternHit(d) != null) {
                     try sc.note("fact: {s} wrote forbidden fact '{s}' and left it active", .{ ep, d.text });
-                } else try sc.note("fact: {s} wrote unlabeled fact '{s}' ({s})", .{ ep, d.text, d.predicate });
+                } else try sc.note("fact: {s} wrote unlabeled fact '{s}' ({s})", .{ ep, d.text, d.relation });
                 continue;
             };
             if (sc.claimed[g] != i) {
@@ -665,18 +665,18 @@ const Scorer = struct {
         var found: u32 = 0;
         for (sc.suite.facts, 0..) |ref, g| {
             items += 1;
-            if (sc.claimed[g] != null) found += 1 else try sc.note("fact: missing {s} from {s}", .{ ref.fact.id, ref.episode });
+            if (sc.claimed[g] != null) found += 1 else try sc.note("fact: missing {s} from {s}", .{ ref.fact.id, ref.entry });
         }
-        for (sc.suite.expected.episodes.map.keys(), sc.suite.expected.episodes.map.values()) |ep, gold| {
-            for (gold.reaffirmed) |id| {
+        for (sc.suite.expected.entries.map.keys(), sc.suite.expected.entries.map.values()) |ep, gold| {
+            for (gold.restated) |id| {
                 items += 1;
                 const g = sc.suite.factIndex(id).?;
                 var ok = false;
                 for (sc.state.facts, 0..) |d, i| {
                     if (sc.fact_gold[i] != g) continue;
-                    for (d.provenance) |p| ok = ok or std.mem.eql(u8, p.episode, ep);
+                    for (d.evidence) |p| ok = ok or std.mem.eql(u8, p.entry, ep);
                 }
-                if (ok) found += 1 else try sc.note("fact: {s} did not reaffirm {s}", .{ ep, id });
+                if (ok) found += 1 else try sc.note("fact: {s} did not restate {s}", .{ ep, id });
             }
         }
         sc.detail.fact_tp = tp;
@@ -687,13 +687,13 @@ const Scorer = struct {
         sc.metrics.fact_recall = ratio(found, items);
     }
 
-    const GoldInvalidation = struct { episode: []const u8, fact: usize, kind: EndKind, valid_to: ?core.Micros };
+    const GoldInvalidation = struct { entry: []const u8, fact: usize, kind: EndKind, valid_to: ?core.Micros };
 
     fn goldInvalidations(sc: *Scorer) ![]const GoldInvalidation {
         var list: std.ArrayList(GoldInvalidation) = .empty;
-        for (sc.suite.expected.episodes.map.keys(), sc.suite.expected.episodes.map.values()) |ep, gold| {
+        for (sc.suite.expected.entries.map.keys(), sc.suite.expected.entries.map.values()) |ep, gold| {
             for (gold.invalidations) |inv| try list.append(sc.arena, .{
-                .episode = ep,
+                .entry = ep,
                 .fact = sc.suite.factIndex(inv.fact_id).?,
                 .kind = inv.end_kind,
                 .valid_to = if (inv.valid_to) |v| time.parseRfc3339(v) catch null else null,
@@ -703,7 +703,7 @@ const Scorer = struct {
     }
 
     fn mustRemainActive(sc: *Scorer, g: usize) bool {
-        for (sc.suite.expected.episodes.map.values()) |gold| {
+        for (sc.suite.expected.entries.map.values()) |gold| {
             if (contains(gold.must_remain_active, sc.suite.facts[g].fact.id)) return true;
         }
         return false;
@@ -740,7 +740,7 @@ const Scorer = struct {
         }
         var tp: u32 = 0;
         for (golds, hit) |inv, h| {
-            if (h) tp += 1 else try sc.note("invalidation: {s} should end {s} {s}", .{ inv.episode, sc.suite.facts[inv.fact].fact.id, @tagName(inv.kind) });
+            if (h) tp += 1 else try sc.note("invalidation: {s} should end {s} {s}", .{ inv.entry, sc.suite.facts[inv.fact].fact.id, @tagName(inv.kind) });
         }
         const fn_: u32 = @intCast(golds.len - tp);
         sc.detail.invalidation_tp = tp;
@@ -785,7 +785,7 @@ const Scorer = struct {
         const texts = sc.state.scanned orelse return;
         var seen: std.ArrayList([]const u8) = .empty;
         var leaks: u32 = 0;
-        for (sc.suite.expected.episodes.map.values()) |gold| {
+        for (sc.suite.expected.entries.map.values()) |gold| {
             for (gold.forbidden_substrings_anywhere) |needle| {
                 if (contains(seen.items, needle)) continue;
                 try seen.append(sc.arena, needle);
@@ -858,7 +858,7 @@ const Scorer = struct {
                 .extract => sc.detail.extraction_calls += 1,
                 .resolve => sc.detail.resolution_calls += 1,
                 .repair => sc.detail.repair_calls += 1,
-                .embed_episode, .embed_batch => sc.detail.embedding_calls += 1,
+                .embed_entry, .embed_batch => sc.detail.embedding_calls += 1,
                 .rerank, .summarize, .embed_query => {},
             }
             switch (c.purpose) {
@@ -867,26 +867,26 @@ const Scorer = struct {
             }
         }
         if (!all_terminal) return;
-        const n: f64 = @floatFromInt(sc.suite.episodes.len);
+        const n: f64 = @floatFromInt(sc.suite.entries.len);
         const calls: f64 = @floatFromInt(sc.detail.extraction_calls + sc.detail.resolution_calls + sc.detail.repair_calls);
-        sc.metrics.calls_per_episode = calls / n;
-        sc.metrics.cost_per_episode_usd = sc.detail.total_cost_usd / n;
+        sc.metrics.calls_per_entry = calls / n;
+        sc.metrics.cost_per_entry_usd = sc.detail.total_cost_usd / n;
     }
 };
 
 pub fn scoreState(arena: Allocator, suite: *const Suite, state: *const GraphState) !Report {
     var sc: Scorer = .{ .arena = arena, .suite = suite, .state = state };
-    sc.detail.suite_episodes = @intCast(suite.episodes.len);
-    for (suite.episodes) |ep| {
-        for (state.episodes) |se| {
+    sc.detail.suite_entries = @intCast(suite.entries.len);
+    for (suite.entries) |ep| {
+        for (state.entries) |se| {
             if (std.mem.eql(u8, se.eval_id, ep.id) and isTerminal(se.status)) {
-                sc.detail.terminal_episodes += 1;
+                sc.detail.terminal_entries += 1;
                 break;
             }
         }
     }
-    const ingested = sc.detail.terminal_episodes > 0;
-    const all_terminal = sc.detail.terminal_episodes == suite.episodes.len;
+    const ingested = sc.detail.terminal_entries > 0;
+    const all_terminal = sc.detail.terminal_entries == suite.entries.len;
 
     try sc.prepareEntities();
     try sc.prepareFacts();
@@ -896,8 +896,8 @@ pub fn scoreState(arena: Allocator, suite: *const Suite, state: *const GraphStat
         try sc.scoreFacts();
         try sc.scoreInvalidations();
         try sc.scoreTemporal();
-    } else try sc.note("ingestion: no suite episode reached a terminal status; graph metrics are unmeasured", .{});
-    if (!all_terminal and ingested) try sc.note("ingestion: {d} of {d} episodes reached a terminal status; call and cost metrics are unmeasured", .{ sc.detail.terminal_episodes, suite.episodes.len });
+    } else try sc.note("ingestion: no suite entry reached a terminal status; graph metrics are unmeasured", .{});
+    if (!all_terminal and ingested) try sc.note("ingestion: {d} of {d} entries reached a terminal status; call and cost metrics are unmeasured", .{ sc.detail.terminal_entries, suite.entries.len });
     try sc.scoreSecrets();
     try sc.scoreRetrieval();
     sc.scoreLedger(all_terminal);
@@ -913,12 +913,12 @@ pub fn goldState(arena: Allocator, suite: *const Suite) !GraphState {
 
     var facts: std.ArrayList(Fact) = .empty;
     for (suite.facts) |ref| {
-        var provenance: std.ArrayList(Provenance) = .empty;
-        try provenance.append(arena, .{ .episode = ref.episode, .role = .asserted });
+        var evidence: std.ArrayList(Evidence) = .empty;
+        try evidence.append(arena, .{ .entry = ref.entry, .kind = .stated });
         var valid: core.Range = .{ .lower = ref.valid_from, .upper = ref.valid_to };
         var end_kind: ?EndKind = if (ref.valid_to != null) .changed else null;
-        for (suite.expected.episodes.map.keys(), suite.expected.episodes.map.values()) |ep, gold| {
-            if (contains(gold.reaffirmed, ref.fact.id)) try provenance.append(arena, .{ .episode = ep, .role = .reaffirmed });
+        for (suite.expected.entries.map.keys(), suite.expected.entries.map.values()) |ep, gold| {
+            if (contains(gold.restated, ref.fact.id)) try evidence.append(arena, .{ .entry = ep, .kind = .restated });
             for (gold.invalidations) |inv| {
                 if (!std.mem.eql(u8, inv.fact_id, ref.fact.id)) continue;
                 valid.upper = if (inv.valid_to) |v| try time.parseRfc3339(v) else null;
@@ -929,27 +929,27 @@ pub fn goldState(arena: Allocator, suite: *const Suite) !GraphState {
         try facts.append(arena, .{
             .key = ref.fact.id,
             .subject = ref.fact.subject,
-            .predicate = ref.fact.predicate,
+            .relation = ref.fact.relation,
             .qualifier = ref.fact.qualifier orelse "",
             .object = object,
             .text = ref.fact.id,
             .valid = valid,
-            .sys = .{ .lower = ref.valid_from },
+            .known = .{ .lower = ref.valid_from },
             .end_kind = end_kind,
-            .provenance = provenance.items,
+            .evidence = evidence.items,
         });
     }
 
-    var episodes: std.ArrayList(Episode) = .empty;
+    var entries: std.ArrayList(Entry) = .empty;
     var calls: std.ArrayList(LlmCall) = .empty;
     var scanned: std.ArrayList(ScannedText) = .empty;
-    for (suite.episodes) |ep| {
+    for (suite.entries) |ep| {
         const skip = suite.isSkip(ep.id);
-        try episodes.append(arena, .{ .eval_id = ep.id, .status = if (skip) .skipped else .committed });
-        try calls.append(arena, .{ .episode = ep.id, .purpose = .extract, .cost_usd = 0.004 });
+        try entries.append(arena, .{ .eval_id = ep.id, .status = if (skip) .skipped else .committed });
+        try calls.append(arena, .{ .entry = ep.id, .purpose = .extract, .cost_usd = 0.004 });
         if (!skip) {
-            try calls.append(arena, .{ .episode = ep.id, .purpose = .resolve, .cost_usd = 0.002 });
-            try calls.append(arena, .{ .episode = ep.id, .purpose = .embed_batch, .cost_usd = 0.0001 });
+            try calls.append(arena, .{ .entry = ep.id, .purpose = .resolve, .cost_usd = 0.002 });
+            try calls.append(arena, .{ .entry = ep.id, .purpose = .embed_batch, .cost_usd = 0.0001 });
         }
         for (ep.turns) |turn| try scanned.append(arena, .{ .location = ep.id, .text = try redactForbidden(arena, suite, turn.text) });
     }
@@ -964,7 +964,7 @@ pub fn goldState(arena: Allocator, suite: *const Suite) !GraphState {
     return .{
         .entities = entities.items,
         .facts = facts.items,
-        .episodes = episodes.items,
+        .entries = entries.items,
         .llm_calls = calls.items,
         .scanned = scanned.items,
         .retrieval = results.items,
@@ -974,7 +974,7 @@ pub fn goldState(arena: Allocator, suite: *const Suite) !GraphState {
 
 fn redactForbidden(arena: Allocator, suite: *const Suite, text: []const u8) ![]const u8 {
     var out = text;
-    for (suite.expected.episodes.map.values()) |gold| {
+    for (suite.expected.entries.map.values()) |gold| {
         for (gold.forbidden_substrings_anywhere) |needle| {
             out = try std.mem.replaceOwned(u8, arena, out, needle, "[REDACTED]");
         }
@@ -1063,23 +1063,23 @@ test "normalizer folds punctuation, case, and apostrophes" {
     try testing.expectEqualStrings("", try normalize(arena, " -- "));
 }
 
-test "predicates and values match through the equivalence rules" {
+test "relations and values match through the equivalence rules" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const owns = try canonicalPredicate(arena, "Owns");
+    const owns = try canonicalRelation(arena, "Owns");
     try testing.expectEqualStrings("owned_by", owns.name);
     try testing.expect(owns.inverse);
-    try testing.expectEqualStrings("has_setting", (try canonicalPredicate(arena, "has-setting")).name);
+    try testing.expectEqualStrings("has_setting", (try canonicalRelation(arena, "has-setting")).name);
     try testing.expectEqual(@as(u8, 2), try valueMatch(arena, "COPY", "copy"));
     try testing.expectEqual(@as(u8, 1), try valueMatch(arena, "COPY", "COPY support"));
     try testing.expectEqual(@as(u8, 2), try valueMatch(arena, "2026-12-03", "December 3, 2026"));
     try testing.expectEqual(@as(u8, 0), try valueMatch(arena, "pipelining", "COPY"));
     try testing.expect(containsWord("Potion uses Go.", "Go"));
     try testing.expect(!containsWord("Google", "Go"));
-    try testing.expect(typesCompatible(.tool, .library));
-    try testing.expect(!typesCompatible(.organization, .tool));
-    try testing.expect(!typesCompatible(.dataset, .tool));
+    try testing.expect(typesCompatible(.software, .software));
+    try testing.expect(!typesCompatible(.organization, .software));
+    try testing.expect(!typesCompatible(.dataset, .software));
     try testing.expect(typesCompatible(.other, .person));
 }
 
@@ -1097,7 +1097,7 @@ test "the gold state passes every gate" {
     try testing.expectEqual(@as(u32, 7), report.detail.temporal_items);
     try testing.expectEqual(@as(u32, 7), report.detail.merge_pairs);
     try testing.expectEqual(@as(u32, 13), report.detail.retrieval_expected);
-    try testing.expectApproxEqAbs(@as(f64, 1.9), report.metrics.calls_per_episode.?, 1e-9);
+    try testing.expectApproxEqAbs(@as(f64, 1.9), report.metrics.calls_per_entry.?, 1e-9);
 }
 
 test "a state with nothing ingested is unmeasured, not passing" {
@@ -1113,7 +1113,7 @@ test "a state with nothing ingested is unmeasured, not passing" {
 test "an unmerged duplicate entity costs entity precision and the expected merge" {
     const f = try Fixture.init();
     defer f.deinit();
-    try f.addEntity(.{ .key = "dup", .name = "pg-zig", .type = .library });
+    try f.addEntity(.{ .key = "dup", .name = "pg-zig", .type = .software });
     const report = try f.score();
     try testing.expectEqual(@as(u32, 1), report.detail.entity_fp);
     try testing.expectEqual(@as(u32, 5), report.detail.merges_correct);
@@ -1150,7 +1150,7 @@ test "retracting a fact that changed fails invalidation" {
     defer f.deinit();
     const marco = f.fact("f_tollgate_oncall_marco");
     marco.end_kind = .retracted;
-    marco.sys.upper = marco.valid.upper;
+    marco.known.upper = marco.valid.upper;
     const report = try f.score();
     try testing.expectEqual(@as(u32, 2), report.detail.invalidation_tp);
     try testing.expectEqual(@as(u32, 1), report.detail.invalidation_fp);
@@ -1186,37 +1186,37 @@ test "a leaked secret fails the secret gate" {
     for (report.findings) |msg| try testing.expect(std.mem.indexOf(u8, msg, "SUPERSECRET") == null);
 }
 
-test "facts from a skip episode are false positives" {
+test "facts from a skip entry are false positives" {
     const f = try Fixture.init();
     defer f.deinit();
-    try f.addEntity(.{ .key = "neo", .name = "Neo4j", .type = .tool });
+    try f.addEntity(.{ .key = "neo", .name = "Neo4j", .type = .software });
     try f.addFact(.{
         .key = "bad",
         .subject = "ent_graf",
-        .predicate = "uses",
+        .relation = "uses",
         .object = .{ .entity = "neo" },
         .text = "graf uses Neo4j",
-        .provenance = &.{.{ .episode = "ep14", .role = .asserted }},
+        .evidence = &.{.{ .entry = "e14", .kind = .stated }},
     });
     const report = try f.score();
     try testing.expectEqual(@as(u32, 1), report.detail.fact_fp);
-    try testing.expect(Fixture.hasFinding(report, "skip episode ep14 produced"));
+    try testing.expect(Fixture.hasFinding(report, "skip entry e14 produced"));
     try testing.expect(report.metrics.fact_precision.? < 1);
 }
 
 test "a refuted claim is forgiven only when it is retracted" {
     const f = try Fixture.init();
     defer f.deinit();
-    try f.addEntity(.{ .key = "go", .name = "Go", .type = .tool });
+    try f.addEntity(.{ .key = "go", .name = "Go", .type = .software });
     try f.addFact(.{
         .key = "go-fact",
         .subject = "ent_potion",
-        .predicate = "uses",
+        .relation = "uses",
         .object = .{ .entity = "go" },
         .text = "Potion uses Go",
         .end_kind = .retracted,
-        .sys = .{ .lower = 1, .upper = 2 },
-        .provenance = &.{.{ .episode = "ep07", .role = .asserted }},
+        .known = .{ .lower = 1, .upper = 2 },
+        .evidence = &.{.{ .entry = "e07", .kind = .stated }},
     });
     const forgiven = try f.score();
     try testing.expectEqual(@as(u32, 0), forgiven.detail.fact_fp);
@@ -1224,22 +1224,22 @@ test "a refuted claim is forgiven only when it is retracted" {
 
     const go = f.fact("go-fact");
     go.end_kind = null;
-    go.sys.upper = null;
+    go.known.upper = null;
     const active = try f.score();
     try testing.expectEqual(@as(u32, 1), active.detail.fact_fp);
     try testing.expect(Fixture.hasFinding(active, "forbidden fact 'Potion uses Go'"));
 }
 
-test "a reaffirmation that inserts a second row is a duplicate" {
+test "a restatement that inserts a second row is a duplicate" {
     const f = try Fixture.init();
     defer f.deinit();
     try f.addFact(.{
         .key = "again",
         .subject = "ent_graf",
-        .predicate = "depends_on",
+        .relation = "depends_on",
         .object = .{ .entity = "ent_postgres" },
         .text = "graf depends on Postgres",
-        .provenance = &.{.{ .episode = "ep15", .role = .asserted }},
+        .evidence = &.{.{ .entry = "e15", .kind = .stated }},
     });
     const report = try f.score();
     try testing.expectEqual(@as(u32, 1), report.detail.fact_fp);
@@ -1270,12 +1270,12 @@ test "retrieval misses and excluded hits are counted" {
     try expectGate(try f.score(), "retrieval_recall_at_5", .unmeasured);
 }
 
-test "calls and cost are unmeasured until every episode finishes" {
+test "calls and cost are unmeasured until every entry finishes" {
     const f = try Fixture.init();
     defer f.deinit();
-    @constCast(f.state.episodes)[3].status = .queued;
+    @constCast(f.state.entries)[3].status = .queued;
     const report = try f.score();
-    try expectGate(report, "calls_per_episode", .unmeasured);
-    try expectGate(report, "cost_per_episode_usd", .unmeasured);
+    try expectGate(report, "calls_per_entry", .unmeasured);
+    try expectGate(report, "cost_per_entry_usd", .unmeasured);
     try expectGate(report, "entity_f1", .pass);
 }

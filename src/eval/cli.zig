@@ -11,10 +11,10 @@ const Writer = std.Io.Writer;
 pub const usage =
     \\usage: graf eval run [--suite DIR] [--graph NAME] [--serve-bin PATH] [--json]
     \\
-    \\Replays the labeled episode suite into a fresh graph, scores the release gates,
+    \\Replays the labeled entry suite into a fresh graph, scores the release gates,
     \\and exits non-zero when any gate fails or could not be measured.
     \\
-    \\  --suite DIR        directory holding episodes.jsonl and expected.json (default: evals)
+    \\  --suite DIR        directory holding entries.jsonl and expected.json (default: evals)
     \\  --graph NAME       graph to create for the run (default: eval-<unix ms>)
     \\  --serve-bin PATH   graf binary used for the crash-resume check (skipped when absent)
     \\  --json             print the report as JSON instead of a table
@@ -107,7 +107,7 @@ fn statusLabel(s: mod.Gate.Status) []const u8 {
 
 pub fn writeScorecard(report: score.Report, w: *Writer) !void {
     const d = report.detail;
-    try w.print("graf eval: graph {s}, {d} of {d} episodes finished\n\n", .{ report.graph orelse "(none)", d.terminal_episodes, d.suite_episodes });
+    try w.print("graf eval: graph {s}, {d} of {d} entries finished\n\n", .{ report.graph orelse "(none)", d.terminal_entries, d.suite_entries });
     try w.print("{s:<24} {s:>10}  {s:<11} {s}\n", .{ "metric", "value", "gate", "result" });
     var failing: u32 = 0;
     const list = report.metrics.gateList();
@@ -212,9 +212,9 @@ test "the scorecard shows every gate with its status" {
     var buf: std.Io.Writer.Allocating = .init(arena);
     try writeScorecard(report, &buf.writer);
     const text = buf.written();
-    try testing.expect(std.mem.indexOf(u8, text, "graph eval-test, 20 of 20 episodes finished") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "graph eval-test, 20 of 20 entries finished") != null);
     try testing.expect(std.mem.indexOf(u8, text, "entity_f1                     1.000  >= 0.85     PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "cost_per_episode_usd        $0.0059  <= $0.0200  PASS") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "cost_per_entry_usd          $0.0059  <= $0.0200  PASS") != null);
     try testing.expect(std.mem.indexOf(u8, text, "cross_type_merges                 0  <= 0        PASS") != null);
     try testing.expect(std.mem.indexOf(u8, text, "result: PASS (12 of 12 gates)") != null);
     try testing.expect(std.mem.indexOf(u8, text, "FAIL") == null);

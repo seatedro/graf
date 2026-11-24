@@ -17,7 +17,7 @@ pub fn ensureGraph(s: *Store, name: []const u8) !Id {
     const id = try store.idFromPg(try row.get([]const u8, 0));
     try row.deinit();
 
-    const preds = core.ontology.core_predicates;
+    const preds = core.ontology.core_relations;
     var names: [preds.len][]const u8 = undefined;
     var descriptions: [preds.len][]const u8 = undefined;
     var cardinalities: [preds.len][]const u8 = undefined;
@@ -31,7 +31,7 @@ pub fn ensureGraph(s: *Store, name: []const u8) !Id {
         object_kinds[i] = @tagName(p.object_kind);
     }
     _ = try conn.exec(
-        \\INSERT INTO predicate (graph_id, name, description, cardinality, opposes, object_kind, status)
+        \\INSERT INTO relation (graph_id, name, description, cardinality, opposes, object_kind, status)
         \\SELECT $1, t.name, t.description, t.cardinality, t.opposes, t.object_kind, 'core'
         \\FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[])
         \\  AS t(name, description, cardinality, opposes, object_kind)
@@ -40,7 +40,7 @@ pub fn ensureGraph(s: *Store, name: []const u8) !Id {
     return id;
 }
 
-pub fn enqueue(s: *Store, graph_id: Id, draft: *const core.EpisodeDraft) !core.EpisodeSink.Outcome {
+pub fn enqueue(s: *Store, graph_id: Id, draft: *const core.EntryDraft) !core.EntrySink.Outcome {
     const hash = try store.contentHash(s.allocator, draft);
     const body = try std.json.Stringify.valueAlloc(s.allocator, draft.body, .{});
     defer s.allocator.free(body);
@@ -73,18 +73,18 @@ pub fn enqueue(s: *Store, graph_id: Id, draft: *const core.EpisodeDraft) !core.E
     var inserted = false;
     {
         var row = try conn.row(
-            \\INSERT INTO episode (id, graph_id, source_id, seq_in_source, kind, project, asserted_by, body, content_hash, reference_time)
+            \\INSERT INTO entry (id, graph_id, source_id, seq_in_source, kind, project, author, body, content_hash, reference_time)
             \\VALUES ($1, $2, $3,
             \\  CASE WHEN $4::int = 0 AND $3::uuid IS NOT NULL
-            \\    THEN (SELECT COALESCE(max(seq_in_source), 0) + 1 FROM episode WHERE source_id = $3::uuid)
+            \\    THEN (SELECT COALESCE(max(seq_in_source), 0) + 1 FROM entry WHERE source_id = $3::uuid)
             \\    ELSE $4::int END,
             \\  $5, $6, $7, $8::jsonb, $9, $10)
             \\ON CONFLICT (graph_id, content_hash) DO NOTHING
             \\RETURNING id
         , .{
-            @as([]const u8, &id.bytes),  @as([]const u8, &graph_id.bytes), source_id,
-            draft.seq_in_source,         @tagName(draft.kind),             draft.project,
-            @tagName(draft.asserted_by), body,                             @as([]const u8, &hash),
+            @as([]const u8, &id.bytes), @as([]const u8, &graph_id.bytes), source_id,
+            draft.seq_in_source,        @tagName(draft.kind),             draft.project,
+            @tagName(draft.author),     body,                             @as([]const u8, &hash),
             draft.reference_time,
         });
         if (row) |*r| {
@@ -117,13 +117,13 @@ pub fn loadCursor(s: *Store, arena: std.mem.Allocator, graph_id: Id, source: *co
 pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const u8) !?Lease {
     var row = (try s.pool.row(
         \\WITH next AS (
-        \\  SELECT e.id FROM episode e
+        \\  SELECT e.id FROM entry e
         \\  WHERE e.graph_id = $1
         \\    AND (e.status IN ('queued', 'extracted', 'staged') OR (e.status = 'extracting' AND e.lease_until < now()))
         \\    AND (e.lease_until IS NULL OR e.lease_until < now())
         \\    AND (e.not_before IS NULL OR e.not_before <= now())
         \\    AND NOT EXISTS (
-        \\      SELECT 1 FROM episode p
+        \\      SELECT 1 FROM entry p
         \\      WHERE p.source_id = e.source_id
         \\        AND p.status IN ('queued', 'extracting', 'extracted', 'staged', 'committing')
         \\        AND (p.seq_in_source, p.reference_time, p.id) < (e.seq_in_source, e.reference_time, e.id))
@@ -131,14 +131,14 @@ pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const 
         \\  LIMIT 1
         \\  FOR UPDATE SKIP LOCKED
         \\)
-        \\UPDATE episode e SET
+        \\UPDATE entry e SET
         \\  status = CASE WHEN e.status IN ('queued', 'extracting') THEN 'extracting' ELSE e.status END,
         \\  attempts = e.attempts + CASE WHEN e.status IN ('queued', 'extracting') THEN 1 ELSE 0 END,
         \\  lease_owner = $2,
-        \\  lease_token = nextval('episode_lease_token'),
+        \\  lease_token = nextval('entry_lease_token'),
         \\  lease_until = now() + $3::int * interval '1 millisecond'
         \\FROM next WHERE e.id = next.id
-        \\RETURNING e.id, e.source_id, e.seq_in_source, e.kind, e.project, e.asserted_by, e.body::text,
+        \\RETURNING e.id, e.source_id, e.seq_in_source, e.kind, e.project, e.author, e.body::text,
         \\  e.content_hash, e.reference_time, e.status, e.attempts, e.lease_token, e.base_seq,
         \\  e.commit_seq, e.cost_usd::float8, e.extraction::text
     , .{ @as([]const u8, &graph_id.bytes), worker, @as(i32, @intCast(s.lease_ms)) })) orelse return null;
@@ -148,27 +148,27 @@ pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const 
     const source_raw = try row.get(?[]const u8, 1);
     const hash_raw = try row.get([]const u8, 7);
     if (hash_raw.len != 32) return error.InvalidContentHash;
-    const body = try std.json.parseFromSliceLeaky(core.EpisodeBody, arena, try row.get([]const u8, 6), .{ .allocate = .alloc_always });
+    const body = try std.json.parseFromSliceLeaky(core.EntryBody, arena, try row.get([]const u8, 6), .{ .allocate = .alloc_always });
     const project = try row.get(?[]const u8, 4);
     const extraction = try row.get(?[]const u8, 15);
     const token = try row.get(i64, 11);
 
     return .{
-        .episode_id = id,
+        .entry_id = id,
         .graph_id = graph_id,
         .token = token,
-        .episode = .{
+        .entry = .{
             .id = id,
             .graph_id = graph_id,
             .source_id = if (source_raw) |raw| try store.idFromPg(raw) else null,
             .seq_in_source = try row.get(i32, 2),
-            .kind = std.meta.stringToEnum(core.types.EpisodeKind, try row.get([]const u8, 3)) orelse return error.InvalidEpisodeRow,
+            .kind = std.meta.stringToEnum(core.types.EntryKind, try row.get([]const u8, 3)) orelse return error.InvalidEntryRow,
             .project = if (project) |p| try arena.dupe(u8, p) else null,
-            .asserted_by = std.meta.stringToEnum(core.types.AssertedBy, try row.get([]const u8, 5)) orelse return error.InvalidEpisodeRow,
+            .author = std.meta.stringToEnum(core.types.Author, try row.get([]const u8, 5)) orelse return error.InvalidEntryRow,
             .body = body,
             .content_hash = hash_raw[0..32].*,
             .reference_time = try row.get(i64, 8),
-            .status = std.meta.stringToEnum(core.types.EpisodeStatus, try row.get([]const u8, 9)) orelse return error.InvalidEpisodeRow,
+            .status = std.meta.stringToEnum(core.types.EntryStatus, try row.get([]const u8, 9)) orelse return error.InvalidEntryRow,
             .attempts = try row.get(i32, 10),
             .lease_token = token,
             .base_seq = try row.get(?i64, 12),
@@ -181,17 +181,17 @@ pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const 
 
 pub fn heartbeat(s: *Store, lease: Lease) !void {
     const n = try s.pool.exec(
-        \\UPDATE episode SET lease_until = now() + $3::int * interval '1 millisecond'
+        \\UPDATE entry SET lease_until = now() + $3::int * interval '1 millisecond'
         \\WHERE id = $1 AND lease_token = $2 AND status IN ('extracting', 'extracted', 'staged')
-    , .{ @as([]const u8, &lease.episode_id.bytes), lease.token, @as(i32, @intCast(s.lease_ms)) });
+    , .{ @as([]const u8, &lease.entry_id.bytes), lease.token, @as(i32, @intCast(s.lease_ms)) });
     if ((n orelse 0) == 0) return error.LeaseLost;
 }
 
 pub fn saveExtraction(s: *Store, lease: Lease, extraction_json: []const u8) !void {
     const n = try s.pool.exec(
-        \\UPDATE episode SET extraction = $3::jsonb, status = 'extracted'
+        \\UPDATE entry SET extraction = $3::jsonb, status = 'extracted'
         \\WHERE id = $1 AND lease_token = $2 AND status IN ('extracting', 'extracted')
-    , .{ @as([]const u8, &lease.episode_id.bytes), lease.token, extraction_json });
+    , .{ @as([]const u8, &lease.entry_id.bytes), lease.token, extraction_json });
     if ((n orelse 0) == 0) return error.LeaseLost;
 }
 
@@ -199,8 +199,8 @@ pub fn saveChangeSet(s: *Store, lease: Lease, change_set: *const core.ChangeSet)
     const json = try std.json.Stringify.valueAlloc(s.allocator, change_set.*, .{});
     defer s.allocator.free(json);
     const n = try s.pool.exec(
-        \\UPDATE episode SET change_set = $3::jsonb, base_seq = $4, status = 'staged'
+        \\UPDATE entry SET change_set = $3::jsonb, base_seq = $4, status = 'staged'
         \\WHERE id = $1 AND lease_token = $2 AND status IN ('extracted', 'staged')
-    , .{ @as([]const u8, &lease.episode_id.bytes), lease.token, json, change_set.base_seq });
+    , .{ @as([]const u8, &lease.entry_id.bytes), lease.token, json, change_set.base_seq });
     if ((n orelse 0) == 0) return error.LeaseLost;
 }

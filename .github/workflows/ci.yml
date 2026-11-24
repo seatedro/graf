@@ -50,7 +50,7 @@ jobs:
           range="${{ github.event.pull_request.base.sha || github.event.before }}..HEAD"
           if git log --format='%H %s%n%b' "$range" 2>/dev/null | grep -n -i -E "$DENYLIST"; then status=1; fi
           if [ "$status" -ne 0 ]; then
-            echo "::error::Found a term from the vendor-neutrality denylist. See AGENTS.md."
+            echo "::error::Found a term from the vendor-neutrality denylist."
           fi
           exit "$status"
 
