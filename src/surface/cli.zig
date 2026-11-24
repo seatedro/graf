@@ -55,6 +55,7 @@ const Args = struct {
     fn parse(arena: Allocator, rest: []const []const u8) !Args {
         var pos: std.ArrayList([]const u8) = .empty;
         var i: usize = 0;
+
         while (i < rest.len) : (i += 1) {
             const a = rest[i];
             if (std.mem.startsWith(u8, a, "--")) {
@@ -64,8 +65,10 @@ const Args = struct {
                 };
                 continue;
             }
+
             try pos.append(arena, a);
         }
+
         return .{ .positional = pos.items, .rest = rest };
     }
 
@@ -99,6 +102,7 @@ pub fn run(init: std.process.Init) !u8 {
     var out_writer = std.Io.File.stdout().writer(io, &out_buf);
     const out = &out_writer.interface;
     defer out.flush() catch {};
+
     var err_buf: [1024]u8 = undefined;
     var err_writer = std.Io.File.stderr().writer(io, &err_buf);
     const err = &err_writer.interface;
@@ -118,10 +122,12 @@ pub fn run(init: std.process.Init) !u8 {
             return 2;
         }
     }
+
     if (i >= args.len) {
         try err.writeAll(usage);
         return 2;
     }
+
     const command = std.meta.stringToEnum(Command, args[i]) orelse {
         try err.print("graf: unknown command '{s}'\n\n{s}", .{ args[i], usage });
         return 2;
@@ -173,17 +179,21 @@ pub fn run(init: std.process.Init) !u8 {
                 try err.writeAll("graf serve: a flag is missing its value\n");
                 return 2;
             };
+
             var serve_cfg = cfg.*;
             if (parsed.value("--upstream")) |url| serve_cfg.edge.upstream = url;
             const opts: daemon.Options = .{ .version = version, .socket_path = try capture.state.socketPath(arena, cfg, init.environ_map) };
+
             if (serve_cfg.edge.upstream.len > 0) {
                 daemon.runEdge(init.gpa, io, init.environ_map, &serve_cfg, opts) catch |e| return fail(err, "serve --edge", e);
                 return 0;
             }
+
             if (parsed.has("--edge")) {
                 try err.writeAll("graf serve --edge: set --upstream, edge.upstream or GRAF_UPSTREAM_URL\n");
                 return 2;
             }
+
             daemon.run(init.gpa, io, init.environ_map, cfg, opts) catch |e| return fail(err, "serve", e);
             return 0;
         },
@@ -195,6 +205,7 @@ pub fn run(init: std.process.Init) !u8 {
                 try err.print("graf {s}: set HOME or XDG_STATE_HOME\n", .{@tagName(command)});
                 return 2;
             };
+
             capture.state.setPaused(io, dir, command == .pause) catch |e| return fail(err, @tagName(command), e);
             try out.writeAll(if (command == .pause) "capture paused\n" else "capture resumed\n");
             return 0;
@@ -207,21 +218,26 @@ pub fn run(init: std.process.Init) !u8 {
                 try err.print("graf {s}: a flag is missing its value\n", .{@tagName(command)});
                 return 2;
             };
+
             const req = buildRequest(arena, command, parsed) catch |e| {
                 try err.print("graf {s}: {s}\n\n{s}", .{ @tagName(command), usageError(e), usage });
                 return 2;
             };
+
             if (cfg.edge.upstream.len > 0) {
                 var up = Upstream.init(init.gpa, io, cfg.edge.upstream, cfg.edge.token, cfg.edge.timeout_ms) catch |e| return fail(err, @tagName(command), e);
                 defer up.deinit();
                 const reply = up.handler().handle(arena, req) catch |e| return fail(err, @tagName(command), e);
                 return printReply(arena, reply, parsed.has("--json"), out, err);
             }
+
             var rt: daemon.Runtime = undefined;
             rt.open(init.gpa, io, init.environ_map, cfg, .{ .pool_size = 2 }) catch |e| return fail(err, @tagName(command), e);
             defer rt.close();
+
             var svc: service.Service = .{ .gpa = init.gpa, .io = io, .engine = &rt.engine, .sink = rt.store.sink(rt.graph_id) };
             defer svc.deinit();
+
             const reply = svc.handler().handle(arena, req) catch |e| return fail(err, @tagName(command), e);
             return printReply(arena, reply, parsed.has("--json"), out, err);
         },
@@ -279,20 +295,24 @@ fn printReply(arena: Allocator, reply: api.Reply, json: bool, out: *Writer, err:
         try out.print("{s}\n", .{reply.body});
         return if (reply.status >= 400) 1 else 0;
     }
+
     const value = std.json.parseFromSliceLeaky(std.json.Value, arena, reply.body, .{}) catch {
         try out.print("{s}\n", .{reply.body});
         return if (reply.status >= 400) 1 else 0;
     };
+
     if (reply.status >= 400) {
         const msg = if (value == .object) if (value.object.get("error")) |e| (if (e == .string) e.string else reply.body) else reply.body else reply.body;
         try err.print("graf: {s}\n", .{msg});
         return 1;
     }
+
     if (value == .object) if (value.object.get("text")) |t| if (t == .string) {
         try out.writeAll(t.string);
         if (!std.mem.endsWith(u8, t.string, "\n")) try out.writeByte('\n');
         return 0;
     };
+
     try out.print("{s}\n", .{reply.body});
     return 0;
 }
@@ -307,6 +327,7 @@ fn fail(err: *Writer, what: []const u8, e: anyerror) !u8 {
         error.NoStateDir => "set HOME or XDG_STATE_HOME",
         else => "",
     };
+
     try err.print("graf {s}: {s}{s}{s}\n", .{ what, @errorName(e), if (hint.len > 0) ": " else "", hint });
     return 1;
 }
@@ -315,22 +336,27 @@ fn runMcp(init: std.process.Init, cfg: *const core.Config, config_path: ?[]const
     const arena = init.arena.allocator();
     const io = init.io;
     const env = init.environ_map;
+
     if (cfg.edge.upstream.len > 0) {
         var up = Upstream.init(init.gpa, io, cfg.edge.upstream, cfg.edge.token, cfg.edge.timeout_ms) catch |e| return fail(err, "mcp", e);
         defer up.deinit();
         return serveMcp(init, up.handler());
     }
+
     const socket = try capture.state.socketPath(arena, cfg, env) orelse {
         try err.writeAll("graf mcp: cannot place the daemon socket; set serve.socket or HOME\n");
         return 1;
     };
+
     var c = client.Client.init(io, .{ .unix = socket }, cfg.serve.token);
     const exe = try std.process.executablePathAlloc(io, arena);
     const extra: []const []const u8 = if (config_path) |p| try arena.dupe([]const u8, &.{ "--config", p }) else &.{};
+
     client.ensureDaemonWith(arena, io, env, &c, exe, .{ .args = extra }) catch |e| {
         try err.print("graf mcp: daemon unavailable ({s}); tool calls will fail until it starts\n", .{@errorName(e)});
         try err.flush();
     };
+
     return serveMcp(init, c.handler());
 }
 
@@ -357,11 +383,14 @@ fn runHook(init: std.process.Init, cfg: *const core.Config, rest: []const []cons
         try err.writeAll("usage: graf hook <harness> <event>\n");
         return 0;
     }
+
     const harness = std.meta.stringToEnum(core.Harness, rest[0]) orelse return 0;
     const event = std.meta.stringToEnum(capture.hooks.Event, rest[1]) orelse return 0;
+
     var in_buf: [16 * 1024]u8 = undefined;
     var in_reader = std.Io.File.stdin().reader(init.io, &in_buf);
     const stdin_json = in_reader.interface.allocRemaining(init.arena.allocator(), .limited(1 << 20)) catch "";
+
     capture.hooks.run(init.arena.allocator(), init.io, init.environ_map, cfg, harness, event, stdin_json, out) catch |e| {
         try err.print("graf hook: {s}\n", .{@errorName(e)});
     };
@@ -370,28 +399,35 @@ fn runHook(init: std.process.Init, cfg: *const core.Config, rest: []const []cons
 
 fn runSource(init: std.process.Init, cfg: *const core.Config, rest: []const []const u8, out: *Writer, err: *Writer) !u8 {
     const io = init.io;
+
     if (rest.len == 0 or !std.mem.eql(u8, rest[0], "capy")) {
         try err.writeAll("usage: graf source capy [--once] [--backfill]\n");
         return 2;
     }
+
     const parsed = Args.parse(init.arena.allocator(), rest[1..]) catch {
         try err.writeAll("graf source capy: a flag is missing its value\n");
         return 2;
     };
+
     if (cfg.sources.capy.api_key.len == 0) {
         try err.writeAll("graf source capy: set sources.capy.api_key or GRAF_CAPY_API_KEY\n");
         return 2;
     }
+
     var rt: daemon.Runtime = undefined;
     rt.open(init.gpa, io, init.environ_map, cfg, .{ .pool_size = 2, .start_postgres = true }) catch |e| return fail(err, "source capy", e);
     defer rt.close();
     var src = capture.capy.Source.init(init.gpa, io, init.environ_map, cfg, rt.store.sink(rt.graph_id), .{ .backfill = parsed.has("--backfill") }) catch |e| return fail(err, "source capy", e);
     defer src.deinit();
+
     if (!parsed.has("--once")) {
         src.run() catch {};
         return 0;
     }
+
     src.runOnce(std.Io.Timestamp.now(io, .real).toMicroseconds()) catch |e| return fail(err, "source capy", e);
+
     const s = src.snapshot();
     try out.print("capy: {d} threads ({d} excluded), {d} messages, {d} entries queued, {d} duplicates, {d} turns dropped\n", .{ s.threads, s.excluded_threads, s.messages, s.entries, s.duplicates, s.dropped_turns });
     return 0;
@@ -402,8 +438,10 @@ fn runInstall(arena: Allocator, init: std.process.Init, rest: []const []const u8
         try err.writeAll("graf install: a flag is missing its value\n");
         return 2;
     };
+
     var opts: capture.install.Options = .{ .dry_run = parsed.has("--dry-run") };
     if (parsed.value("--command")) |c| opts.command = c;
+
     if (parsed.value("--harness")) |h| {
         const harness = std.meta.stringToEnum(core.Harness, h) orelse {
             try err.print("graf install: unknown harness '{s}'\n", .{h});
@@ -411,6 +449,7 @@ fn runInstall(arena: Allocator, init: std.process.Init, rest: []const []const u8
         };
         opts.harnesses = try arena.dupe(core.Harness, &.{harness});
     }
+
     const report = capture.install.install(arena, init.io, init.environ_map, opts, out) catch |e| return fail(err, "install", e);
     if (!report.changed() and !report.failed()) try out.writeAll("already installed\n");
     return if (report.failed()) 1 else 0;
@@ -419,6 +458,7 @@ fn runInstall(arena: Allocator, init: std.process.Init, rest: []const []const u8
 fn doctor(arena: Allocator, init: std.process.Init, cfg: *const core.Config, loaded: core.config.Loaded, out: *Writer) !u8 {
     const io = init.io;
     var failures: u32 = 0;
+
     const Check = struct {
         fn line(w: *Writer, ok: enum { ok, warn, fail }, comptime fmt: []const u8, args: anytype) !void {
             try w.print("[{s}] " ++ fmt ++ "\n", .{@tagName(ok)} ++ args);
@@ -441,12 +481,14 @@ fn doctor(arena: Allocator, init: std.process.Init, cfg: *const core.Config, loa
             try Check.line(out, .fail, "hub: {s}", .{@errorName(e)});
             failures += 1;
         }
+
         if (try capture.state.dir(arena, init.environ_map)) |state_dir| {
             var spool = try edge.Spool.open(init.gpa, io, try edge.spoolDir(arena, state_dir), .{});
             defer spool.close();
             const waiting = try spool.pending();
             try Check.line(out, if (waiting > 0) .warn else .ok, "edge spool: {d} entries waiting for the hub", .{waiting});
         }
+
         if (try capture.state.socketPath(arena, cfg, init.environ_map)) |sock| {
             var c = client.Client.init(io, .{ .unix = sock }, cfg.serve.token);
             if (c.health() catch false)
@@ -454,6 +496,7 @@ fn doctor(arena: Allocator, init: std.process.Init, cfg: *const core.Config, loa
             else
                 try Check.line(out, .warn, "edge daemon: not running; graf serve captures local transcripts", .{});
         }
+
         return if (failures > 0) 1 else 0;
     }
 
@@ -475,7 +518,9 @@ fn doctor(arena: Allocator, init: std.process.Init, cfg: *const core.Config, loa
         failures += 1;
     } else try Check.line(out, .ok, "model: {s} via {s} at {s}", .{ cfg.llm.model, @tagName(cfg.llm.route), cfg.llm.base_url });
     if (cfg.llm.api_key.len == 0) try Check.line(out, .warn, "model: no API key set (GRAF_LLM_API_KEY)", .{});
+
     try Check.line(out, .ok, "embeddings: {s}, {d} dimensions", .{ cfg.embed.model, cfg.embed.dimensions });
+
     if (cfg.decisionEnabled())
         try Check.line(out, .ok, "rerank: decision backend configured, {d} ms budget", .{cfg.decision.rerank_timeout_ms})
     else
@@ -496,23 +541,29 @@ fn doctorDatabase(s: *store.Store, cfg: *const core.Config, out: *Writer) !void 
     if (ext) |r| {
         var row = r;
         defer row.deinit() catch {};
+
         const vector = try row.get(i64, 0);
         const trgm = try row.get(i64, 1);
+
         if (vector == 0 or trgm == 0) {
             try out.print("[warn] extensions: vector {s}, pg_trgm {s} (graf init creates them)\n", .{ if (vector > 0) "installed" else "missing", if (trgm > 0) "installed" else "missing" });
         } else try out.writeAll("[ok] extensions: vector and pg_trgm installed\n");
     }
+
     const applied: i64 = blk: {
         var row = (s.pool.row("SELECT count(*) FROM schema_migrations", .{}) catch break :blk 0) orelse break :blk 0;
         defer row.deinit() catch {};
         break :blk try row.get(i64, 0);
     };
+
     const total = store.migrations.all.len;
     if (applied < total) {
         try out.print("[warn] schema: {d} of {d} migrations applied (run graf init)\n", .{ applied, total });
         return;
     }
+
     try out.print("[ok] schema: {d} migrations applied\n", .{applied});
+
     var row = (s.pool.row(
         "SELECT g.id, (SELECT count(*) FROM entry e WHERE e.graph_id = g.id AND e.status IN ('queued', 'extracting', 'extracted', 'staged', 'committing')), (SELECT count(*) FROM entry e WHERE e.graph_id = g.id AND e.status = 'dead'), (SELECT count(*) FROM fact f WHERE f.graph_id = g.id AND upper_inf(f.known) AND upper_inf(f.valid)) FROM graph g WHERE g.name = $1",
         .{cfg.graph},
@@ -520,7 +571,9 @@ fn doctorDatabase(s: *store.Store, cfg: *const core.Config, out: *Writer) !void 
         try out.print("[warn] graph '{s}': not created yet (graf init)\n", .{cfg.graph});
         return;
     };
+
     defer row.deinit() catch {};
+
     const dead = try row.get(i64, 2);
     try out.print("[{s}] graph '{s}': {d} current facts, {d} entries pending, {d} dead\n", .{ if (dead > 0) "warn" else "ok", cfg.graph, try row.get(i64, 3), try row.get(i64, 1), dead });
 }

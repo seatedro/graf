@@ -32,6 +32,7 @@ pub const DecisionRequest = struct {
     state: []const decision.Field = &.{},
     questions: []const Question,
 };
+
 pub const jsonSchema = schema_gen.jsonSchema;
 
 pub const Failure = struct {
@@ -146,6 +147,7 @@ pub const Client = struct {
         const cfg = c.config.embed;
         if (cfg.model.len == 0) return error.ModelNotConfigured;
         if (req.inputs.len == 0) return .{ .vectors = &.{}, .usage = .{}, .cost = .{} };
+
         var body: Io.Writer.Allocating = .init(arena);
         wire.writeEmbedRequest(cfg.model, req.inputs, cfg.dimensions, &body.writer) catch return error.OutOfMemory;
         var tokens: usize = 0;
@@ -163,6 +165,7 @@ pub const Client = struct {
                 return .{ .ok = .{ .usage = d.usage, .body_cost = d.body_cost, .body_cost_status = d.body_cost_status, .model = null } };
             }
         };
+
         var ctx: Ctx = .{ .arena = arena, .n = req.inputs.len, .dims = cfg.dimensions };
         const out = try c.run(arena, .{
             .key = .embeddings,
@@ -178,6 +181,7 @@ pub const Client = struct {
             .bounds = c.bounds(),
             .failure = req.failure,
         }, body.written(), null, &ctx, Ctx.decode);
+
         ctx.out.cost = out.cost;
         return ctx.out;
     }
@@ -186,6 +190,7 @@ pub const Client = struct {
         if (!c.config.decisionEnabled()) return error.DecisionDisabled;
         const cfg = c.config.decision;
         if (req.questions.len == 0) return &.{};
+
         const payload: decision.Request = .{ .state = req.state, .questions = req.questions };
         var body: Io.Writer.Allocating = .init(arena);
         decision.writeRequest(arena, cfg.wire, cfg.model, payload, &body.writer) catch return error.OutOfMemory;
@@ -203,6 +208,7 @@ pub const Client = struct {
                 return .{ .ok = .{ .usage = d.usage, .body_cost = d.body_cost, .body_cost_status = d.body_cost_status, .model = d.model } };
             }
         };
+
         var ctx: Ctx = .{ .arena = arena, .wire = cfg.wire, .questions = req.questions };
         const interactive = req.purpose == .rerank;
         var call: Call = .{
@@ -218,12 +224,14 @@ pub const Client = struct {
             .input_tokens = std.math.cast(u32, tokens) orelse std.math.maxInt(u32),
             .bounds = c.bounds(),
         };
+
         if (interactive) {
             const t = cfg.rerank_timeout_ms;
             call.bounds = .{ .connect_ms = t, .first_response_ms = t, .stall_ms = t };
             call.total_ms = t;
             call.policy = .{ .transient_backoff_ms = &.{}, .rate_limit_backoff_ms = &.{}, .max_retry_after_ms = 0 };
         }
+
         _ = try c.run(arena, call, body.written(), null, &ctx, Ctx.decode);
         return ctx.answers;
     }
@@ -240,6 +248,7 @@ pub const Client = struct {
         const cfg = c.config.llm;
         if (cfg.model.len == 0) return error.ModelNotConfigured;
         const route = cfg.route;
+
         const prompt: wire.Prompt = .{
             .model = cfg.model,
             .system = req.system,
@@ -248,6 +257,7 @@ pub const Client = struct {
             .schema_json = req.schema_json,
             .max_output_tokens = req.max_output_tokens,
         };
+
         const original = if (repair_input == null) try requestBody(arena, route, prompt) else "";
         const preset_repair = if (repair_input) |r| try repairBody(arena, route, prompt, r.broken, r.problem) else null;
 
@@ -263,11 +273,13 @@ pub const Client = struct {
             fn decode(ctx: *@This(), res: transport.Response) Decoded {
                 const d = wire.decodeStructured(ctx.route, ctx.arena, res.body) catch |err| return .{ .malformed = err };
                 const ok: Decoded.Ok = .{ .usage = d.usage, .body_cost = d.body_cost, .body_cost_status = d.body_cost_status, .model = d.model };
+
                 switch (d.stop) {
                     .truncated => return .{ .truncated = ok },
                     .refused => return .{ .refused = .{ .ok = ok, .detail = d.detail } },
                     .complete => {},
                 }
+
                 ctx.text = d.text;
                 ctx.model = d.model orelse ctx.prompt.model;
                 if (ctx.validate(ctx.arena, d.text)) |problem| {
@@ -277,6 +289,7 @@ pub const Client = struct {
                 return .{ .ok = ok };
             }
         };
+
         var ctx: Ctx = .{ .arena = arena, .route = route, .prompt = prompt, .validate = validate, .repair_body = preset_repair };
         const out = try c.run(arena, .{
             .key = .of(route),
@@ -293,6 +306,7 @@ pub const Client = struct {
             .failure = req.failure,
             .start_phase = if (repair_input == null) .original else .repair,
         }, original, &ctx.repair_body, &ctx, Ctx.decode);
+
         return .{
             .json = ctx.text,
             .model = ctx.model,
@@ -350,14 +364,17 @@ pub const Client = struct {
     ) Error!Outcome {
         const io = c.io;
         const t = c.transport orelse c.http.transport();
+
         var seed: u64 = undefined;
         io.random(std.mem.asBytes(&seed));
         var state = recovery.State.init(seed);
         state.policy = call.policy orelse c.policy;
         state.phase = call.start_phase;
         var action = recovery.step(&state, .start, limiter.nowMs(io));
+
         const capture = [_][]const u8{ call.cost_header, "retry-after", "retry-after-ms" };
         const capture_list: []const []const u8 = if (call.cost_header.len == 0) capture[1..] else &capture;
+
         var attempt: i32 = 0;
         var certainty: DeliveryCertainty = .not_sent;
         var last_status: ?u16 = null;
@@ -381,6 +398,7 @@ pub const Client = struct {
                 },
                 .send => |s| s,
             };
+
             if (send.cooldown_until_ms) |until| c.limiter.cooldown(io, call.key, until);
             try c.sleepUntil(send.at_ms);
             const is_repair = send.phase == .repair;
@@ -395,6 +413,7 @@ pub const Client = struct {
                 };
                 return err;
             };
+
             attempt += 1;
             const started_us = Io.Clock.real.now(io).toMicroseconds();
             const started_ms = limiter.nowMs(io);
@@ -407,12 +426,14 @@ pub const Client = struct {
                 .capture = capture_list,
                 .cancel = &c.shutdown,
             };
+
             const result = t.send(io, arena, &req) catch |err| {
                 c.limiter.release(io);
                 return err;
             };
             c.limiter.release(io);
             const latency: u32 = std.math.cast(u32, limiter.nowMs(io) -| started_ms) orelse std.math.maxInt(u32);
+
             var row: core.LlmCall = .{
                 .id = core.Id.v7(io),
                 .graph_id = c.graph_id,
@@ -434,6 +455,7 @@ pub const Client = struct {
                         c.record(&row);
                         return error.Canceled;
                     }
+
                     const tc = classify.fromTransport(f.err, f.sent, f.timed_out);
                     certainty = tc.certainty;
                     last_status = null;
@@ -446,6 +468,7 @@ pub const Client = struct {
                     certainty = .possibly_sent;
                     last_status = res.status;
                     row.http_status = res.status;
+
                     if (res.status < 200 or res.status > 299) {
                         const class = classify.fromStatus(res.status, res.body);
                         last_retry_after = retryAfter(res, io);
@@ -456,12 +479,14 @@ pub const Client = struct {
                         action = recovery.step(&state, .{ .failed = .{ .class = class, .retry_after_ms = last_retry_after } }, now);
                         continue;
                     }
+
                     const decoded = decode(ctx, res);
                     const ok: ?Decoded.Ok = switch (decoded) {
                         .ok, .needs_repair, .truncated => |o| o,
                         .refused => |r| r.ok,
                         .malformed, .invalid => null,
                     };
+
                     var resolved: Cost = .{};
                     if (ok) |o| {
                         row.input_tokens = @intCast(@min(o.usage.input_tokens, std.math.maxInt(i32)));
@@ -473,6 +498,7 @@ pub const Client = struct {
                         resolved = cost.resolve(header(res, call.cost_header), null, null, .{}, call.model, null, c.config.llm.rates);
                     }
                     row.cost_usd, row.cost_status = costPair(resolved);
+
                     switch (decoded) {
                         .ok => |o| {
                             row.ok = true;
@@ -553,6 +579,7 @@ fn Validator(comptime T: type) type {
             var diag: std.json.Diagnostics = .{};
             var scanner = std.json.Scanner.initCompleteInput(arena, text);
             scanner.enableDiagnostics(&diag);
+
             _ = std.json.parseFromTokenSourceLeaky(T, arena, &scanner, parse_options) catch |err|
                 return std.fmt.allocPrint(arena, "the reply does not match the schema: {s} at line {d}, column {d}", .{
                     @errorName(err), diag.getLine(), diag.getColumn(),
@@ -580,6 +607,7 @@ fn repairBody(arena: std.mem.Allocator, route: Route, prompt: wire.Prompt, broke
         \\
         \\Reply again with only the corrected JSON object, following the required schema exactly.
     , .{ problem, broken[0..@min(broken.len, max_repair_echo)] });
+
     return requestBody(arena, route, p);
 }
 

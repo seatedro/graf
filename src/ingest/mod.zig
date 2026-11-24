@@ -97,6 +97,7 @@ pub const Pipeline = struct {
             .graph_id = p.graph_id,
             .io = p.client.io,
         };
+
         return driver.process(arena, lease);
     }
 

@@ -59,6 +59,7 @@ Zig is pinned to 0.17.1 (`build.zig.zon`, the flake, CI). Use the `std.Io` inter
 
 - Match the spec. Where you make a call the spec leaves open, say why in your PR description.
 - No comments by default. Names and types should carry the meaning; add a comment only for something the code cannot say.
+- Separate logical blocks with a single blank line: guards, setup, main logic, and the return inside functions, and groups of related declarations at the top level. Keep short idioms and acquire/`defer` pairs together.
 - Every LLM attempt writes an `llm_call` row, including failures. Nothing logs or stores secrets; redaction runs before storage and before any model call.
 - License: MIT. Files copied from Apache-2.0 projects keep their original license header, and the copy is recorded in `THIRD_PARTY_NOTICES.md` with the upstream URL, commit, and license text.
 - Agents never merge PRs.

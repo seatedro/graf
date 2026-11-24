@@ -8,11 +8,13 @@ pub const read_error_budget: usize = 300;
 
 pub fn headTail(arena: Allocator, text: []const u8, budget: usize) Allocator.Error![]const u8 {
     if (text.len <= budget) return text;
+
     const half = budget / 2;
     var head_end = half;
     while (head_end > 0 and isContinuation(text[head_end])) head_end -= 1;
     var tail_start = text.len - half;
     while (tail_start < text.len and isContinuation(text[tail_start])) tail_start += 1;
+
     return std.fmt.allocPrint(arena, "{s}\n[... {d} bytes elided ...]\n{s}", .{
         text[0..head_end],
         tail_start - head_end,
@@ -53,6 +55,7 @@ pub const Call = struct {
 
 pub fn prepareCall(arena: Allocator, scratch: Allocator, raw: RawTool) Allocator.Error!Call {
     const name = try arena.dupe(u8, raw.name);
+
     if (isReadTool(raw.name)) {
         if (raw.args) |args| if (readPath(args)) |path| {
             return .{ .name = name, .read = .{
@@ -62,6 +65,7 @@ pub fn prepareCall(arena: Allocator, scratch: Allocator, raw: RawTool) Allocator
             } };
         };
     }
+
     if (commandText(raw)) |cmd| {
         if (shellRead(cmd)) |read| {
             return .{ .name = name, .read = .{
@@ -72,6 +76,7 @@ pub fn prepareCall(arena: Allocator, scratch: Allocator, raw: RawTool) Allocator
         }
         return .{ .name = name, .args_preview = try cleanBounded(arena, scratch, cmd, args_budget) };
     }
+
     const text = if (raw.args) |args|
         try std.json.Stringify.valueAlloc(scratch, args, .{})
     else
@@ -83,6 +88,7 @@ pub fn finishCall(arena: Allocator, scratch: Allocator, call: Call, result: ?[]c
     if (call.read) |read| {
         const first = read.offset orelse 1;
         const lines: ?u64 = if (result) |r| (if (is_error) null else countLines(r)) else read.limit;
+
         const preview = if (lines) |n|
             (if (n == 0)
                 read.path
@@ -92,12 +98,15 @@ pub fn finishCall(arena: Allocator, scratch: Allocator, call: Call, result: ?[]c
             try std.fmt.allocPrint(arena, "{s}:{d}-", .{ read.path, first })
         else
             read.path;
+
         const result_preview = if (is_error and result != null)
             try cleanBounded(arena, scratch, result.?, read_error_budget)
         else
             "";
+
         return .{ .name = call.name, .args_preview = preview, .result_preview = result_preview };
     }
+
     return .{
         .name = call.name,
         .args_preview = call.args_preview,
@@ -141,6 +150,7 @@ fn intField(args: std.json.Value, keys: []const []const u8) ?u64 {
 pub fn commandText(raw: RawTool) ?[]const u8 {
     const args = raw.args orelse return null;
     if (args != .object) return null;
+
     for ([_][]const u8{ "command", "cmd" }) |key| {
         const v = args.object.get(key) orelse continue;
         switch (v) {
@@ -168,6 +178,7 @@ pub const ShellRead = struct { path: []const u8, first: ?u64 = null, last: ?u64 
 pub fn shellRead(command: []const u8) ?ShellRead {
     const cmd = std.mem.trim(u8, command, " \t\r\n");
     if (std.mem.indexOfAny(u8, cmd, "|;&<>`$\n") != null) return null;
+
     var words: [6][]const u8 = undefined;
     var n: usize = 0;
     var it = std.mem.tokenizeAny(u8, cmd, " \t");
@@ -176,10 +187,12 @@ pub fn shellRead(command: []const u8) ?ShellRead {
         words[n] = w;
         n += 1;
     }
+
     if (n < 2) return null;
     const prog = words[0];
     if (std.mem.eql(u8, prog, "cat") and n == 2) return .{ .path = unquote(words[1]) };
     if (std.mem.eql(u8, prog, "nl") and n == 3 and std.mem.eql(u8, words[1], "-ba")) return .{ .path = unquote(words[2]) };
+
     if (std.mem.eql(u8, prog, "sed") and n == 4 and std.mem.eql(u8, words[1], "-n")) {
         const range = unquote(words[2]);
         if (range.len < 2 or range[range.len - 1] != 'p') return null;
@@ -189,6 +202,7 @@ pub fn shellRead(command: []const u8) ?ShellRead {
         if (last < first) return null;
         return .{ .path = unquote(words[3]), .first = first, .last = last };
     }
+
     return null;
 }
 
@@ -233,13 +247,16 @@ test "headTail keeps both ends and respects utf-8" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     try testing.expectEqualStrings("short", try headTail(arena, "short", 10));
+
     var buf: std.ArrayList(u8) = .empty;
     try buf.appendSlice(arena, "ab");
     for (0..20) |_| try buf.appendSlice(arena, "\xc3\xa9");
     try buf.appendSlice(arena, "yz");
     const long = buf.items;
     const out = try headTail(arena, long, 10);
+
     try testing.expect(std.unicode.utf8ValidateSlice(out));
     try testing.expect(std.mem.startsWith(u8, out, "ab"));
     try testing.expect(std.mem.endsWith(u8, out, "yz"));
@@ -250,9 +267,11 @@ test "file reads collapse to a path and line range" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const args = try std.json.parseFromSliceLeaky(std.json.Value, arena, "{\"file_path\":\"/repo/src/main.zig\",\"offset\":10,\"limit\":5}", .{});
     const call = try prepareCall(arena, arena, .{ .name = "Read", .args = args });
     const tc = try finishCall(arena, arena, call, "a\nb\nc\nd\ne\n", false);
+
     try testing.expectEqualStrings("/repo/src/main.zig:10-14", tc.args_preview);
     try testing.expectEqualStrings("", tc.result_preview);
 
@@ -269,12 +288,14 @@ test "command output keeps head and tail; arguments are bounded" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const args = try std.json.parseFromSliceLeaky(std.json.Value, arena, "{\"command\":\"zig build test\"}", .{});
     const call = try prepareCall(arena, arena, .{ .name = "Bash", .args = args });
     const filler = try arena.alloc(u8, 5000);
     @memset(filler, 'x');
     const output = try std.mem.concat(arena, u8, &.{ "HEAD-MARKER\n", filler, "\nTAIL-MARKER" });
     const tc = try finishCall(arena, arena, call, output, false);
+
     try testing.expectEqualStrings("zig build test", tc.args_preview);
     try testing.expect(tc.result_preview.len < result_budget + 64);
     try testing.expect(std.mem.startsWith(u8, tc.result_preview, "HEAD-MARKER"));

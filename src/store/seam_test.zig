@@ -18,6 +18,7 @@ test "seam: halfvec(512) rows batch-inserted as flat float4[] slices round-trip"
 
     const conn = try s.pool.acquire();
     defer conn.release();
+
     _ = try conn.exec("DROP TABLE IF EXISTS pg_temp.seam_vec", .{});
     _ = try conn.exec("CREATE TEMP TABLE seam_vec (id uuid PRIMARY KEY, emb halfvec(512) NOT NULL)", .{});
     _ = try conn.exec("CREATE INDEX ON seam_vec USING hnsw (emb halfvec_cosine_ops) WITH (m = 16, ef_construction = 128)", .{});
@@ -35,9 +36,11 @@ test "seam: halfvec(512) rows batch-inserted as flat float4[] slices round-trip"
         bytes.* = store.Id.v7(io).bytes;
         id.* = bytes;
     }
+
     const embs = try gpa.alloc(f32, n * dims);
     defer gpa.free(embs);
     fillEmbeddings(embs, 1);
+
     _ = try conn.exec(
         \\INSERT INTO seam_vec (id, emb)
         \\SELECT t.id, ($2::float4[])[(t.i - 1) * 512 + 1 : t.i * 512]::halfvec(512)
@@ -47,9 +50,11 @@ test "seam: halfvec(512) rows batch-inserted as flat float4[] slices round-trip"
     for ([_]usize{ 0, n - 1 }) |i| {
         var row = (try conn.row("SELECT (SELECT count(*)::int FROM seam_vec), (SELECT emb::float4[] FROM seam_vec WHERE id = $1)", .{ids[i]})).?;
         defer row.deinit() catch {};
+
         try std.testing.expectEqual(@as(i32, n), try row.get(i32, 0));
         var it = try row.get(pg.Iterator(f32), 1);
         try std.testing.expectEqual(@as(usize, dims), it.len());
+
         var k: usize = 0;
         while (it.next()) |v| : (k += 1) {
             try std.testing.expectApproxEqAbs(embs[i * dims + k], v, 1e-3);
@@ -65,6 +70,7 @@ test "seam: hnsw.iterative_scan = relaxed_order keeps a selective filter from un
 
     const conn = try s.pool.acquire();
     defer conn.release();
+
     _ = try conn.exec("DROP TABLE IF EXISTS pg_temp.seam_knn", .{});
     _ = try conn.exec("CREATE TEMP TABLE seam_knn (id uuid PRIMARY KEY, graph int NOT NULL, emb halfvec(512) NOT NULL)", .{});
     _ = try conn.exec("CREATE INDEX ON seam_knn USING hnsw (emb halfvec_cosine_ops) WITH (m = 16, ef_construction = 64)", .{});
@@ -78,12 +84,14 @@ test "seam: hnsw.iterative_scan = relaxed_order keeps a selective filter from un
     defer gpa.free(graphs);
     const embs = try gpa.alloc(f32, n * dims);
     defer gpa.free(embs);
+
     for (0..n) |i| {
         id_bytes[i] = store.Id.v7(io).bytes;
         ids[i] = &id_bytes[i];
         graphs[i] = if (i % 50 == 0) 1 else 2;
     }
     fillEmbeddings(embs, 42);
+
     _ = try conn.exec(
         \\INSERT INTO seam_knn (id, graph, emb)
         \\SELECT t.id, t.g, ($3::float4[])[(t.i - 1) * 512 + 1 : t.i * 512]::halfvec(512)
@@ -98,15 +106,18 @@ test "seam: hnsw.iterative_scan = relaxed_order keeps a selective filter from un
     for ([_][]const u8{ "off", "relaxed_order" }, &counts) |mode, *count| {
         try conn.begin();
         defer conn.rollback() catch {};
+
         _ = try conn.exec("SET LOCAL enable_seqscan = off", .{});
         _ = try conn.exec("SET LOCAL hnsw.ef_search = 40", .{});
         const set = try std.fmt.allocPrint(gpa, "SET LOCAL hnsw.iterative_scan = {s}", .{mode});
         defer gpa.free(set);
         _ = try conn.exec(set, .{});
+
         var row = (try conn.row(knn, .{query})).?;
         defer row.deinit() catch {};
         count.* = try row.get(i32, 0);
     }
+
     try std.testing.expect(counts[0] < 10);
     try std.testing.expectEqual(@as(i32, 10), counts[1]);
 }
@@ -153,9 +164,11 @@ test "seam: LISTEN receives a NOTIFY sent inside a committed transaction, not a 
 
     const conn = try s.pool.acquire();
     defer conn.release();
+
     try conn.begin();
     _ = try conn.exec("SELECT pg_notify('graf_seam_test', 'rolled-back')", .{});
     try conn.rollback();
+
     try conn.begin();
     _ = try conn.exec("SELECT pg_notify('graf_seam_test', 'hello')", .{});
     try conn.commit();

@@ -71,10 +71,12 @@ pub fn run(p: *ingest.Pipeline, stop: *std.atomic.Value(bool)) !void {
         listener.stop() catch {};
         listen_thread.join();
     }
+
     for (threads, 0..) |*t, i| {
         t.* = try std.Thread.spawn(.{}, worker, .{ &shared, i });
         started += 1;
     }
+
     while (!stop.load(.acquire)) io.sleep(.fromMilliseconds(200), .awake) catch break;
 }
 
@@ -89,6 +91,7 @@ fn worker(shared: *Shared, index: usize) void {
     const io = p.client.io;
     var name_buf: [32]u8 = undefined;
     const name = std.fmt.bufPrint(&name_buf, "graf-worker-{d}", .{index}) catch "graf-worker";
+
     var backend: postgres.PgBackend = .{ .store = p.store, .graph_id = p.graph_id, .io = io, .worker = name };
     var model: postgres.ClientModel = .{ .client = p.client };
     var driver: pipeline.Driver(postgres.PgBackend, postgres.ClientModel) = .{
@@ -98,6 +101,7 @@ fn worker(shared: *Shared, index: usize) void {
         .graph_id = p.graph_id,
         .io = io,
     };
+
     var arena_state = std.heap.ArenaAllocator.init(p.store.allocator);
     defer arena_state.deinit();
     var last_housekeeping: core.Micros = 0;
@@ -110,6 +114,7 @@ fn worker(shared: *Shared, index: usize) void {
             sleepUnless(io, shared, idle_poll_ms);
             continue;
         };
+
         if (lease) |l| {
             const outcome = driver.process(arena, l) catch |err| {
                 log.err("entry {f} failed: {t}", .{ l.entry_id, err });
@@ -118,6 +123,7 @@ fn worker(shared: *Shared, index: usize) void {
             log.debug("entry {f}: {t}", .{ l.entry_id, outcome });
             continue;
         }
+
         if (index == 0) {
             const now = core.time.now(io);
             if (now - last_housekeeping >= housekeeping_ms * 1000) {
@@ -125,6 +131,7 @@ fn worker(shared: *Shared, index: usize) void {
                 housekeeping(arena, p, &model) catch |err| log.warn("housekeeping failed: {t}", .{err});
             }
         }
+
         sleepUnless(io, shared, idle_poll_ms);
     }
 }

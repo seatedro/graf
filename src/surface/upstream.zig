@@ -18,9 +18,11 @@ pub const Upstream = struct {
         const uri = std.Uri.parse(base) catch return error.InvalidUpstreamUrl;
         if (!std.mem.eql(u8, uri.scheme, "http") and !std.mem.eql(u8, uri.scheme, "https")) return error.InvalidUpstreamUrl;
         if (uri.host == null) return error.InvalidUpstreamUrl;
+
         const owned_base = try gpa.dupe(u8, base);
         errdefer gpa.free(owned_base);
         const authorization = if (token.len > 0) try std.fmt.allocPrint(gpa, "Bearer {s}", .{token}) else "";
+
         return .{
             .gpa = gpa,
             .io = io,
@@ -43,6 +45,7 @@ pub const Upstream = struct {
             done: anyerror!api.Reply,
             expired: Io.Cancelable!void,
         };
+
         var buffer: [2]Outcome = undefined;
         var select = Io.Select(Outcome).init(u.io, &buffer);
         select.concurrent(.done, exchange, .{ u, arena, method, path, body }) catch return exchange(u, arena, method, path, body);
@@ -50,10 +53,12 @@ pub const Upstream = struct {
             select.cancelDiscard();
             return exchange(u, arena, method, path, body);
         };
+
         const first = select.await() catch |err| {
             select.cancelDiscard();
             return err;
         };
+
         select.cancelDiscard();
         return switch (first) {
             .done => |result| result,
@@ -64,6 +69,7 @@ pub const Upstream = struct {
     fn exchange(u: *Upstream, arena: Allocator, method: std.http.Method, path: []const u8, body: ?[]const u8) anyerror!api.Reply {
         const url = try std.mem.concat(arena, u8, &.{ u.base, path });
         var out: Io.Writer.Allocating = .init(arena);
+
         const result = try u.http.fetch(.{
             .location = .{ .url = url },
             .method = method,
@@ -77,12 +83,14 @@ pub const Upstream = struct {
             },
             .extra_headers = &.{.{ .name = "accept", .value = "application/json" }},
         });
+
         return .{ .status = @backingInt(result.status), .body = out.written() };
     }
 
     pub fn health(u: *Upstream) Io.Cancelable!bool {
         var arena_state = std.heap.ArenaAllocator.init(u.gpa);
         defer arena_state.deinit();
+
         const reply = u.request(arena_state.allocator(), .GET, "/v1/health", null) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             else => return false,
@@ -112,8 +120,10 @@ test "upstream rejects urls it cannot reach" {
     const io = testing.io;
     try testing.expectError(error.InvalidUpstreamUrl, Upstream.init(testing.allocator, io, "hub.example.ts.net", "", 1000));
     try testing.expectError(error.InvalidUpstreamUrl, Upstream.init(testing.allocator, io, "ftp://hub.example.ts.net", "", 1000));
+
     var u = try Upstream.init(testing.allocator, io, " https://hub.example.ts.net/graf/ ", "t", 1000);
     defer u.deinit();
+
     try testing.expectEqualStrings("https://hub.example.ts.net/graf", u.base);
     try testing.expectEqualStrings("Bearer t", u.authorization);
 }
@@ -134,6 +144,7 @@ test "upstream forwards every op with the bearer token and maps outages to 502" 
     var u = try Upstream.init(testing.allocator, io, url, "hub-token", 2000);
     defer u.deinit();
     try testing.expect(try u.health());
+
     const h = u.handler();
     const requests = [_]api.Request{
         .{ .op = .search, .body = "{\"query\":\"q\"}" },
@@ -145,11 +156,13 @@ test "upstream forwards every op with the bearer token and maps outages to 502" 
         .{ .op = .warm, .session_id = "s 1", .body = "{\"prompt\":\"p\"}" },
         .{ .op = .recall, .session_id = "s1", .body = "{\"prompt\":\"what & why?\"}" },
     };
+
     for (requests) |req| {
         const reply = try h.handle(arena, req);
         try testing.expectEqual(200, reply.status);
         try fake.expectLast(req.op, req.body, req.session_id);
     }
+
     const missing = try h.handle(arena, .{ .op = .entity, .body = "{\"name_or_id\":\"missing\"}" });
     try testing.expectEqual(404, missing.status);
 
@@ -160,6 +173,7 @@ test "upstream forwards every op with the bearer token and maps outages to 502" 
     hub.stop();
     running.await(io) catch {};
     hub.deinit();
+
     try testing.expect(!try u.health());
     const offline = try h.handle(arena, requests[0]);
     try testing.expectEqual(502, offline.status);

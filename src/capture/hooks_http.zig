@@ -54,6 +54,7 @@ pub fn connect(io: Io, endpoints: []const Endpoint) Error!net.Stream {
         };
         return stream;
     }
+
     return error.Unreachable;
 }
 
@@ -61,6 +62,7 @@ pub fn send(io: Io, stream: net.Stream, request: Request) Error!void {
     var buf: [2048]u8 = undefined;
     var writer = stream.writer(io, &buf);
     const w = &writer.interface;
+
     writeRequest(w, request) catch return if (writer.err) |e| switch (e) {
         error.Canceled => error.Canceled,
         else => error.WriteFailed,
@@ -70,18 +72,21 @@ pub fn send(io: Io, stream: net.Stream, request: Request) Error!void {
 fn writeRequest(w: *Io.Writer, request: Request) Io.Writer.Error!void {
     try w.print("{s} {s} HTTP/1.1\r\nHost: localhost\r\nUser-Agent: graf-hook\r\nAccept: text/plain, text/markdown, application/json\r\nConnection: close\r\n", .{ request.method, request.target });
     if (request.token.len > 0) try w.print("Authorization: Bearer {s}\r\n", .{request.token});
+
     if (request.body) |body| {
         try w.print("Content-Type: application/json\r\nContent-Length: {d}\r\n\r\n", .{body.len});
         try w.writeAll(body);
     } else {
         try w.writeAll("\r\n");
     }
+
     try w.flush();
 }
 
 pub fn receive(arena: Allocator, io: Io, stream: net.Stream) Error!Response {
     var raw: std.ArrayList(u8) = .empty;
     var chunk: [4096]u8 = undefined;
+
     while (true) {
         var bufs = [_][]u8{&chunk};
         const n = stream.read(io, &bufs) catch |err| switch (err) {
@@ -100,6 +105,7 @@ pub fn parse(arena: Allocator, raw: []const u8, eof: bool) Error!?Response {
     var lines = std.mem.splitSequence(u8, raw[0..head_end], "\r\n");
     const status_line = lines.next() orelse return error.BadResponse;
     if (!std.mem.startsWith(u8, status_line, "HTTP/1.")) return error.BadResponse;
+
     var parts = std.mem.tokenizeScalar(u8, status_line, ' ');
     _ = parts.next();
     const status = std.fmt.parseInt(u16, parts.next() orelse return error.BadResponse, 10) catch return error.BadResponse;
@@ -124,14 +130,17 @@ pub fn parse(arena: Allocator, raw: []const u8, eof: bool) Error!?Response {
     if (status == 204 or status == 304 or (status >= 100 and status < 200)) {
         return .{ .status = status, .content_type = content_type, .body = "" };
     }
+
     if (chunked) {
         const body = try decodeChunked(arena, rest) orelse return if (eof) error.BadResponse else null;
         return .{ .status = status, .content_type = content_type, .body = body };
     }
+
     if (content_length) |len| {
         if (rest.len < len) return if (eof) error.BadResponse else null;
         return .{ .status = status, .content_type = content_type, .body = rest[0..len] };
     }
+
     if (!eof) return null;
     return .{ .status = status, .content_type = content_type, .body = rest };
 }
@@ -139,12 +148,14 @@ pub fn parse(arena: Allocator, raw: []const u8, eof: bool) Error!?Response {
 fn decodeChunked(arena: Allocator, data: []const u8) Error!?[]const u8 {
     var out: std.ArrayList(u8) = .empty;
     var pos: usize = 0;
+
     while (true) {
         const line_end = std.mem.indexOfPos(u8, data, pos, "\r\n") orelse return null;
         var size_text = data[pos..line_end];
         if (std.mem.indexOfScalar(u8, size_text, ';')) |semi| size_text = size_text[0..semi];
         const size = std.fmt.parseInt(usize, std.mem.trim(u8, size_text, " \t"), 16) catch return error.BadResponse;
         pos = line_end + 2;
+
         if (size == 0) return out.items;
         if (data.len < pos + size + 2) return null;
         try out.appendSlice(arena, data[pos .. pos + size]);
@@ -174,6 +185,7 @@ pub fn withinDeadline(
         done: ReturnType(function),
         expired: Io.Cancelable!void,
     };
+
     var buffer: [2]U = undefined;
     var select = Io.Select(U).init(io, &buffer);
     select.concurrent(.done, function, args) catch return null;
@@ -181,10 +193,12 @@ pub fn withinDeadline(
         select.cancelDiscard();
         return null;
     };
+
     const first = select.await() catch {
         select.cancelDiscard();
         return null;
     };
+
     select.cancelDiscard();
     return switch (first) {
         .done => |result| result,
@@ -199,6 +213,7 @@ fn sleepUntil(io: Io, deadline: Io.Clock.Timestamp) Io.Cancelable!void {
 pub fn parseListen(text: []const u8) ?net.IpAddress {
     const colon = std.mem.lastIndexOfScalar(u8, text, ':') orelse return null;
     const port = std.fmt.parseInt(u16, text[colon + 1 ..], 10) catch return null;
+
     var host = text[0..colon];
     if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') host = host[1 .. host.len - 1];
     if (host.len == 0 or std.mem.eql(u8, host, "0.0.0.0") or std.ascii.eqlIgnoreCase(host, "localhost")) host = "127.0.0.1";

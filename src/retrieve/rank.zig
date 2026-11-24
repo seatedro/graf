@@ -74,6 +74,7 @@ pub fn cosine(a: []const f32, b: []const f32) f64 {
         na += @as(f64, x) * x;
         nb += @as(f64, y) * y;
     }
+
     if (na == 0 or nb == 0) return 0;
     return dot / (@sqrt(na) * @sqrt(nb));
 }
@@ -102,12 +103,15 @@ pub fn mmr(arena: std.mem.Allocator, cands: []const Candidate) ![]u32 {
     const n = cands.len;
     const order = try arena.alloc(u32, n);
     if (n == 0) return order;
+
     var max_score: f64 = 0;
     for (cands) |c| max_score = @max(max_score, c.score);
+
     const taken = try arena.alloc(bool, n);
     @memset(taken, false);
     const max_sim = try arena.alloc(f64, n);
     @memset(max_sim, 0);
+
     for (0..n) |step| {
         var best: usize = 0;
         var best_val: f64 = -std.math.inf(f64);
@@ -120,12 +124,14 @@ pub fn mmr(arena: std.mem.Allocator, cands: []const Candidate) ![]u32 {
                 best = i;
             }
         }
+
         taken[best] = true;
         order[step] = @intCast(best);
         for (cands, 0..) |c, i| {
             if (!taken[i]) max_sim[i] = @max(max_sim[i], cosine(c.emb, cands[best].emb));
         }
     }
+
     return order;
 }
 
@@ -145,6 +151,7 @@ test "rrf weights the arms" {
     const v = rrf(.{ .vec = 1 });
     const l = rrf(.{ .lex = 1 });
     const g = rrf(.{ .graph = 1 });
+
     try std.testing.expect(v > l and l > g);
     try std.testing.expectApproxEqAbs(1.0 / 61.0 + 0.8 / 62.0 + 0.7 / 63.0, rrf(.{ .vec = 1, .lex = 2, .graph = 3 }), 1e-12);
     try std.testing.expectEqual(@as(f64, 0), rrf(.{}));
@@ -172,10 +179,12 @@ test "rerank blends relevance with normalized rrf" {
         .{ .rrf = 0.01, .factors = 1, .emb = &.{}, .relevance = 0.9 },
         .{ .rrf = 0.015, .factors = 1, .emb = &.{} },
     };
+
     score(&c, true);
     try std.testing.expectApproxEqAbs(0.65 * 0.1 + 0.35, c[0].score, 1e-9);
     try std.testing.expectApproxEqAbs(0.65 * 0.9 + 0.35 * 0.5, c[1].score, 1e-9);
     try std.testing.expectApproxEqAbs(0.35 * 0.75, c[2].score, 1e-9);
+
     score(&c, false);
     try std.testing.expectEqual(@as(f64, 0.02), c[0].score);
 }
@@ -183,11 +192,13 @@ test "rerank blends relevance with normalized rrf" {
 test "mmr suppresses near-duplicate paraphrases" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
+
     const c = [_]Candidate{
         .{ .rrf = 0, .factors = 1, .emb = &.{ 1, 0, 0 }, .score = 1.0 },
         .{ .rrf = 0, .factors = 1, .emb = &.{ 0.999, 0.01, 0 }, .score = 0.95 },
         .{ .rrf = 0, .factors = 1, .emb = &.{ 0, 1, 0 }, .score = 0.80 },
     };
+
     const order = try mmr(arena_state.allocator(), &c);
     try std.testing.expectEqualSlices(u32, &.{ 0, 2, 1 }, order);
 }

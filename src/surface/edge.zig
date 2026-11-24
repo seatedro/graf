@@ -46,9 +46,11 @@ pub const Spool = struct {
 
     pub fn open(gpa: Allocator, io: Io, spool_dir: []const u8, options: Options) !Spool {
         try Dir.cwd().createDirPath(io, spool_dir);
+
         var s: Spool = .{ .gpa = gpa, .io = io, .dir = undefined, .keep = .init(gpa), .options = options };
         errdefer s.keep.deinit();
         errdefer s.cursors.deinit(gpa);
+
         s.dir = try s.keep.allocator().dupe(u8, spool_dir);
         try s.repairTail();
         try s.loadCursors();
@@ -71,11 +73,14 @@ pub const Spool = struct {
 
     fn enqueue(ptr: *anyopaque, draft: *const core.EntryDraft) anyerror!core.EntrySink.Outcome {
         const s: *Spool = @ptrCast(@alignCast(ptr));
+
         var arena_state = std.heap.ArenaAllocator.init(s.gpa);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
+
         var redacted = try core.redactDraft(arena, draft.*);
         redacted.cursor = null;
+
         var line: Io.Writer.Allocating = .init(arena);
         try std.json.Stringify.value(redacted, .{ .emit_null_optional_fields = false }, &line.writer);
         try line.writer.writeByte('\n');
@@ -90,6 +95,7 @@ pub const Spool = struct {
     fn loadCursor(ptr: *anyopaque, arena: Allocator, source: *const core.SourceKey) anyerror!?[]const u8 {
         const s: *Spool = @ptrCast(@alignCast(ptr));
         const key = try cursorKey(arena, source);
+
         try s.mutex.lock(s.io);
         defer s.mutex.unlock(s.io);
         const c = s.cursors.get(key) orelse return null;
@@ -104,6 +110,7 @@ pub const Spool = struct {
         const key = try cursorKey(arena, source);
         if (s.cursors.get(key)) |current| if (std.mem.eql(u8, current, cursor)) return;
         try s.putCursor(key, cursor);
+
         var line: Io.Writer.Allocating = .init(arena);
         try std.json.Stringify.value(CursorLine{ .key = key, .cursor = cursor }, .{}, &line.writer);
         try line.writer.writeByte('\n');
@@ -120,6 +127,7 @@ pub const Spool = struct {
     fn loadCursors(s: *Spool) !void {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const file_path = try s.path(&buf, cursors_file);
+
         var arena_state = std.heap.ArenaAllocator.init(s.gpa);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
@@ -127,6 +135,7 @@ pub const Spool = struct {
             error.FileNotFound => return,
             else => |e| return e,
         };
+
         var lines = std.mem.splitScalar(u8, text, '\n');
         while (lines.next()) |line| {
             if (std.mem.trim(u8, line, " \t\r").len == 0) continue;
@@ -146,6 +155,7 @@ pub const Spool = struct {
     fn append(s: *Spool, name: []const u8, bytes: []const u8, sync: bool) !void {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const file_path = try s.path(&buf, name);
+
         const fd = try posix.openat(posix.AT.FDCWD, file_path, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true, .CLOEXEC = true }, 0o600);
         const file: File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
         defer file.close(s.io);
@@ -156,6 +166,7 @@ pub const Spool = struct {
     fn replace(s: *Spool, name: []const u8, bytes: []const u8) !void {
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const file_path = try s.path(&buf, name);
+
         var atomic = try Dir.cwd().createFileAtomic(s.io, file_path, .{ .replace = true, .permissions = @fromBackingInt(0o600) });
         defer atomic.deinit(s.io);
         try atomic.file.writeStreamingAll(s.io, bytes);
@@ -170,9 +181,11 @@ pub const Spool = struct {
             else => |e| return e,
         };
         defer file.close(s.io);
+
         const len = try file.length(s.io);
         var end = len;
         var block: [4096]u8 = undefined;
+
         while (end > 0) {
             const start = end -| block.len;
             const n = try file.readPositionalAll(s.io, block[0..@intCast(end - start)], start);
@@ -182,6 +195,7 @@ pub const Spool = struct {
             }
             end = start;
         }
+
         if (end != len) {
             log.warn("dropping {d} bytes of a partly written spool line", .{len - end});
             try file.setLength(s.io, end);
@@ -204,6 +218,7 @@ pub const Spool = struct {
             error.FileNotFound => return 0,
             else => |e| return e,
         };
+
         const offset = std.fmt.parseInt(u64, std.mem.trim(u8, text, " \t\r\n"), 10) catch return 0;
         return if (offset > length) 0 else offset;
     }
@@ -211,6 +226,7 @@ pub const Spool = struct {
     fn commit(s: *Spool, offset: u64) !void {
         try s.mutex.lock(s.io);
         defer s.mutex.unlock(s.io);
+
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         if (offset >= try s.spoolLength()) {
             const file = Dir.cwd().openFile(s.io, try s.path(&buf, spool_file), .{ .mode = .read_write }) catch |err| switch (err) {
@@ -218,13 +234,16 @@ pub const Spool = struct {
                 else => |e| return e,
             };
             defer file.close(s.io);
+
             try file.setLength(s.io, 0);
+
             Dir.cwd().deleteFile(s.io, try s.path(&buf, offset_file)) catch |err| switch (err) {
                 error.FileNotFound => {},
                 else => |e| return e,
             };
             return;
         }
+
         var num: [32]u8 = undefined;
         try s.replace(offset_file, try std.fmt.bufPrint(&num, "{d}\n", .{offset}));
     }
@@ -241,12 +260,15 @@ pub const Spool = struct {
     fn snapshot(s: *Spool, arena: Allocator) !Snapshot {
         try s.mutex.lock(s.io);
         defer s.mutex.unlock(s.io);
+
         const length = try s.spoolLength();
         if (length == 0) return .{ .data = "", .offset = 0 };
+
         const offset = try s.readOffset(length);
         var buf: [std.fs.max_path_bytes]u8 = undefined;
         const file = try Dir.cwd().openFile(s.io, try s.path(&buf, spool_file), .{});
         defer file.close(s.io);
+
         const data = try arena.alloc(u8, @intCast(length - offset));
         const n = try file.readPositionalAll(s.io, data, offset);
         return .{ .data = data[0..n], .offset = offset };
@@ -256,18 +278,22 @@ pub const Spool = struct {
         var arena_state = std.heap.ArenaAllocator.init(s.gpa);
         defer arena_state.deinit();
         const snap = try s.snapshot(arena_state.allocator());
+
         var request_arena = std.heap.ArenaAllocator.init(s.gpa);
         defer request_arena.deinit();
+
         var result: Drained = .{};
         var pos: usize = 0;
         while (std.mem.findScalarPos(u8, snap.data, pos, '\n')) |nl| {
             _ = request_arena.reset(.retain_capacity);
             const line = snap.data[pos..nl];
+
             if (std.mem.trim(u8, line, " \t\r").len > 0) {
                 const reply = up.request(request_arena.allocator(), .POST, "/v1/entries", line) catch |err| {
                     try s.commit(snap.offset + pos);
                     return err;
                 };
+
                 if (reply.status >= 200 and reply.status < 300) {
                     result.delivered += 1;
                 } else if (permanent(reply.status)) {
@@ -283,6 +309,7 @@ pub const Spool = struct {
                     return error.UpstreamUnavailable;
                 }
             }
+
             pos = nl + 1;
             try s.commit(snap.offset + pos);
         }
@@ -298,6 +325,7 @@ pub const Spool = struct {
         while (true) {
             const waiting = s.pending() catch 0;
             var wait = s.options.idle;
+
             if (waiting > 0) {
                 if (s.drain(up)) |drained| {
                     if (backoff_ms > 0 or drained.delivered > 0) log.info("pushed {d} spooled entries to the hub", .{drained.delivered});
@@ -309,6 +337,7 @@ pub const Spool = struct {
                     wait = .fromMilliseconds(@intCast(backoff_ms));
                 }
             }
+
             try s.io.sleep(wait, .awake);
         }
     }
@@ -329,6 +358,7 @@ pub const Edge = struct {
             .entries => {
                 const draft = std.json.parseFromSliceLeaky(core.EntryDraft, arena, req.body, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch
                     return api.errorReply(arena, 400, "request body must be an entry");
+
                 return switch (try e.spool.sink().enqueue(&draft)) {
                     .queued => |id| .{ .body = try std.json.Stringify.valueAlloc(arena, .{ .id = id, .spooled = true }, .{}) },
                     .duplicate => .{ .body = "{\"duplicate\":true}" },
@@ -338,6 +368,7 @@ pub const Edge = struct {
                 const f = e.flusher orelse return .{ .status = 202, .body = "{\"accepted\":true,\"flushed\":false}" };
                 const in = std.json.parseFromSliceLeaky(service.FlushRequest, arena, req.body, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch
                     return api.errorReply(arena, 400, "invalid flush request");
+
                 const flushed = f.flush(in) catch |err| blk: {
                     log.warn("flush failed: {s}", .{@errorName(err)});
                     break :blk false;

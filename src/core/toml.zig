@@ -11,9 +11,11 @@ pub const Error = error{ InvalidConfig, OutOfMemory };
 pub fn parseInto(comptime T: type, arena: Allocator, src: []const u8, out: *T, diag: *Diagnostic) Error!void {
     var p: Parser = .{ .src = src, .arena = arena, .diag = diag };
     var table: std.ArrayList([]const u8) = .empty;
+
     while (true) {
         p.skipBlank();
         if (p.eof()) return;
+
         if (p.peek() == '[') {
             p.i += 1;
             if (!p.eof() and p.peek() == '[') return p.fail("arrays of tables are not supported", .{});
@@ -25,6 +27,7 @@ pub fn parseInto(comptime T: type, arena: Allocator, src: []const u8, out: *T, d
             try p.expectLineEnd();
             continue;
         }
+
         var path: std.ArrayList([]const u8) = .empty;
         try path.appendSlice(arena, table.items);
         try p.parseKeyPath(&path);
@@ -112,6 +115,7 @@ const Parser = struct {
                 if (p.i == start) return p.fail("expected a key", .{});
                 break :blk p.src[start..p.i];
             };
+
             try path.append(p.arena, key);
             p.skipSpaces();
             if (p.eof() or p.peek() != '.') return;
@@ -131,11 +135,13 @@ const Parser = struct {
             '{' => return p.fail("inline tables are not supported; use a [table] header", .{}),
             else => {},
         }
+
         const start = p.i;
         while (!p.eof() and std.mem.indexOfScalar(u8, " \t\r\n,]#", p.peek()) == null) p.i += 1;
         const word = p.src[start..p.i];
         if (std.mem.eql(u8, word, "true")) return .{ .boolean = true };
         if (std.mem.eql(u8, word, "false")) return .{ .boolean = false };
+
         var digits: std.ArrayList(u8) = .empty;
         for (word) |ch| if (ch != '_') try digits.append(p.arena, ch);
         if (std.fmt.parseInt(i64, digits.items, 10)) |n| return .{ .integer = n } else |_| {}
@@ -146,6 +152,7 @@ const Parser = struct {
     fn parseArray(p: *Parser) Error!Value {
         p.i += 1;
         var items: std.ArrayList(Value) = .empty;
+
         while (true) {
             p.skipBlank();
             if (p.eof()) return p.fail("unterminated array", .{});
@@ -153,6 +160,7 @@ const Parser = struct {
                 p.i += 1;
                 return .{ .array = items.items };
             }
+
             try items.append(p.arena, try p.parseValue());
             p.skipBlank();
             if (p.eof()) return p.fail("unterminated array", .{});
@@ -179,6 +187,7 @@ const Parser = struct {
     fn parseBasicString(p: *Parser) Error![]const u8 {
         p.i += 1;
         var out: std.ArrayList(u8) = .empty;
+
         while (true) {
             if (p.eof() or p.peek() == '\n') return p.fail("unterminated string", .{});
             const c = p.peek();
@@ -223,6 +232,7 @@ fn assign(comptime S: type, target: *S, path: []const []const u8, value: Value, 
                 if (path.len == 1) return p.fail("'{s}' is a table, not a value", .{name});
                 return assign(F, &@field(target, name), path[1..], value, p);
             }
+
             if (path.len != 1) return p.fail("'{s}' is not a table", .{name});
             @field(target, name) = try convert(F, value, name, p);
             return;
@@ -236,6 +246,7 @@ fn convert(comptime T: type, value: Value, name: []const u8, p: *Parser) Error!T
         if (value != .string) return p.fail("'{s}' must be a string", .{name});
         return value.string;
     }
+
     if (T == []const []const u8) {
         if (value != .array) return p.fail("'{s}' must be an array of strings", .{name});
         const items = try p.arena.alloc([]const u8, value.array.len);
@@ -245,6 +256,7 @@ fn convert(comptime T: type, value: Value, name: []const u8, p: *Parser) Error!T
         }
         return items;
     }
+
     switch (@typeInfo(T)) {
         .bool => {
             if (value != .boolean) return p.fail("'{s}' must be true or false", .{name});
@@ -278,6 +290,7 @@ const Example = struct {
 test "parses tables, scalars, arrays, escapes and comments" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
+
     const src =
         \\# top-level
         \\name = "gr\u0061f\t!" # trailing comment
@@ -296,9 +309,11 @@ test "parses tables, scalars, arrays, escapes and comments" {
         \\on = true
         \\
     ;
+
     var out: Example = .{};
     var diag: Diagnostic = .{};
     try parseInto(Example, arena_state.allocator(), src, &out, &diag);
+
     try std.testing.expectEqualStrings("graf\t!", out.name);
     try std.testing.expectEqual(.slow, out.mode);
     try std.testing.expectEqual(@as(usize, 2), out.paths.len);
@@ -315,6 +330,7 @@ test "dotted keys reach nested tables" {
     var out: Example = .{};
     var diag: Diagnostic = .{};
     try parseInto(Example, arena_state.allocator(), "db.url = \"x\"\n", &out, &diag);
+
     try std.testing.expectEqualStrings("x", out.db.url);
 }
 
@@ -324,9 +340,11 @@ test "reports unknown keys and type errors with a line number" {
     const arena = arena_state.allocator();
     var out: Example = .{};
     var diag: Diagnostic = .{};
+
     try std.testing.expectError(error.InvalidConfig, parseInto(Example, arena, "\n[db]\nurll = \"x\"\n", &out, &diag));
     try std.testing.expectEqual(@as(usize, 3), diag.line);
     try std.testing.expectEqualStrings("unknown key 'urll'", diag.message);
+
     try std.testing.expectError(error.InvalidConfig, parseInto(Example, arena, "[db]\npool = \"four\"\n", &out, &diag));
     try std.testing.expectError(error.InvalidConfig, parseInto(Example, arena, "mode = \"medium\"\n", &out, &diag));
     try std.testing.expectError(error.InvalidConfig, parseInto(Example, arena, "name = \"open\n", &out, &diag));

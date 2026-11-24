@@ -25,6 +25,7 @@ pub fn isPaused(io: std.Io, state_dir: []const u8) bool {
 pub fn setPaused(io: std.Io, state_dir: []const u8, paused: bool) !void {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ state_dir, paused_file });
+
     if (paused) {
         try Dir.cwd().createDirPath(io, state_dir);
         const file = try Dir.cwd().createFile(io, path, .{ .truncate = false });
@@ -45,12 +46,14 @@ pub fn captureSince(io: std.Io, state_dir: []const u8, now: core.Micros) !core.M
     try Dir.cwd().createDirPath(io, state_dir);
     var atomic = try Dir.cwd().createFileAtomic(io, path, .{});
     defer atomic.deinit(io);
+
     var num: [32]u8 = undefined;
     try atomic.file.writeStreamingAll(io, try std.fmt.bufPrint(&num, "{d}\n", .{now}));
     atomic.link(io) catch |err| switch (err) {
         error.PathAlreadyExists => return (try readMicros(io, path)) orelse now,
         else => |e| return e,
     };
+
     return now;
 }
 
@@ -76,6 +79,7 @@ pub fn socketPath(arena: Allocator, config: *const core.Config, env: *const Envi
         }
         return configured;
     }
+
     const state_dir = try dir(arena, env) orelse return null;
     return try std.fs.path.join(arena, &.{ state_dir, socket_file });
 }

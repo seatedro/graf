@@ -53,10 +53,12 @@ const Scenario = struct {
         const checked = try extract.check(s.arena, s.raw, s.body, s.reference_time);
         const p = try resolve.plan(s.arena, checked, s.prefetch);
         const verdict = if (s.resolution) |r| (try resolve.interpret(s.arena, p, checked, r)).verdict else try resolve.Verdict.none(s.arena, p);
+
         const ent_vecs = try s.arena.alloc([]const f32, checked.result.entities.len);
         @memset(ent_vecs, &.{ 1, 0 });
         const fact_vecs = try s.arena.alloc([]const f32, checked.result.facts.len);
         @memset(fact_vecs, &.{ 0, 1 });
+
         const cs = try resolve.build(s.arena, .{
             .entry = .{ .graph_id = graph, .reference_time = s.reference_time, .project = "lantern" },
             .commit_time = s.reference_time + 1000,
@@ -95,9 +97,11 @@ test "an on-call handoff ends the previous holder at the stated time" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var handoff = fct("n1", "has_oncall", "n2", null, "Juno took over on call for Relay starting today at 17:00 UTC");
     handoff.valid_from = "2026-11-20T17:00:00Z";
     handoff.time_basis = .explicit;
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-20T18:00:00Z"),
@@ -105,6 +109,7 @@ test "an on-call handoff ends the previous holder at the stated time" {
         .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Juno", .person) }, .facts = &.{handoff}, .new_relations = &.{} },
         .prefetch = relayOncallPrefetch(0, 1, 0),
     }).run();
+
     const cs = out.cs;
     try testing.expectEqual(@as(i64, 7), cs.base_seq);
     try testing.expectEqual(@as(usize, 1), cs.new_entities.len);
@@ -123,12 +128,15 @@ test "a handoff that also says the previous holder rotated off ends it once and 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var handoff = fct("n1", "has_oncall", "n2", null, "Juno took over on call for Relay starting today at 17:00 UTC");
     handoff.valid_from = "2026-11-20T17:00:00Z";
     handoff.time_basis = .explicit;
+
     var rotated = fct("n1", "has_oncall", "n3", null, "Hollis rotated off");
     rotated.valid_to = "2026-11-20T17:00:00Z";
     rotated.time_basis = .explicit;
+
     const prefetch: resolve.Prefetch = .{
         .entities = &.{
             .{ .item = 0, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .alias_match = true, .cosine = 1.0 },
@@ -145,6 +153,7 @@ test "a handoff that also says the previous holder rotated off ends it once and 
             .confidence = 0.9,
         }},
     };
+
     const orders = [_][]const ingest.ExtractedFact{ &.{ handoff, rotated }, &.{ rotated, handoff } };
     for (orders) |facts| {
         const out = try (Scenario{
@@ -154,6 +163,7 @@ test "a handoff that also says the previous holder rotated off ends it once and 
             .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Juno", .person), ent("n3", "Hollis", .person) }, .facts = facts, .new_relations = &.{} },
             .prefetch = prefetch,
         }).run();
+
         try testing.expectEqual(@as(usize, 2), out.checked.result.facts.len);
         try testing.expectEqual(@as(usize, 1), out.cs.new_facts.len);
         try testing.expectEqualStrings("Juno took over on call for Relay starting today at 17:00 UTC", out.cs.new_facts[0].fact.text);
@@ -189,9 +199,11 @@ test "restating a fact that already ended adds a new period instead of evidence"
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var back = fct("n1", "has_oncall", "n2", null, "Hollis is back on call for Relay since this morning.");
     back.valid_from = "2026-11-25T08:00:00Z";
     back.time_basis = .relative;
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-25T09:00:00Z"),
@@ -199,6 +211,7 @@ test "restating a fact that already ended adds a new period instead of evidence"
         .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Hollis", .person) }, .facts = &.{back}, .new_relations = &.{} },
         .prefetch = endedHollisPrefetch(),
     }).run();
+
     try testing.expectEqual(@as(usize, 0), out.cs.restatements.len);
     try testing.expectEqual(@as(usize, 1), out.cs.new_facts.len);
     try testing.expectEqual(@as(usize, 0), out.cs.invalidations.len);
@@ -208,10 +221,12 @@ test "a dated historical on-call period never ends the current holder" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var past = fct("n1", "has_oncall", "n2", null, "Priya was on call for Relay from November 10, 2026 until November 17, 2026");
     past.valid_from = "2026-11-10T00:00:00Z";
     past.valid_to = "2026-11-17T00:00:00Z";
     past.time_basis = .explicit;
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-21T20:00:00Z"),
@@ -219,6 +234,7 @@ test "a dated historical on-call period never ends the current holder" {
         .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Priya", .person) }, .facts = &.{past}, .new_relations = &.{} },
         .prefetch = relayOncallPrefetch(0, 1, 0),
     }).run();
+
     try testing.expectEqual(@as(usize, 0), out.cs.invalidations.len);
     try testing.expectEqual(@as(usize, 0), out.cs.retractions.len);
     try testing.expectEqual(@as(?core.Micros, at("2026-11-17T00:00:00Z")), out.cs.new_facts[0].fact.valid.upper);
@@ -229,9 +245,11 @@ test "an undated backfill that predates current state is bounded by it" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var past = fct("n1", "has_oncall", "n2", null, "Priya was on call for Relay before Hollis");
     past.valid_from = "2026-11-10T00:00:00Z";
     past.time_basis = .explicit;
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-21T20:00:00Z"),
@@ -239,6 +257,7 @@ test "an undated backfill that predates current state is bounded by it" {
         .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Priya", .person) }, .facts = &.{past}, .new_relations = &.{} },
         .prefetch = relayOncallPrefetch(0, 1, 0),
     }).run();
+
     try testing.expectEqual(@as(usize, 0), out.cs.invalidations.len);
     try testing.expectEqual(@as(?core.Micros, at("2026-11-19T22:00:00Z")), out.cs.new_facts[0].fact.valid.upper);
 }
@@ -247,9 +266,11 @@ test "gaining a feature ends the opposed lacks_feature fact" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const driver = id(20);
     const lacks = id(60);
     const pipelining = id(61);
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-21T17:00:00Z"),
@@ -263,6 +284,7 @@ test "gaining a feature ends the opposed lacks_feature fact" {
             },
         },
     }).run();
+
     try testing.expectEqual(@as(usize, 1), out.cs.invalidations.len);
     try testing.expect(out.cs.invalidations[0].fact_id.eql(lacks));
     try testing.expectEqual(at("2026-11-21T17:00:00Z"), out.cs.invalidations[0].valid_upper);
@@ -273,11 +295,13 @@ test "switching a setting ends only the same qualifier" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const lantern = id(30);
     const old_model = id(70);
     const other_setting = id(71);
     var switch_fact = fct("n1", "has_setting", null, "model-b", "switch lantern's extraction_model setting from model-a to model-b");
     switch_fact.qualifier = "extraction_model";
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-21T19:00:00Z"),
@@ -291,6 +315,7 @@ test "switching a setting ends only the same qualifier" {
             },
         },
     }).run();
+
     try testing.expectEqual(@as(usize, 1), out.cs.invalidations.len);
     try testing.expect(out.cs.invalidations[0].fact_id.eql(old_model));
     try testing.expectEqual(at("2026-11-21T19:00:00Z"), out.cs.invalidations[0].valid_upper);
@@ -300,9 +325,11 @@ test "a correction the resolution call marks was_wrong retracts instead of endin
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const lantern = id(30);
     const go = id(31);
     const uses_go = id(80);
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-21T09:00:00Z"),
@@ -317,10 +344,12 @@ test "a correction the resolution call marks was_wrong retracts instead of endin
             .fact_verdicts = &.{.{ .fact_index = 0, .duplicate_of = null, .contradicts = &.{.{ .fact = "F1", .kind = .was_wrong, .at = null }} }},
         },
     }).run();
+
     try testing.expectEqual(@as(usize, 0), out.cs.invalidations.len);
     try testing.expectEqual(@as(usize, 1), out.cs.retractions.len);
     try testing.expect(out.cs.retractions[0].fact_id.eql(uses_go));
     try testing.expectEqual(core.types.EndKind.retracted, out.cs.retractions[0].end_kind);
+
     var saw_retracted = false;
     for (out.cs.evidence) |ev| if (ev.fact_id.eql(uses_go) and ev.kind == .retracted) {
         saw_retracted = true;
@@ -332,9 +361,11 @@ test "restating an existing fact restates it instead of duplicating" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const lantern = id(30);
     const pg = id(32);
     const uses_pg = id(90);
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-22T16:00:00Z"),
@@ -348,6 +379,7 @@ test "restating an existing fact restates it instead of duplicating" {
             .facts = &.{.{ .item = 0, .id = uses_pg, .subject_id = lantern, .relation = "uses", .object_id = pg, .text = "Lantern uses Postgres 17.", .valid_lower = at("2026-11-18T18:00:00Z"), .confidence = 0.9 }},
         },
     }).run();
+
     try testing.expectEqual(@as(usize, 0), out.cs.new_facts.len);
     try testing.expectEqual(@as(usize, 1), out.cs.restatements.len);
     try testing.expect(out.cs.restatements[0].fact_id.eql(uses_pg));
@@ -362,9 +394,11 @@ test "an alias spelling merges deterministically into the existing entity" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const driver = id(20);
     var e = ent("n1", "pg-zig", .software);
     e.aliases = &.{"the zig postgres driver"};
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-20T16:30:00Z"),
@@ -372,6 +406,7 @@ test "an alias spelling merges deterministically into the existing entity" {
         .raw = .{ .skip = null, .entities = &.{e}, .facts = &.{fct("n1", "lacks_feature", null, "COPY", "Since pg-zig has no COPY")}, .new_relations = &.{} },
         .prefetch = .{ .entities = &.{.{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .software, .alias_match = true, .cosine = 0.97 }} },
     }).run();
+
     try testing.expectEqual(@as(usize, 0), out.cs.new_entities.len);
     try testing.expect(out.cs.new_facts[0].fact.subject_id.eql(driver));
     try testing.expectEqual(@as(usize, 1), out.cs.new_aliases.len);
@@ -383,7 +418,9 @@ test "same-name entities of incompatible types never merge without the model" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const vx_tool = id(40);
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-23T03:00:00Z"),
@@ -393,6 +430,7 @@ test "same-name entities of incompatible types never merge without the model" {
             .{ .item = 1, .id = vx_tool, .name = "vx", .norm = "vx", .type = .software, .alias_match = true, .cosine = 0.99 },
         } },
     }).run();
+
     try testing.expectEqual(resolve.EntityDecision.ask, out.plan.entities[1].decision);
     try testing.expectEqual(@as(usize, 2), out.cs.new_entities.len);
     try testing.expectEqual(@as(usize, 0), out.cs.merges.len);
@@ -402,7 +440,9 @@ test "an organization and its similarly named software stay apart, and a person 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const brackwater_org = id(41);
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-21T01:00:00Z"),
@@ -417,6 +457,7 @@ test "an organization and its similarly named software stay apart, and a person 
             .fact_verdicts = &.{},
         },
     }).run();
+
     try testing.expectEqual(resolve.EntityDecision.new, out.plan.entities[0].decision);
     try testing.expectEqual(resolve.EntityDecision.new, out.plan.entities[1].decision);
     try testing.expectEqual(@as(usize, 2), out.cs.new_entities.len);
@@ -426,8 +467,10 @@ test "a gray-band entity links only when the resolution call names one of its ca
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const driver = id(20);
     const unrelated = id(21);
+
     const base: Scenario = .{
         .arena = arena,
         .reference_time = at("2026-11-20T16:30:00Z"),
@@ -438,6 +481,7 @@ test "a gray-band entity links only when the resolution call names one of its ca
             .{ .item = 0, .id = unrelated, .name = "zig", .norm = "zig", .type = .software, .cosine = 0.60 },
         } },
     };
+
     var linked = base;
     linked.resolution = .{ .entity_links = &.{.{ .ref = "n1", .existing = "E1" }}, .fact_verdicts = &.{} };
     const a = try linked.run();
@@ -458,6 +502,7 @@ test "one entry ends at most five existing facts" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const subject = id(30);
     var facts: [7]resolve.CandidateFact = undefined;
     for (&facts, 0..) |*f, k| f.* = .{
@@ -471,12 +516,14 @@ test "one entry ends at most five existing facts" {
         .confidence = 0.7,
         .cosine = 0.9,
     };
+
     var verdicts: [7]ingest.Contradiction = undefined;
     var labels: [7][2]u8 = undefined;
     for (&verdicts, 0..) |*v, k| {
         labels[k] = .{ 'F', @intCast('1' + k) };
         v.* = .{ .fact = &labels[k], .kind = .changed, .at = null };
     }
+
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-22T00:00:00Z"),
@@ -488,8 +535,10 @@ test "one entry ends at most five existing facts" {
         },
         .resolution = .{ .entity_links = &.{}, .fact_verdicts = &.{.{ .fact_index = 0, .duplicate_of = null, .contradicts = &verdicts }} },
     }).run();
+
     try testing.expectEqual(@as(usize, 7), out.plan.facts[0].candidates.len);
     try testing.expectEqual(@as(usize, 5), out.cs.invalidations.len);
+
     var capped: usize = 0;
     for (out.cs.warnings) |w| if (std.mem.indexOf(u8, w, "more than 5") != null) {
         capped += 1;
@@ -501,22 +550,26 @@ test "a new relation close to a known one collapses onto it" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const raw: ingest.ExtractResult = .{
         .skip = null,
         .entities = &.{ ent("n1", "flaky test", .concept), ent("n2", "retry patch", .code) },
         .facts = &.{fct("n1", "resolved_by", "n2", null, "the flaky test was resolved by the retry patch")},
         .new_relations = &.{.{ .name = "resolved_by", .description = "Subject was resolved by the object.", .object_kind = .entity }},
     };
+
     const checked = try extract.check(arena, raw, "the flaky test was resolved by the retry patch", at("2026-11-22T00:00:00Z"));
     const prefetch: resolve.Prefetch = .{ .relations = &.{.{ .name = "fixed_by", .status = .core, .emb = &.{ 1, 0, 0 } }} };
     const novel = try resolve.novelRelations(arena, checked, prefetch);
     try testing.expectEqual(@as(usize, 1), novel.len);
+
     const p = try resolve.plan(arena, checked, prefetch);
     const cs = try resolve.build(arena, .{
         .entry = .{ .graph_id = graph, .reference_time = at("2026-11-22T00:00:00Z") },
         .commit_time = at("2026-11-22T00:00:01Z"),
         .io = testing.io,
     }, checked, prefetch, p, .{ .entities = &.{ &.{1}, &.{1} }, .facts = &.{&.{1}}, .relations = &.{&.{ 0.97, 0.1, 0 }} }, try resolve.Verdict.none(arena, p));
+
     try testing.expectEqualStrings("fixed_by", cs.new_facts[0].fact.relation);
     try testing.expectEqual(@as(usize, 1), cs.new_relations.len);
     try testing.expectEqualStrings("fixed_by", cs.new_relations[0].mapped_to.?);
@@ -526,14 +579,17 @@ test "decision-model probabilities become a verdict" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const lantern = id(30);
     const old = id(80);
+
     const raw: ingest.ExtractResult = .{ .skip = null, .entities = &.{ent("n1", "Lantern", .project)}, .facts = &.{fct("n1", "uses", null, "rust", "Lantern uses Rust, not Go")}, .new_relations = &.{} };
     const checked = try extract.check(arena, raw, "Lantern uses Rust, not Go", at("2026-11-21T09:00:00Z"));
     const prefetch: resolve.Prefetch = .{
         .entities = &.{.{ .item = 0, .id = lantern, .name = "Lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 }},
         .facts = &.{.{ .item = 0, .id = old, .subject_id = lantern, .relation = "uses", .object_value = "go", .text = "Lantern uses Go.", .valid_lower = at("2026-11-20T00:00:00Z"), .confidence = 0.7, .cosine = 0.8 }},
     };
+
     const p = try resolve.plan(arena, checked, prefetch);
     const q = try resolve.decisionQuestions(arena, p, checked, prefetch);
     try testing.expectEqual(@as(usize, 1), q.questions.len);
@@ -561,14 +617,17 @@ test "a gray-band entity links to the candidate the decision model picks with en
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const driver = id(20);
     const unrelated = id(21);
+
     const raw: ingest.ExtractResult = .{ .skip = null, .entities = &.{ent("n1", "the zig driver", .software)}, .facts = &.{}, .new_relations = &.{} };
     const checked = try extract.check(arena, raw, "the zig driver needs a separate branch per Zig release", at("2026-11-20T16:30:00Z"));
     const prefetch: resolve.Prefetch = .{ .entities = &.{
         .{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .software, .cosine = 0.84 },
         .{ .item = 0, .id = unrelated, .name = "zig", .norm = "zig", .type = .software, .cosine = 0.60 },
     } };
+
     const p = try resolve.plan(arena, checked, prefetch);
     const q = try resolve.decisionQuestions(arena, p, checked, prefetch);
     try testing.expectEqual(@as(usize, 1), q.questions.len);

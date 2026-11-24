@@ -30,6 +30,7 @@ pub const Parser = struct {
     pub fn feedLine(p: *Parser, raw: []const u8) Allocator.Error!?Event {
         if (p.dispatched) p.reset();
         const line = std.mem.trimEnd(u8, raw, "\r");
+
         if (line.len == 0) {
             if (!p.has_data) {
                 p.reset();
@@ -42,9 +43,11 @@ pub const Parser = struct {
                 .id = if (p.has_id) p.id.items else null,
             };
         }
+
         if (line[0] == ':') return null;
         const field, var value = std.mem.cut(u8, line, ":") orelse .{ line, "" };
         if (value.len > 0 and value[0] == ' ') value = value[1..];
+
         if (std.mem.eql(u8, field, "event")) {
             p.name.clearRetainingCapacity();
             try p.name.appendSlice(p.gpa, value);
@@ -60,6 +63,7 @@ pub const Parser = struct {
         } else if (std.mem.eql(u8, field, "retry")) {
             p.retry_ms = std.fmt.parseInt(u64, value, 10) catch p.retry_ms;
         }
+
         return null;
     }
 
@@ -89,6 +93,7 @@ test "frames carry their event name, joined data and per-frame id" {
     var p: Parser = .init(testing.allocator);
     defer p.deinit();
     var events: std.ArrayList(Event) = .empty;
+
     try feedAll(&p,
         \\event: status
         \\data: {"status":"working"}
@@ -109,6 +114,7 @@ test "frames carry their event name, joined data and per-frame id" {
         \\data: plain
         \\
     , &events, arena);
+
     try testing.expectEqual(@as(usize, 4), events.items.len);
     try testing.expectEqualStrings("status", events.items[0].name);
     try testing.expect(events.items[0].id == null);
@@ -125,9 +131,11 @@ test "frames carry their event name, joined data and per-frame id" {
 test "carriage returns and a missing space after the colon are tolerated" {
     var p: Parser = .init(testing.allocator);
     defer p.deinit();
+
     try testing.expect(try p.feedLine("event:transcript\r") == null);
     try testing.expect(try p.feedLine("id:X\r") == null);
     try testing.expect(try p.feedLine("data:{}\r") == null);
+
     const ev = (try p.feedLine("\r")).?;
     try testing.expectEqualStrings("transcript", ev.name);
     try testing.expectEqualStrings("X", ev.id.?);

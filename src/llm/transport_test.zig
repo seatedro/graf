@@ -13,6 +13,7 @@ const Server = struct {
     fn run(s: *Server, io: Io) Io.Cancelable!void {
         var group: Io.Group = .init;
         defer group.cancel(io);
+
         while (true) {
             const stream = s.listener.accept(io) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
@@ -33,9 +34,11 @@ const Server = struct {
         var reader = stream.reader(io, &in_buf);
         var writer = stream.writer(io, &out_buf);
         var http: std.http.Server = .init(&reader.interface, &writer.interface);
+
         while (true) {
             var req = http.receiveHead() catch return;
             const target = req.head.target;
+
             if (std.mem.eql(u8, target, "/ok")) {
                 req.respond("{\"ok\":true}", .{ .extra_headers = &.{.{ .name = "x-example-cost-usd", .value = "0.5" }} }) catch return;
             } else if (std.mem.eql(u8, target, "/stall")) {
@@ -74,6 +77,7 @@ test "real HTTP: keep-alive reuse, header capture, first-byte and stall deadline
         try testing.expectEqualStrings("{\"ok\":true}", res.response.body);
         try testing.expectEqualStrings("0.5", res.response.header("x-example-cost-usd").?);
     }
+
     try testing.expectEqual(@as(u32, 1), server.accepts.load(.monotonic));
 
     const slow_url = try std.fmt.allocPrint(arena, "http://127.0.0.1:{d}/slow", .{port});

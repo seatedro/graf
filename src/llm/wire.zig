@@ -33,14 +33,17 @@ pub fn writeStructuredRequest(route: Route, p: Prompt, w: *std.Io.Writer) std.Io
     try s.beginObject();
     try s.objectField("model");
     try s.write(p.model);
+
     switch (route) {
         .@"openai-responses" => {
             try s.objectField("instructions");
             try s.write(p.system);
+
             try s.objectField("input");
             try s.beginArray();
             try writeMessage(&s, "user", p.user);
             try s.endArray();
+
             try s.objectField("text");
             try s.beginObject();
             try s.objectField("format");
@@ -55,6 +58,7 @@ pub fn writeStructuredRequest(route: Route, p: Prompt, w: *std.Io.Writer) std.Io
             try writeRaw(&s, p.schema_json);
             try s.endObject();
             try s.endObject();
+
             try s.objectField("max_output_tokens");
             try s.write(p.max_output_tokens);
             try s.objectField("store");
@@ -63,6 +67,7 @@ pub fn writeStructuredRequest(route: Route, p: Prompt, w: *std.Io.Writer) std.Io
         .@"anthropic-messages" => {
             try s.objectField("max_tokens");
             try s.write(p.max_output_tokens);
+
             try s.objectField("system");
             try s.beginArray();
             try s.beginObject();
@@ -77,10 +82,12 @@ pub fn writeStructuredRequest(route: Route, p: Prompt, w: *std.Io.Writer) std.Io
             try s.endObject();
             try s.endObject();
             try s.endArray();
+
             try s.objectField("messages");
             try s.beginArray();
             try writeMessage(&s, "user", p.user);
             try s.endArray();
+
             try s.objectField("output_config");
             try s.beginObject();
             try s.objectField("format");
@@ -98,6 +105,7 @@ pub fn writeStructuredRequest(route: Route, p: Prompt, w: *std.Io.Writer) std.Io
             try writeMessage(&s, "system", p.system);
             try writeMessage(&s, "user", p.user);
             try s.endArray();
+
             try s.objectField("response_format");
             try s.beginObject();
             try s.objectField("type");
@@ -114,6 +122,7 @@ pub fn writeStructuredRequest(route: Route, p: Prompt, w: *std.Io.Writer) std.Io
             try s.endObject();
         },
     }
+
     try s.endObject();
 }
 
@@ -154,6 +163,7 @@ pub fn decodeStructured(route: Route, arena: std.mem.Allocator, body: []const u8
     const root = try parseObject(arena, body);
     var out: Decoded = .{ .text = "", .model = str(root.get("model")) };
     readBodyCost(root, &out);
+
     switch (route) {
         .@"openai-responses" => {
             if (obj(root.get("usage"))) |u| {
@@ -164,6 +174,7 @@ pub fn decodeStructured(route: Route, arena: std.mem.Allocator, body: []const u8
                     .cache_read_tokens = cached,
                 };
             }
+
             if (eqlOpt(str(root.get("status")), "incomplete")) {
                 const reason = str((obj(root.get("incomplete_details")) orelse root).get("reason")) orelse "";
                 if (std.mem.eql(u8, reason, "content_filter")) {
@@ -171,6 +182,7 @@ pub fn decodeStructured(route: Route, arena: std.mem.Allocator, body: []const u8
                     out.detail = "content_filter";
                 } else out.stop = .truncated;
             }
+
             var text: std.ArrayList(u8) = .empty;
             const output = arr(root.get("output")) orelse return error.MalformedResponse;
             for (output) |item_v| {
@@ -187,6 +199,7 @@ pub fn decodeStructured(route: Route, arena: std.mem.Allocator, body: []const u8
                     }
                 }
             }
+
             out.text = text.items;
         },
         .@"anthropic-messages" => {
@@ -196,18 +209,21 @@ pub fn decodeStructured(route: Route, arena: std.mem.Allocator, body: []const u8
                 .cache_read_tokens = int(u, "cache_read_input_tokens"),
                 .cache_write_tokens = int(u, "cache_creation_input_tokens"),
             };
+
             const stop = str(root.get("stop_reason")) orelse "";
             if (std.mem.eql(u8, stop, "max_tokens")) out.stop = .truncated;
             if (std.mem.eql(u8, stop, "refusal")) {
                 out.stop = .refused;
                 out.detail = "refusal";
             }
+
             var text: std.ArrayList(u8) = .empty;
             const content = arr(root.get("content")) orelse return error.MalformedResponse;
             for (content) |block_v| {
                 const block = obj(block_v) orelse continue;
                 if (eqlOpt(str(block.get("type")), "text")) try text.appendSlice(arena, str(block.get("text")) orelse "");
             }
+
             out.text = text.items;
         },
         .@"openai-chat" => {
@@ -219,23 +235,28 @@ pub fn decodeStructured(route: Route, arena: std.mem.Allocator, body: []const u8
                     .cache_read_tokens = cached,
                 };
             }
+
             const choices = arr(root.get("choices")) orelse return error.MalformedResponse;
             if (choices.len == 0) return error.MalformedResponse;
             const choice = obj(choices[0]) orelse return error.MalformedResponse;
+
             const finish = str(choice.get("finish_reason")) orelse "";
             if (std.mem.eql(u8, finish, "length")) out.stop = .truncated;
             if (std.mem.eql(u8, finish, "content_filter")) {
                 out.stop = .refused;
                 out.detail = "content_filter";
             }
+
             const message = obj(choice.get("message")) orelse return error.MalformedResponse;
             if (str(message.get("refusal"))) |refusal| {
                 out.stop = .refused;
                 out.detail = refusal;
             }
+
             out.text = stripFences(str(message.get("content")) orelse "");
         },
     }
+
     return out;
 }
 
@@ -378,12 +399,15 @@ test "embeddings decode by index when present and by position when not" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const indexed = try decodeEmbeddings(arena, "{\"data\":[{\"index\":1,\"embedding\":[0.5,1]},{\"index\":0,\"embedding\":[2,3]}],\"usage\":{\"prompt_tokens\":7}}", 2, 2);
     try std.testing.expectEqual(@as(f32, 2), indexed.vectors[0][0]);
     try std.testing.expectEqual(@as(f32, 0.5), indexed.vectors[1][0]);
     try std.testing.expectEqual(@as(u32, 7), indexed.usage.input_tokens);
+
     const positional = try decodeEmbeddings(arena, "{\"data\":[{\"embedding\":[0.5,1]},{\"embedding\":[2,3]}]}", 2, 2);
     try std.testing.expectEqual(@as(f32, 0.5), positional.vectors[0][0]);
+
     try std.testing.expectError(error.MalformedResponse, decodeEmbeddings(arena, "{\"data\":[{\"embedding\":[0.5]}]}", 1, 2));
     try std.testing.expectError(error.MalformedResponse, decodeEmbeddings(arena, "{\"data\":[]}", 1, 2));
 }

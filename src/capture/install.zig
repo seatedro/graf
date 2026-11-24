@@ -71,17 +71,20 @@ pub fn install(arena: Allocator, io: Io, env: *const Environ.Map, opts: Options,
             try out.print("{s}: no local config to install into, skipped\n", .{@tagName(harness)});
             continue;
         };
+
         for (targets) |target| {
             const report = try apply(arena, io, opts, harness, target);
             try files.append(arena, report);
             try describe(out, opts.dry_run, report, home);
         }
     }
+
     return .{ .dry_run = opts.dry_run, .files = files.items, .skipped = skipped.items };
 }
 
 fn envDir(arena: Allocator, env: *const Environ.Map, name: []const u8, home: []const u8, fallback: []const []const u8) Allocator.Error![]const u8 {
     if (env.get(name)) |v| if (v.len > 0) return v;
+
     var parts: std.ArrayList([]const u8) = .empty;
     try parts.append(arena, home);
     try parts.appendSlice(arena, fallback);
@@ -95,6 +98,7 @@ fn targetsFor(arena: Allocator, env: *const Environ.Map, home: []const u8, harne
             const custom = env.get("CLAUDE_CONFIG_DIR");
             const config_dir = try envDir(arena, env, "CLAUDE_CONFIG_DIR", home, &.{".claude"});
             const mcp_path = if (custom != null and custom.?.len > 0) try join(arena, &.{ config_dir, ".claude.json" }) else try join(arena, &.{ home, ".claude.json" });
+
             break :blk try arena.dupe(Target, &.{
                 .{ .path = mcp_path, .edit = .{ .mcp_json = .{ .keys = &.{"mcpServers"}, .stdio_type = true } } },
                 .{ .path = try join(arena, &.{ config_dir, "settings.json" }), .edit = .{ .hooks_json = "claude-code" } },
@@ -153,12 +157,14 @@ fn apply(arena: Allocator, io: Io, opts: Options, harness: core.Harness, target:
         report.action = .failed;
         report.failure = @errorName(err);
     };
+
     return report;
 }
 
 fn writeFile(io: Io, path: []const u8, original: ?[]const u8, backup: ?[]const u8, text: []const u8) !void {
     const cwd = Dir.cwd();
     var permissions: Dir.Permissions = .fromMode(0o600);
+
     if (original) |old| {
         permissions = (try cwd.statFile(io, path, .{})).permissions;
         if (backup) |bak| {
@@ -169,6 +175,7 @@ fn writeFile(io: Io, path: []const u8, original: ?[]const u8, backup: ?[]const u
             });
         }
     }
+
     var atomic = try cwd.createFileAtomic(io, path, .{ .permissions = permissions, .make_path = true, .replace = true });
     defer atomic.deinit(io);
     try atomic.file.writeStreamingAll(io, text);
@@ -182,6 +189,7 @@ fn edit(arena: Allocator, original: []const u8, e: Edit, command: []const u8) js
         .codex_toml => original,
         else => if (blank) "{}\n" else original,
     };
+
     switch (e) {
         .mcp_json => |m| text = if (m.stdio_type)
             try ensureMcpServer(arena, text, m.keys, StdioServer{ .command = command }, &changes)
@@ -192,6 +200,7 @@ fn edit(arena: Allocator, original: []const u8, e: Edit, command: []const u8) js
         },
         .codex_toml => text = try ensureCodexToml(arena, text, command, &changes),
     }
+
     if (e != .codex_toml) _ = try json.root(text);
     return .{ .text = text, .changes = changes.items };
 }
@@ -219,6 +228,7 @@ fn ensureMcpServer(arena: Allocator, text: []const u8, keys: []const []const u8,
         try changes.append(arena, try std.fmt.allocPrint(arena, "add {s}.graf", .{servers_member.key}));
         return json.insertMember(arena, text, servers_member.value, "graf", server);
     };
+
     if (try serverMatches(arena, text, existing.value, server.command)) return text;
     try changes.append(arena, try std.fmt.allocPrint(arena, "update {s}.graf", .{servers_member.key}));
     return json.replaceValue(arena, text, existing.value, server);
@@ -229,6 +239,7 @@ fn serverMatches(arena: Allocator, text: []const u8, value: json.Span, command: 
     const cmd = try json.find(arena, text, value, "command") orelse return false;
     const cmd_text = try json.stringValue(arena, text, cmd.value) orelse return false;
     if (!std.mem.eql(u8, cmd_text, command)) return false;
+
     const args = try json.find(arena, text, value, "args") orelse return false;
     if (!json.isArray(text, args.value)) return false;
     const items = try json.elements(arena, text, args.value);
@@ -248,6 +259,7 @@ fn shellQuote(arena: Allocator, word: []const u8) Allocator.Error![]const u8 {
     for (word) |ch| {
         if (!(std.ascii.isAlphanumeric(ch) or std.mem.indexOfScalar(u8, "_-./:+=@%,~", ch) != null)) break;
     } else if (word.len > 0) return word;
+
     var out: std.ArrayList(u8) = .empty;
     try out.append(arena, '\'');
     for (word) |ch| {
@@ -270,6 +282,7 @@ fn ensureHook(arena: Allocator, text: []const u8, harness: []const u8, event: Ho
         try map.map.put(arena, event.name, &.{group});
         return json.insertMember(arena, text, doc, "hooks", map);
     };
+
     if (!json.isObject(text, hooks.value)) return error.InvalidJson;
     const list = try json.find(arena, text, hooks.value, event.name) orelse {
         try changes.append(arena, try std.fmt.allocPrint(arena, "add hooks.{s}", .{event.name}));
@@ -292,6 +305,7 @@ fn ensureHook(arena: Allocator, text: []const u8, harness: []const u8, event: Ho
             }
         }
     }
+
     try changes.append(arena, try std.fmt.allocPrint(arena, "add hooks.{s}", .{event.name}));
     return json.appendElement(arena, text, list.value, group);
 }
@@ -305,6 +319,7 @@ fn ensureCodexToml(arena: Allocator, text: []const u8, command: []const u8, chan
         const name = std.mem.trim(u8, line[1 .. line.len - 1], " \t");
         if (std.mem.eql(u8, name, "mcp_servers.graf") or std.mem.eql(u8, name, "mcp_servers.\"graf\"")) return text;
     }
+
     try changes.append(arena, "add [mcp_servers.graf]");
     const sep: []const u8 = if (text.len == 0) "" else if (std.mem.endsWith(u8, text, "\n")) "\n" else "\n\n";
     return std.fmt.allocPrint(arena, "{s}{s}[mcp_servers.graf]\ncommand = {f}\nargs = [\"mcp\"]\n", .{ text, sep, std.json.fmt(command, .{}) });
@@ -313,18 +328,21 @@ fn ensureCodexToml(arena: Allocator, text: []const u8, command: []const u8, chan
 fn describe(out: *std.Io.Writer, dry_run: bool, r: FileReport, home: []const u8) !void {
     const shown = if (std.mem.startsWith(u8, r.path, home) and r.path.len > home.len and r.path[home.len] == '/') r.path[home.len..] else r.path;
     const tilde: []const u8 = if (shown.ptr != r.path.ptr) "~" else "";
+
     const verb: []const u8 = switch (r.action) {
         .create => if (dry_run) "would create" else "created",
         .update => if (dry_run) "would update" else "updated",
         .unchanged => "unchanged",
         .failed => "failed",
     };
+
     try out.print("{s}: {s} {s}{s}", .{ @tagName(r.harness), verb, tilde, shown });
     if (r.changes.len > 0) {
         try out.writeAll(" (");
         for (r.changes, 0..) |change, i| try out.print("{s}{s}", .{ if (i == 0) "" else ", ", change });
         try out.writeAll(")");
     }
+
     if (r.failure) |f| try out.print(": {s}", .{f});
     try out.writeByte('\n');
 }
@@ -342,6 +360,7 @@ const Home = struct {
         h.arena_state = .init(testing.allocator);
         h.tmp = testing.tmpDir(.{});
         h.home = try h.tmp.dir.realPathFileAlloc(testing.io, ".", h.arena_state.allocator());
+
         h.env = .init(testing.allocator);
         try h.env.put("HOME", h.home);
         h.out = .init(h.arena_state.allocator());
@@ -392,6 +411,7 @@ const all_files = [_][]const u8{
 fn expectHooks(arena: Allocator, text: []const u8, harness: []const u8, command: []const u8) !void {
     const Doc = struct { hooks: std.json.ArrayHashMap([]const struct { hooks: []const struct { type: []const u8, command: []const u8, timeout: u32 } }) };
     const doc = try std.json.parseFromSliceLeaky(Doc, arena, text, .{ .ignore_unknown_fields = true });
+
     for (hook_events) |event| {
         const groups = doc.hooks.map.get(event.name) orelse return error.MissingHookEvent;
         var found = false;
@@ -422,20 +442,25 @@ test "fresh install writes every harness config, then a re-run changes nothing" 
     try testing.expectEqualStrings("stdio", claude.mcpServers.graf.type.?);
     try testing.expectEqualStrings("graf", claude.mcpServers.graf.command);
     try testing.expectEqualStrings("mcp", claude.mcpServers.graf.args[0]);
+
     try expectHooks(arena, try h.read(".claude/settings.json"), "claude-code", "graf");
     try expectHooks(arena, try h.read(".codex/hooks.json"), "codex", "graf");
     try testing.expectEqualStrings("[mcp_servers.graf]\ncommand = \"graf\"\nargs = [\"mcp\"]\n", try h.read(".codex/config.toml"));
+
     const pi = try std.json.parseFromSliceLeaky(struct { mcpServers: struct { graf: Server } }, arena, try h.read(".pi/agent/mcp.json"), .{});
     try testing.expectEqualStrings("graf", pi.mcpServers.graf.command);
     try testing.expect(pi.mcpServers.graf.type == null);
+
     const fx = try std.json.parseFromSliceLeaky(struct { mcp: struct { graf: Server } }, arena, try h.read(".fx/mcp.json"), .{});
     try testing.expectEqualStrings("mcp", fx.mcp.graf.args[0]);
+
     for (all_files) |f| try testing.expect(!h.exists(try std.mem.concat(arena, u8, &.{ f, ".bak" })));
 
     const before = try h.snapshot(&all_files);
     const second = try h.run(.{});
     try testing.expect(!second.changed());
     for (second.files) |f| try testing.expectEqual(Action.unchanged, f.action);
+
     const after = try h.snapshot(&all_files);
     for (before, after) |b, a| try testing.expectEqualStrings(b, a);
 }
@@ -456,6 +481,7 @@ test "existing entries are preserved byte-for-byte and backed up once" {
         \\}
         \\
     ;
+
     const settings_json =
         \\{
         \\  "model": "some-model",
@@ -469,8 +495,10 @@ test "existing entries are preserved byte-for-byte and backed up once" {
         \\  }
         \\}
     ;
+
     const codex_toml = "model = \"some-model\"\n\n[mcp_servers.brackwater]\ncommand = \"brackwater-mcp\"";
     const fx_json = "{\"mcpServers\":{\"brackwater\":{\"command\":\"brackwater-mcp\"}}}";
+
     try h.write(".claude.json", claude_json);
     try h.write(".claude/settings.json", settings_json);
     try h.write(".codex/config.toml", codex_toml);
@@ -511,10 +539,12 @@ test "existing entries are preserved byte-for-byte and backed up once" {
     const moved = try h.run(.{ .harnesses = &.{.@"claude-code"}, .command = "/opt/brackwater tools/graf" });
     try testing.expectEqual(Action.update, moved.files[0].action);
     try testing.expectEqual(Action.update, moved.files[1].action);
+
     try testing.expectEqualStrings(claude_json, try h.read(".claude.json.bak"));
     try expectHooks(arena, try h.read(".claude/settings.json"), "claude-code", "/opt/brackwater tools/graf");
     try testing.expect(std.mem.indexOf(u8, try h.read(".claude/settings.json"), "\"command\": \"'/opt/brackwater tools/graf' hook claude-code stop\"") != null);
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, try h.read(".claude/settings.json"), "hook claude-code stop"));
+
     const again = try h.run(.{ .harnesses = &.{.@"claude-code"}, .command = "/opt/brackwater tools/graf" });
     try testing.expect(!again.changed());
 }
@@ -523,16 +553,19 @@ test "dry run reports planned edits and writes nothing" {
     var h: Home = undefined;
     try h.init();
     defer h.deinit();
+
     try h.write(".pi/agent/mcp.json", "{\"mcpServers\": {}}\n");
     const report = try h.run(.{ .dry_run = true });
     try testing.expect(report.changed());
     try testing.expect(report.dry_run);
+
     for (all_files) |f| {
         if (std.mem.eql(u8, f, ".pi/agent/mcp.json")) continue;
         try testing.expect(!h.exists(f));
     }
     try testing.expectEqualStrings("{\"mcpServers\": {}}\n", try h.read(".pi/agent/mcp.json"));
     try testing.expect(!h.exists(".pi/agent/mcp.json.bak"));
+
     const text = h.out.written();
     try testing.expect(std.mem.indexOf(u8, text, "claude-code: would create ~/.claude.json (add mcpServers.graf)\n") != null);
     try testing.expect(std.mem.indexOf(u8, text, "pi: would update ~/.pi/agent/mcp.json (add mcpServers.graf)\n") != null);
@@ -543,8 +576,10 @@ test "invalid JSON is left untouched and unsupported harnesses are skipped" {
     var h: Home = undefined;
     try h.init();
     defer h.deinit();
+
     try h.write(".pi/agent/mcp.json", "{ \"mcpServers\": { // comment\n } }");
     const report = try h.run(.{ .harnesses = &.{ .pi, .cli } });
+
     try testing.expect(report.failed());
     try testing.expectEqual(Action.failed, report.files[0].action);
     try testing.expectEqual(core.Harness.cli, report.skipped[0]);
@@ -555,10 +590,13 @@ test "harness home overrides from the environment" {
     var h: Home = undefined;
     try h.init();
     defer h.deinit();
+
     const arena = h.arena_state.allocator();
     try h.env.put("CODEX_HOME", try std.fs.path.join(arena, &.{ h.home, "alt-codex" }));
     try h.env.put("CLAUDE_CONFIG_DIR", try std.fs.path.join(arena, &.{ h.home, "alt-claude" }));
+
     _ = try h.run(.{ .harnesses = &.{ .@"claude-code", .codex } });
+
     try testing.expect(h.exists("alt-codex/config.toml"));
     try testing.expect(h.exists("alt-codex/hooks.json"));
     try testing.expect(h.exists("alt-claude/.claude.json"));

@@ -59,6 +59,7 @@ pub const Id = struct {
 
     pub fn parse(s: []const u8) error{InvalidId}!Id {
         if (s.len != 36) return error.InvalidId;
+
         var id: Id = undefined;
         var o: usize = 0;
         var i: usize = 0;
@@ -72,6 +73,7 @@ pub const Id = struct {
             o += 1;
             i += 2;
         }
+
         return id;
     }
 
@@ -347,6 +349,7 @@ test "uuidv7 layout and string round trip" {
     try std.testing.expectEqual(@as(u8, 7), id.bytes[6] >> 4);
     try std.testing.expectEqual(@as(u8, 2), id.bytes[8] >> 6);
     try std.testing.expectEqual(@as(u48, 0x0193_0000_abcd), id.unixMs());
+
     var buf: [36]u8 = undefined;
     const s = id.toString(&buf);
     try std.testing.expect(id.eql(try Id.parse(s)));
@@ -383,10 +386,12 @@ test "change set round-trips through json" {
         }},
         .retractions = &.{.{ .fact_id = id, .end_kind = .retracted, .ended_by = null }},
     };
+
     const json = try std.json.Stringify.valueAlloc(gpa, cs, .{});
     defer gpa.free(json);
     const parsed = try std.json.parseFromSlice(ChangeSet, gpa, json, .{});
     defer parsed.deinit();
+
     try std.testing.expectEqual(@as(i64, 41), parsed.value.base_seq);
     try std.testing.expectEqualStrings("Postgres 17", parsed.value.new_facts[0].fact.object.value);
     try std.testing.expect(parsed.value.new_facts[0].fact.valid.upper == null);

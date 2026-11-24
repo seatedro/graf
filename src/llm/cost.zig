@@ -21,6 +21,7 @@ pub fn resolve(
 ) Cost {
     if (header_value) |h| if (parseUsd(h)) |usd| return .{ .usd = usd, .status = .priced };
     if (body_cost) |usd| if (usd >= 0 and std.math.isFinite(usd)) return .{ .usd = usd, .status = body_status orelse .priced };
+
     for (rates) |text| {
         const r = core.config.parseRate(text) catch continue;
         const reported = reported_model orelse "";
@@ -33,6 +34,7 @@ pub fn resolve(
             .status = .estimated,
         };
     }
+
     return .{};
 }
 
@@ -44,6 +46,7 @@ fn parseUsd(text: []const u8) ?f64 {
 test "header, then body, then rate table, then missing" {
     const usage: Usage = .{ .input_tokens = 1_000_000, .output_tokens = 500_000, .cache_read_tokens = 2_000_000 };
     const rates = [_][]const u8{ "bad entry", "m input=1 output=4 cache_read=0.1" };
+
     try std.testing.expectEqual(Cost{ .usd = 0.00042, .status = .priced }, resolve("0.00042", 9, null, usage, "m", null, &rates));
     try std.testing.expectEqual(Cost{ .usd = 9, .status = .priced }, resolve("n/a", 9, null, usage, "m", null, &rates));
     try std.testing.expectEqual(Cost{ .usd = 9, .status = .estimated }, resolve(null, 9, .estimated, usage, "m", null, &rates));
@@ -54,6 +57,7 @@ test "header, then body, then rate table, then missing" {
 test "the rate table matches the configured or the reported model id" {
     const usage: Usage = .{ .input_tokens = 1_000_000 };
     const rates = [_][]const u8{"model-2026-01-01 input=3 output=0"};
+
     try std.testing.expectEqual(Cost{ .usd = 3, .status = .estimated }, resolve(null, null, null, usage, "model", "model-2026-01-01", &rates));
     try std.testing.expectEqual(Cost{}, resolve(null, null, null, usage, "model", null, &rates));
 }

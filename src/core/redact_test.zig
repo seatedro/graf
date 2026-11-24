@@ -51,11 +51,13 @@ fn expectRedacted(arena: Allocator, input: []const u8, secrets: []const []const 
     for (secrets) |secret| {
         if (std.mem.indexOf(u8, out, secret) != null) return fail("leaked", input, out, secret);
     }
+
     const marker = try std.fmt.allocPrint(arena, "[REDACTED:{s}]", .{@tagName(kind)});
     if (std.mem.indexOf(u8, out, marker) == null) return fail("missing marker", input, out, marker);
     for (kept) |k| {
         if (std.mem.indexOf(u8, out, k) == null) return fail("lost context", input, out, k);
     }
+
     try expectIdempotent(arena, out);
 }
 
@@ -77,6 +79,7 @@ fn marked(g: *Gen, before: []const u8, kind: Kind, after: []const u8) ![]const u
 test "returns the input slice itself when nothing matched" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
+
     const input = "nothing secret in here";
     const out = try redact(arena.allocator(), input);
     try testing.expect(out.ptr == input.ptr and out.len == input.len);
@@ -88,6 +91,7 @@ test "api key prefixes are redacted at token boundaries" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 1);
+
     const xox_body = try g.cat(&.{ try g.chars(digits, 12), "-", try g.chars(digits, 13), "-", try g.chars(b62, 24) });
     const keys = [_][]const u8{
         try g.cat(&.{ "sk-ant-", "api03-", try g.chars(b64url, 93), "AA" }),
@@ -111,6 +115,7 @@ test "api key prefixes are redacted at token boundaries" {
         try g.cat(&.{ "AI", "za", try g.chars(b64url, 35) }),
         try g.cat(&.{ "npm", "_", try g.chars(b62, 36) }),
     };
+
     const contexts = [_][2][]const u8{
         .{ "the key is ", " so rotate it" },
         .{ "(", ")" },
@@ -118,6 +123,7 @@ test "api key prefixes are redacted at token boundaries" {
         .{ "key:", "\n" },
         .{ "", "" },
     };
+
     for (keys) |key| {
         for (contexts) |ctx| {
             const input = try g.cat(&.{ ctx[0], key, ctx[1] });
@@ -130,6 +136,7 @@ test "api key look-alikes survive" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+
     const inputs = [_][]const u8{
         "pip install sk-learn and import sk-learn-compat",
         "The task-runner retries three times before giving up.",
@@ -142,6 +149,7 @@ test "api key look-alikes survive" {
         "AIza is a prefix",
         "the npm_config_cache variable",
     };
+
     for (inputs) |input| try expectUnchanged(a, input);
 }
 
@@ -150,6 +158,7 @@ test "jwts are redacted whole" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 2);
+
     const enc = std.base64.url_safe_no_pad.Encoder;
     const header_json = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
     const payload_json = "{\"sub\":\"user-4821\",\"name\":\"Brackwater Tester\",\"iat\":1700000000}";
@@ -172,14 +181,17 @@ test "pem blocks are redacted through the matching END line" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 3);
+
     const l1 = try g.chars(b64, 64);
     const l2 = try g.chars(b64, 64);
     const l3 = try g.chars(b64, 40);
     const labels = [_][]const u8{ "RSA PRIVATE KEY", "OPENSSH PRIVATE KEY", "EC PRIVATE KEY", "PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "CERTIFICATE" };
+
     for (labels) |label| {
         const block = try g.cat(&.{ "-----BEGIN ", label, "-----\n", l1, "\n", l2, "\n", l3, "==\n-----END ", label, "-----" });
         try expectExact(a, try g.cat(&.{ "Here is the key:\n", block, "\nDone." }), "Here is the key:\n[REDACTED:pem]\nDone.");
     }
+
     const escaped = try g.cat(&.{ "{\"key\": \"-----BEGIN EC PRIVATE KEY-----\\n", l1, "\\n", l2, "\\n-----END EC PRIVATE KEY-----\\n\"}" });
     try expectExact(a, escaped, "{\"key\": \"[REDACTED:pem]\\n\"}");
     const unterminated = try g.cat(&.{ "cat id_ed25519 output:\n-----BEGIN OPENSSH PRIVATE KEY-----\n", l1, "\n", l2[0..30] });
@@ -194,6 +206,7 @@ test "secret assignments redact only the value" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 4);
+
     const cases = [_][2][]const u8{
         .{ "MOORING_API_KEY=", "" },
         .{ "export DB_PASSWORD=\"", "\"" },
@@ -224,10 +237,12 @@ test "secret assignments redact only the value" {
         .{ "private_key: ", "" },
         .{ "cloud_secret_access_key = ", "" },
     };
+
     for (cases) |c| {
         const value = try g.cat(&.{ try g.chars(b62, 10), try g.chars(digits, 2), try g.chars(b62, 6) });
         try expectExact(a, try g.cat(&.{ c[0], value, c[1] }), try marked(&g, c[0], .assignment, c[1]));
     }
+
     const spaced = "correct horse battery staple";
     try expectExact(a, "export BRACKWATER_PASSWORD=\"" ++ spaced ++ "\"", "export BRACKWATER_PASSWORD=\"[REDACTED:assignment]\"");
     try expectExact(a, "password=hunter2", "password=[REDACTED:assignment]");
@@ -238,6 +253,7 @@ test "assignment look-alikes survive" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+
     const inputs = [_][]const u8{
         "token_count: 1500",
         "max_tokens=4000",
@@ -282,6 +298,7 @@ test "assignment look-alikes survive" {
         "AUTH_ENABLED=1",
         "grant_type=client_credentials&scope=read",
     };
+
     for (inputs) |input| try expectUnchanged(a, input);
 }
 
@@ -290,6 +307,7 @@ test "authorization headers and bare bearer or basic credentials" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 5);
+
     const tok = try g.chars(b64url, 40);
     const short = try g.cat(&.{ "brackwater", try g.chars(digits, 6) });
     const enc = std.base64.standard.Encoder;
@@ -324,6 +342,7 @@ test "credentials in urls keep scheme, user and host" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 6);
+
     const pw = try g.chars(b62, 14);
     try expectExact(a, try g.cat(&.{ "postgres://graf:", pw, "@db.example.test:5432/graf" }), "postgres://graf:[REDACTED:url_credentials]@db.example.test:5432/graf");
     try expectExact(a, try g.cat(&.{ "git clone https://deploy:", pw, "@git.example.test/brackwater/repo.git" }), "git clone https://deploy:[REDACTED:url_credentials]@git.example.test/brackwater/repo.git");
@@ -349,11 +368,13 @@ test "high-entropy hex and base64 strings" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 7);
+
     const sha1 = try g.chars(hex, 40);
     const sha256 = try g.chars(hex, 64);
     try expectExact(a, try g.cat(&.{ "commit ", sha1, " fixed it" }), "commit [REDACTED:high_entropy] fixed it");
     try expectExact(a, try g.cat(&.{ "sha256:", sha256 }), "sha256:[REDACTED:high_entropy]");
     try expectExact(a, try g.cat(&.{ "key 0x", sha256, "." }), "key [REDACTED:high_entropy].");
+
     const blob = try g.cat(&.{ try g.chars(b64, 42), "==" });
     try expectExact(a, try g.cat(&.{ "{\"blob\": \"", blob, "\"}" }), "{\"blob\": \"[REDACTED:high_entropy]\"}");
     const url_safe = try g.chars(b64url, 43);
@@ -367,11 +388,13 @@ test "random secrets of 56 or more characters never leak" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 8);
+
     const alphabets = [_][]const u8{ b62, b64, b64url };
     for (0..600) |n| {
         const secret = try g.chars(alphabets[n % alphabets.len], 56 + g.below(40));
         try expectRedacted(a, try g.cat(&.{ "value ", secret, " end" }), &.{secret}, .high_entropy, &.{ "value ", " end" });
     }
+
     for (0..300) |n| {
         const secret = try g.chars(hex, 32 + (n % 3) * 16);
         try expectRedacted(a, try g.cat(&.{ "digest ", secret, " end" }), &.{secret}, .high_entropy, &.{ "digest ", " end" });
@@ -426,6 +449,7 @@ test "false-positive corpus comes back byte-identical" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+
     for (ordinary) |input| try expectUnchanged(a, input);
     const joined = try std.mem.join(a, "\n", &ordinary);
     try expectUnchanged(a, joined);
@@ -436,6 +460,7 @@ test "eval secret entry" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 9);
+
     const mooring_key = try g.cat(&.{ "mr_", "live_", try g.chars(b62, 40) });
     const turn1 = try g.cat(&.{ "Try hitting Mooring with MOORING_API_KEY=", mooring_key, " and verify the staging URL https://mooring.example.test/v1 responds" });
     try expectExact(a, turn1, "Try hitting Mooring with MOORING_API_KEY=[REDACTED:assignment] and verify the staging URL https://mooring.example.test/v1 responds");
@@ -454,9 +479,11 @@ test "utf-8 sequences next to secrets stay intact" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 10);
+
     const v = try g.cat(&.{ try g.chars(b62, 12), "7" });
     const tok = try g.chars(b64url, 40);
     const input = try g.cat(&.{ "密钥 password=", v, " ✓ 完成\n🙂 Bearer ", tok, "—ok\n«", tok, "»" });
+
     const out = try redact(a, input);
     try testing.expect(std.unicode.utf8ValidateSlice(out));
     try testing.expect(std.mem.indexOf(u8, out, v) == null);
@@ -503,6 +530,7 @@ fn appendSecretLine(g: *Gen, out: *std.ArrayList(u8), secrets: *std.ArrayList([]
             break :blk .{ s, try g.cat(&.{ "blob ", s, " end\n" }) };
         },
     };
+
     try secrets.append(a, secret);
     try out.appendSlice(a, line);
 }
@@ -512,6 +540,7 @@ test "200 KB mixed corpus is leak-free, idempotent and fast" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 11);
+
     var corpus: std.ArrayList(u8) = .empty;
     var secrets: std.ArrayList([]const u8) = .empty;
     var n: usize = 0;
@@ -520,10 +549,12 @@ test "200 KB mixed corpus is leak-free, idempotent and fast" {
         try corpus.append(a, '\n');
         if (n % 3 == 0) try appendSecretLine(&g, &corpus, &secrets, n / 3);
     }
+
     const io = testing.io;
     const started = std.Io.Clock.awake.now(io);
     const out = try redact(a, corpus.items);
     const elapsed = started.durationTo(std.Io.Clock.awake.now(io));
+
     for (secrets.items) |secret| {
         if (std.mem.indexOf(u8, out, secret) != null) return fail("leaked", "200 KB corpus", "", secret);
     }
@@ -539,6 +570,7 @@ test "pathological inputs stay linear" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 12);
+
     const units = [_][]const u8{
         "-----BEGIN ",
         "-----BEGIN A-----",
@@ -557,6 +589,7 @@ test "pathological inputs stay linear" {
         "sk-",
         "\\\"",
     };
+
     const io = testing.io;
     for (units) |unit| {
         var buf: std.ArrayList(u8) = .empty;
@@ -566,6 +599,7 @@ test "pathological inputs stay linear" {
         try testing.expect(started.durationTo(std.Io.Clock.awake.now(io)).toMilliseconds() < 2000);
         try expectIdempotent(a, out);
     }
+
     const random_run = try g.chars(b64, 64 * 1024);
     try expectExact(a, random_run, "[REDACTED:high_entropy]");
 }
@@ -575,6 +609,7 @@ test "random mashups of secrets, markers and punctuation are idempotent" {
     defer arena.deinit();
     const a = arena.allocator();
     var g = Gen.init(a, 13);
+
     const pieces = [_][]const u8{
         " ",                               "\n",                            "=",        ": ",            "\"",
         "'",                               "\\\"",                          "/",        "://",           "@",
@@ -588,6 +623,7 @@ test "random mashups of secrets, markers and punctuation are idempotent" {
         "🙂",
         "$",                               "<tok>",                         "**",
     };
+
     for (0..20000) |_| {
         var buf: std.ArrayList(u8) = .empty;
         for (0..2 + g.below(12)) |_| {
@@ -597,6 +633,7 @@ test "random mashups of secrets, markers and punctuation are idempotent" {
                 try buf.appendSlice(a, pieces[g.below(pieces.len)]);
             }
         }
+
         const once = try redact(a, buf.items);
         try testing.expect(std.unicode.utf8ValidateSlice(once));
         try expectIdempotent(a, once);

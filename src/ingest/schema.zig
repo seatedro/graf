@@ -14,6 +14,7 @@ test "schemas are valid JSON, strict, and nullable where optional" {
         defer parsed.deinit();
         try std.testing.expect(parsed.value.object.get("additionalProperties").?.bool == false);
     }
+
     try std.testing.expect(std.mem.indexOf(u8, extract_result, "\"skip\":{\"type\":[\"string\",\"null\"]}") != null);
     try std.testing.expect(std.mem.indexOf(u8, extract_result, "\"time_basis\":{\"type\":\"string\",\"enum\":[\"explicit\",\"relative\",\"reference\"]}") != null);
     try std.testing.expect(std.mem.indexOf(u8, resolve_result, "\"fact_index\":{\"type\":\"integer\"}") != null);

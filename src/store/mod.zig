@@ -29,6 +29,7 @@ pub const Store = struct {
     fn openWithSettings(io: std.Io, allocator: std.mem.Allocator, url: []const u8, opts: OpenOptions, settings: ?std.StringHashMap([]const u8)) !Store {
         var arena_state = std.heap.ArenaAllocator.init(allocator);
         defer arena_state.deinit();
+
         var pool_opts = try poolOptions(arena_state.allocator(), url, opts.pool_size);
         pool_opts.auth.startup_parameters = settings;
         const pool = try pg.Pool.init(io, allocator, pool_opts);
@@ -91,11 +92,13 @@ pub const Store = struct {
         const graph: ?[]const u8 = if (call.graph_id.eql(.nil)) null else &graph_buf;
         var fallback_buf: [16]u8 = s.default_graph.bytes;
         const fallback: ?[]const u8 = if (s.default_graph.eql(.nil)) null else &fallback_buf;
+
         var entry_buf: [16]u8 = undefined;
         const entry: ?[]const u8 = if (call.entry_id) |e| blk: {
             entry_buf = e.bytes;
             break :blk &entry_buf;
         } else null;
+
         _ = try s.pool.exec(
             \\INSERT INTO llm_call (id, graph_id, entry_id, purpose, route, model, attempt, outcome,
             \\  error_class, http_status, input_tokens, output_tokens, cache_read_tokens,
@@ -179,6 +182,7 @@ pub fn contentHash(gpa: std.mem.Allocator, draft: *const core.EntryDraft) ![32]u
         .body = draft.body,
     }, .{});
     defer gpa.free(canonical);
+
     var out: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(canonical, &out, .{});
     return out;
@@ -201,12 +205,14 @@ fn poolOptions(arena: std.mem.Allocator, url: []const u8, size: u16) !pg.Pool.Op
     if (path.len != 0) opts.auth.database = path;
     if (uri.host) |h| opts.connect.host = try h.toRawMaybeAlloc(arena);
     opts.connect.port = uri.port;
+
     if (uri.query) |q| {
         var it = std.mem.splitScalar(u8, try q.toRawMaybeAlloc(arena), '&');
         while (it.next()) |param| {
             const eq = std.mem.indexOfScalar(u8, param, '=') orelse continue;
             const key = param[0..eq];
             const val = param[eq + 1 ..];
+
             if (std.mem.eql(u8, key, "host")) {
                 const dir = try percentDecode(arena, val);
                 opts.connect.host = if (std.mem.startsWith(u8, std.fs.path.basename(dir), ".s.PGSQL."))
@@ -222,6 +228,7 @@ fn poolOptions(arena: std.mem.Allocator, url: []const u8, size: u16) !pg.Pool.Op
             }
         }
     }
+
     return opts;
 }
 
@@ -242,10 +249,12 @@ pub const testing = struct {
 
     pub fn openWith(opts: Store.OpenOptions) !Store {
         const url = databaseUrl() orelse return error.SkipZigTest;
+
         var settings = std.StringHashMap([]const u8).init(std.testing.allocator);
         defer settings.deinit();
         try settings.put("statement_timeout", "60s");
         try settings.put("lock_timeout", "30s");
+
         var s = try Store.openWithSettings(std.testing.io, std.testing.allocator, url, opts, settings);
         errdefer s.close();
         _ = try s.migrate();
@@ -263,6 +272,7 @@ pub const testing = struct {
         const io = std.testing.io;
         var watchdog = try io.concurrent(stopAfterDeadline, .{ io, listener });
         defer watchdog.cancel(io);
+
         const note = listener.next() orelse return error.NoNotification;
         try std.testing.expectEqualStrings(channel, note.channel);
         return note.payload;
@@ -285,6 +295,7 @@ test {
 test "migrations apply, are idempotent, and create halfvec(512) columns" {
     var s = try testing.open();
     defer s.close();
+
     const again = try s.migrate();
     try std.testing.expectEqual(@as(u32, 0), again.applied);
 
@@ -299,6 +310,7 @@ test "migrations apply, are idempotent, and create halfvec(512) columns" {
 test "test stores bound statement and lock waits" {
     var s = try testing.open();
     defer s.close();
+
     var row = (try s.pool.row("SELECT current_setting('statement_timeout'), current_setting('lock_timeout')", .{})) orelse return error.MissingRow;
     defer row.deinit() catch {};
     try std.testing.expectEqualStrings("1min", try row.get([]const u8, 0));
@@ -315,10 +327,13 @@ test "content hash ignores reference time and cursor but not the source" {
         .reference_time = 1,
         .cursor = "10",
     };
+
     var b = a;
     b.reference_time = 2;
     b.cursor = "20";
+
     try std.testing.expectEqual(try contentHash(gpa, &a), try contentHash(gpa, &b));
+
     b.source = .{ .harness = .codex, .external_id = "s2" };
     try std.testing.expect(!std.mem.eql(u8, &(try contentHash(gpa, &a)), &(try contentHash(gpa, &b))));
 }
@@ -326,12 +341,15 @@ test "content hash ignores reference time and cursor but not the source" {
 test "database urls parse into pool options, including a unix socket host" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
+
     const tcp = try poolOptions(arena.allocator(), "postgres://graf:pw@127.0.0.1:54329/graf_test", 3);
     try std.testing.expectEqualStrings("graf", tcp.auth.username);
     try std.testing.expectEqualStrings("pw", tcp.auth.password.?);
     try std.testing.expectEqualStrings("graf_test", tcp.auth.database.?);
     try std.testing.expectEqual(@as(?u16, 54329), tcp.connect.port);
+
     const unix = try poolOptions(arena.allocator(), "postgres://graf@localhost/graf?host=%2Fhome%2Fu%2F.local%2Fshare%2Fgraf%2Fpg", 3);
     try std.testing.expectEqualStrings("/home/u/.local/share/graf/pg/.s.PGSQL.5432", unix.connect.host.?);
+
     try std.testing.expectError(error.InvalidDatabaseUrl, poolOptions(arena.allocator(), "mysql://x/y", 1));
 }

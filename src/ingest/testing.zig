@@ -76,9 +76,11 @@ pub const FakeModel = struct {
         copy.system = try m.kept.allocator().dupe(u8, req.system);
         copy.user = try m.kept.allocator().dupe(u8, req.user);
         try m.requests.append(m.gpa, copy);
+
         if (m.next >= m.replies.items.len) return error.NoScriptedReply;
         const reply = m.replies.items[m.next];
         m.next += 1;
+
         switch (reply) {
             .json => |j| {
                 m.last = null;
@@ -101,6 +103,7 @@ pub const FakeModel = struct {
             m.last = .{ .disposition = disposition };
             return error.ProviderFailed;
         }
+
         const out = try arena.alloc([]const f32, req.inputs.len);
         for (req.inputs, 0..) |input, i| out[i] = try vector(arena, input);
         return .{ .vectors = out, .usage = .{}, .cost = .{} };
@@ -110,16 +113,19 @@ pub const FakeModel = struct {
         _ = arena;
         if (!m.decision_enabled) return error.DecisionDisabled;
         const kept = m.kept.allocator();
+
         var copy = req;
         const state = try kept.alloc(llm.decision.Field, req.state.len);
         for (req.state, state) |f, *out| out.* = .{ .name = try kept.dupe(u8, f.name), .text = try kept.dupe(u8, f.text) };
         copy.state = state;
+
         const questions = try kept.alloc(llm.Question, req.questions.len);
         for (req.questions, questions) |q, *out| out.* = switch (q) {
             .yes_no => |p| .{ .yes_no = try kept.dupe(u8, p) },
             .choice => |c| .{ .choice = .{ .prompt = try kept.dupe(u8, c.prompt), .options = &.{} } },
         };
         copy.questions = questions;
+
         try m.decisions.append(m.gpa, copy);
         return m.decision_answers orelse error.ProviderFailed;
     }
@@ -139,6 +145,7 @@ pub const FakeModel = struct {
     pub fn vector(arena: Allocator, text: []const u8) ![]const f32 {
         const v = try arena.alloc(f32, dims);
         @memset(v, 0);
+
         const n = try core.text.norm(arena, text);
         var it = std.mem.tokenizeScalar(u8, n, ' ');
         while (it.next()) |tok| {
@@ -213,6 +220,7 @@ pub const MemoryBackend = struct {
         for (b.entries.items) |e| if (std.mem.eql(u8, e.source, source)) {
             seq += 1;
         };
+
         try b.entries.append(a, .{
             .entry = .{
                 .id = id,
@@ -227,6 +235,7 @@ pub const MemoryBackend = struct {
             },
             .source = try a.dupe(u8, source),
         });
+
         return id;
     }
 
@@ -257,6 +266,7 @@ pub const MemoryBackend = struct {
         for (b.entries.items) |*e| {
             if (e.status != .queued and e.status != .extracted and e.status != .staged) continue;
             if (b.blocked(e.*)) continue;
+
             b.next_token += 1;
             e.token = b.next_token;
             var entry = e.entry;
@@ -289,6 +299,7 @@ pub const MemoryBackend = struct {
             if (e.change_set) |cs| for (cs.new_facts) |nf| try texts.append(a, nf.fact.text);
             try prior.append(a, .{ .reference_time = e.entry.reference_time, .facts = texts.items });
         }
+
         const start = prior.items.len -| 3;
         return .{ .prior = prior.items[start..], .relations = try a.dupe(resolve.RelationRow, b.relations.items) };
     }
@@ -320,6 +331,7 @@ pub const MemoryBackend = struct {
 
     pub fn prefetch(b: *MemoryBackend, a: Allocator, req: pipeline.PrefetchRequest) !resolve.Prefetch {
         if (b.crash_after_extraction) return error.SimulatedCrash;
+
         var ents: std.ArrayList(resolve.CandidateEntity) = .empty;
         for (req.entity_norms, req.entity_embs, 0..) |norms, emb, i| {
             for (b.entities.items) |e| {
@@ -331,11 +343,13 @@ pub const MemoryBackend = struct {
                         alias = true;
                     };
                 }
+
                 const cos = rules.cosine(emb, e.emb);
                 if (!alias and cos < 0.5) continue;
                 try ents.append(a, .{ .item = @intCast(i), .id = e.id, .name = e.name, .norm = e.norm, .type = e.type, .alias_match = alias, .cosine = cos });
             }
         }
+
         var facts: std.ArrayList(resolve.CandidateFact) = .empty;
         for (req.fact_subject, req.fact_object, req.fact_embs, 0..) |si, oi, emb, j| {
             for (b.facts.items) |f| {
@@ -350,6 +364,7 @@ pub const MemoryBackend = struct {
                         .value => {},
                     };
                 }
+
                 if (!related) continue;
                 try facts.append(a, .{
                     .item = @intCast(j),
@@ -386,14 +401,17 @@ pub const MemoryBackend = struct {
         _ = a;
         const e = b.fenced(lease) catch return .fenced;
         if (e.status != .staged) return .fenced;
+
         const al = b.arena();
         const cs = try copy(core.ChangeSet, al, cs_in.*);
         const t = core.time.now(b.io);
+
         for (cs.new_entities) |ne| {
             var aliases: std.ArrayList([]const u8) = .empty;
             for (ne.aliases) |x| try aliases.append(al, try core.text.norm(al, x));
             try b.entities.append(al, .{ .id = ne.id, .name = ne.name, .norm = ne.norm, .type = ne.type, .aliases = aliases, .emb = ne.name_emb });
         }
+
         for (cs.new_aliases) |x| if (b.entity(x.entity_id)) |ent| try ent.aliases.append(al, x.norm);
         for (cs.merges) |m| {
             if (b.entity(m.from)) |ent| ent.merged_into = m.into;
@@ -407,12 +425,14 @@ pub const MemoryBackend = struct {
                 }
             }
         }
+
         for (cs.new_facts) |nf| {
             var f = nf.fact;
             f.known.lower = t;
             f.subject_id = b.canonical(f.subject_id);
             try b.facts.append(al, .{ .fact = f, .emb = nf.emb });
         }
+
         for (cs.restatements) |r| if (b.fact(r.fact_id)) |f| {
             f.fact.confidence = r.confidence;
         };
@@ -426,6 +446,7 @@ pub const MemoryBackend = struct {
             f.fact.end_kind = r.end_kind;
             f.fact.ended_by = r.ended_by;
         };
+
         for (cs.evidence) |ev| try b.evidence.append(al, .{ .fact_id = ev.fact_id, .entry_id = lease.entry_id, .kind = ev.kind });
         for (cs.new_relations) |rel| {
             var seen = false;
@@ -434,6 +455,7 @@ pub const MemoryBackend = struct {
             };
             if (!seen) try b.relations.append(al, .{ .name = rel.name, .status = rel.status, .mapped_to = rel.mapped_to, .description = rel.description });
         }
+
         b.seq += 1;
         e.status = .committed;
         e.change_set = cs;
@@ -477,9 +499,11 @@ pub const MemoryBackend = struct {
                     child.extraction_json = null;
                     try b.entries.append(al, child);
                 }
+
                 return;
             },
         }
+
         e.token = 0;
     }
 

@@ -33,6 +33,7 @@ pub const Segmenter = struct {
                 try s.seal(arena, .idle, sealed);
             }
         };
+
         try s.items.append(arena, item);
         s.tokens += normalize.estimateTokens(item.turn);
         if (item.turn.ts) |ts| s.last_ts = if (s.last_ts) |last| @max(last, ts) else ts;
@@ -53,6 +54,7 @@ pub const Segmenter = struct {
             .assistant, .tool => agent = true,
             .system => {},
         };
+
         if (user and agent) try s.seal(arena, .hook, sealed);
     }
 
@@ -95,6 +97,7 @@ pub fn authorOf(turns: []const core.Turn) core.types.Author {
         .tool => tool = true,
         .system => {},
     };
+
     if (user and (agent or tool)) return .mixed;
     if (user) return .user;
     if (agent) return .agent;
@@ -129,8 +132,10 @@ test "token trigger seals the window that crosses the budget" {
     const arena = arena_state.allocator();
     var s: Segmenter = .{ .options = .{ .max_tokens = 10 } };
     var sealed: std.ArrayList(Window) = .empty;
+
     try s.push(arena, mk(.user, "short", 0, 0), &sealed);
     try testing.expectEqual(@as(usize, 0), sealed.items.len);
+
     try s.push(arena, mk(.assistant, "a reply long enough to cross the budget", 1, 10), &sealed);
     try testing.expectEqual(@as(usize, 1), sealed.items.len);
     try testing.expectEqual(Trigger.tokens, sealed.items[0].trigger);
@@ -145,13 +150,16 @@ test "idle and gap triggers come from turn timestamps" {
     const sec = std.time.us_per_s;
     var s: Segmenter = .{};
     var sealed: std.ArrayList(Window) = .empty;
+
     try s.push(arena, mk(.user, "q1", 0, 0), &sealed);
     try s.push(arena, mk(.assistant, "a1", 10 * sec, 10), &sealed);
     try s.push(arena, mk(.assistant, "a2", 140 * sec, 20), &sealed);
     try testing.expectEqual(Trigger.idle, sealed.items[0].trigger);
     try testing.expectEqual(@as(?u64, 20), s.firstStart());
+
     try s.push(arena, mk(.user, "q2", 140 * sec + 6 * 60 * sec, 30), &sealed);
     try testing.expectEqual(Trigger.gap, sealed.items[1].trigger);
+
     try s.tick(arena, 140 * sec + 6 * 60 * sec + 119 * sec, &sealed);
     try testing.expectEqual(@as(usize, 2), sealed.items.len);
     try s.tick(arena, 140 * sec + 6 * 60 * sec + 120 * sec, &sealed);
@@ -165,9 +173,11 @@ test "hook trigger needs a complete exchange" {
     const arena = arena_state.allocator();
     var s: Segmenter = .{};
     var sealed: std.ArrayList(Window) = .empty;
+
     try s.push(arena, mk(.user, "q", 0, 0), &sealed);
     try s.hook(arena, &sealed);
     try testing.expectEqual(@as(usize, 0), sealed.items.len);
+
     try s.push(arena, mk(.assistant, "a", 1, 5), &sealed);
     try s.hook(arena, &sealed);
     try testing.expectEqual(Trigger.hook, sealed.items[0].trigger);
@@ -178,8 +188,10 @@ test "canonical body is stable" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const turns = [_]core.Turn{ .{ .role = .user, .text = "q", .ts = 1 }, .{ .role = .assistant, .text = "a", .tool_calls = &.{.{ .name = "Bash", .args_preview = "ls" }}, .ts = 2 } };
+
     const a = try contentHash(arena, .{ .turns = &turns });
     const b = try contentHash(arena, .{ .turns = try arena.dupe(core.Turn, &turns) });
+
     try testing.expectEqualSlices(u8, &a, &b);
     try testing.expectEqual(core.types.Author.mixed, authorOf(&turns));
     try testing.expectEqual(core.types.Author.agent, authorOf(turns[1..]));

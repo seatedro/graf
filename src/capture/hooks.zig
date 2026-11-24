@@ -68,10 +68,12 @@ pub fn run(arena: Allocator, io: Io, env: *const Environ.Map, config: *const cor
         .@"prompt-submit" => {
             const session_id = payload.session_id orelse return;
             const prompt = payload.prompt orelse return;
+
             const sid = try http.percentEncode(arena, session_id);
             const warm_body = try std.json.Stringify.valueAlloc(arena, .{ .prompt = prompt }, .{});
             const warm_target = try std.fmt.allocPrint(arena, "/v1/sessions/{s}/warm", .{sid});
             const recall_target = try std.fmt.allocPrint(arena, "/v1/sessions/{s}/recall?prompt={s}", .{ sid, try http.percentEncode(arena, truncateUtf8(prompt, max_recall_prompt_bytes)) });
+
             const response = http.withinDeadline(io, deadline, warmThenFetch, .{
                 call,
                 call.request("POST", warm_target, warm_body),
@@ -86,12 +88,14 @@ pub fn run(arena: Allocator, io: Io, env: *const Environ.Map, config: *const cor
                 .transcript_path = payload.transcript_path,
                 .cwd = payload.cwd,
             }, .{});
+
             const accepted = blk: {
                 const result = http.withinDeadline(io, deadline, fetch, .{ call, call.request("POST", "/v1/hooks/flush", body) }) orelse break :blk false;
                 const response = result catch break :blk false;
                 break :blk response.ok();
             };
             if (accepted) return;
+
             const dir = state_dir orelse return;
             spool.append(arena, io, dir, .{
                 .ts = Io.Clock.real.now(io).toMicroseconds(),
@@ -128,11 +132,13 @@ fn warmThenFetch(c: Call, warm: http.Request, request: http.Request) http.Error!
         defer stream.close(c.io);
         http.send(c.io, stream, warm) catch |err| if (err == error.Canceled) return err;
     } else |err| if (err == error.Canceled) return err;
+
     return fetch(c, request);
 }
 
 fn endpoints(arena: Allocator, io: Io, config: *const core.Config, env: *const Environ.Map) Allocator.Error![]const http.Endpoint {
     var list: std.ArrayList(http.Endpoint) = .empty;
+
     if (try state.socketPath(arena, config, env)) |path| {
         if (std.Io.Dir.cwd().access(io, path, .{})) |_| try list.append(arena, .{ .unix = path }) else |_| {}
     }
@@ -153,20 +159,24 @@ pub fn responseText(arena: Allocator, response: http.Response) Allocator.Error!?
     if (!response.ok()) return null;
     const body = std.mem.trim(u8, response.body, " \t\r\n");
     if (body.len == 0) return null;
+
     const is_json = http.containsIgnoreCase(response.content_type, "json") or
         (response.content_type.len == 0 and body[0] == '{');
     if (!is_json) return body;
+
     const value = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return null,
     };
     if (value != .object) return null;
+
     for ([_][]const u8{ "text", "brief", "recall" }) |key| {
         const field = value.object.get(key) orelse continue;
         if (field != .string) continue;
         const text = std.mem.trim(u8, field.string, " \t\r\n");
         return if (text.len == 0) null else text;
     }
+
     return null;
 }
 

@@ -23,6 +23,7 @@ pub const BriefCache = struct {
     fn put(c: *BriefCache, gpa: std.mem.Allocator, io: std.Io, key: []const u8, body: []const u8) !void {
         const owned = try gpa.dupe(u8, body);
         errdefer gpa.free(owned);
+
         c.mutex.lockUncancelable(io);
         defer c.mutex.unlock(io);
         const gop = try c.entries.getOrPut(gpa, key);
@@ -34,6 +35,7 @@ pub const BriefCache = struct {
                 return err;
             };
         }
+
         gop.value_ptr.* = owned;
     }
 };
@@ -67,6 +69,7 @@ pub fn get(e: *mod.Engine, arena: std.mem.Allocator, project: ?[]const u8) ![]co
         defer e.briefs.mutex.unlock(e.io);
         if (e.briefs.entries.get(cacheKey(project))) |body| return arena.dupe(u8, body);
     }
+
     const stored = try load(e, arena, project);
     const body = stored orelse try buildAndStore(e, arena, project);
     try e.briefs.put(e.gpa, e.io, cacheKey(project), body);
@@ -77,6 +80,7 @@ pub fn refreshAll(e: *mod.Engine) !void {
     var arena_state = std.heap.ArenaAllocator.init(e.gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var keys: std.ArrayList([]const u8) = .empty;
     {
         e.briefs.mutex.lockUncancelable(e.io);
@@ -84,6 +88,7 @@ pub fn refreshAll(e: *mod.Engine) !void {
         var it = e.briefs.entries.keyIterator();
         while (it.next()) |k| try keys.append(arena, try arena.dupe(u8, k.*));
     }
+
     for (keys.items) |k| {
         const project: ?[]const u8 = if (k.len == 0) null else k;
         const body = try buildAndStore(e, arena, project);
@@ -94,6 +99,7 @@ pub fn refreshAll(e: *mod.Engine) !void {
 fn load(e: *mod.Engine, arena: std.mem.Allocator, project: ?[]const u8) !?[]const u8 {
     const conn = try e.store.pool.acquire();
     defer conn.release();
+
     var row = (try db.queryRow(conn, arena,
         \\SELECT body FROM project_brief b WHERE b.graph_id = $1 AND b.project = $2
         \\  AND b.built_at >= coalesce((SELECT max(committed_at) FROM commit_log c WHERE c.graph_id = $1), '-infinity')
@@ -104,12 +110,14 @@ fn load(e: *mod.Engine, arena: std.mem.Allocator, project: ?[]const u8) !?[]cons
 
 fn buildAndStore(e: *mod.Engine, arena: std.mem.Allocator, project: ?[]const u8) ![]const u8 {
     const body = try build(e, arena, project);
+
     const conn = try e.store.pool.acquire();
     defer conn.release();
     _ = try db.exec(conn,
         \\INSERT INTO project_brief (graph_id, project, body, built_at) VALUES ($1, $2, $3, now())
         \\ON CONFLICT (graph_id, project) DO UPDATE SET body = excluded.body, built_at = excluded.built_at
     , .{ &e.graph_id.bytes, cacheKey(project), body });
+
     return body;
 }
 
@@ -117,6 +125,7 @@ fn query(conn: anytype, arena: std.mem.Allocator, sql: []const u8, args: anytype
     var out: std.ArrayList(Hit) = .empty;
     var result = try db.query(conn, arena, sql, args);
     defer result.deinit();
+
     while (try result.next()) |row| {
         const hit = try db.readHit(arena, row);
         try out.append(arena, hit);
@@ -125,6 +134,7 @@ fn query(conn: anytype, arena: std.mem.Allocator, sql: []const u8, args: anytype
             if (s.len > 0) try m.put(arena, hit.fact.subject_id, s);
         }
     }
+
     return out.items;
 }
 
@@ -185,6 +195,7 @@ pub fn build(e: *mod.Engine, arena: std.mem.Allocator, project: ?[]const u8) ![]
             if (summaries.get(h.fact.subject_id)) |s| if (!summarized.contains(h.fact.subject_id)) {
                 try line.writer.print("- **{s}** ({s}): {s}\n", .{ h.subject_name, @tagName(h.subject_type), render.clip(s, 240) });
             };
+
             const with_summary = line.written().len;
             try writeLine(&line.writer, h, false);
             if (b.take(line.written().len)) {
@@ -198,11 +209,13 @@ pub fn build(e: *mod.Engine, arena: std.mem.Allocator, project: ?[]const u8) ![]
     }
 
     if (prefs_out.written().len + project_out.written().len + recent_out.written().len == 0) return "";
+
     var date_buf: [10]u8 = undefined;
     try w.print("## graf memory brief (project: {s}, {s})\n", .{ project orelse "none", time.formatDate(core.time.now(e.io), &date_buf) });
     if (prefs_out.written().len > 0) try w.print("\n### Standing preferences\n{s}", .{prefs_out.written()});
     if (project_out.written().len > 0) try w.print("\n### Project {s}\n{s}", .{ project.?, project_out.written() });
     if (recent_out.written().len > 0) try w.print("\n### Last 14 days: decisions and changes\n{s}", .{recent_out.written()});
+
     return out.written();
 }
 
@@ -221,6 +234,7 @@ fn writeLine(w: *Writer, h: *const Hit, dated: bool) Writer.Error!void {
     } else {
         try w.writeAll("current");
     }
+
     try w.print(" | conf {d:.2}] {s}", .{ f.confidence, f.text });
     if (f.rationale) |why| if (why.len > 0) try w.print(" (why: {s})", .{why});
     try w.writeByte('\n');

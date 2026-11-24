@@ -43,6 +43,7 @@ pub fn writeFactLine(w: *Writer, hit: *const Hit, with_range: bool) Writer.Error
     } else {
         try w.writeAll("current");
     }
+
     try w.print(" | conf {d:.2} | {s}] {s}", .{ f.confidence, if (hit.harness) |h| @tagName(h) else @tagName(f.author), f.text });
     if (f.rationale) |why| if (why.len > 0) try w.print(" (why: {s})", .{why});
     try w.writeByte('\n');
@@ -90,11 +91,13 @@ pub fn render(result: *const mod.SearchResult, params: mod.SearchParams, out: *W
         for (groups.items) |*g| if (g.subject.eql(hit.fact.subject_id)) {
             group = g;
         };
+
         var cost = lineLen(writeFactLine, .{ hit, params.include_history });
         if (group == null) {
             cost += lineLen(writeEntityHeader, .{&subjectEntity(result.entities, hit)});
         }
         if (!budget.take(cost)) continue;
+
         if (group == null) {
             try groups.append(arena, .{ .subject = hit.fact.subject_id, .hits = .empty });
             group = &groups.items[groups.items.len - 1];
@@ -105,6 +108,7 @@ pub fn render(result: *const mod.SearchResult, params: mod.SearchParams, out: *W
     var index: Writer.Allocating = .init(arena);
     var seen: std.AutoHashMapUnmanaged(core.Id, void) = .empty;
     for (groups.items) |g| try seen.put(arena, g.subject, {});
+
     var first = true;
     for (groups.items) |g| for (g.hits.items) |h| if (h.object_name) |name| switch (h.fact.object) {
         .entity => |oid| if (!(try seen.getOrPut(arena, oid)).found_existing) {
@@ -113,6 +117,7 @@ pub fn render(result: *const mod.SearchResult, params: mod.SearchParams, out: *W
         },
         .value => {},
     };
+
     if (!first) try index.writer.writeByte('\n');
     const index_text = if (budget.take(index.written().len)) index.written() else "";
 
@@ -120,10 +125,12 @@ pub fn render(result: *const mod.SearchResult, params: mod.SearchParams, out: *W
     try out.print("## Memory for \"{s}\" (project: {s}, as_of: {s}, {d}/{d} tok)\n", .{
         params.query, scope, time.formatDate(result.as_of, &as_of_buf), estimateTokens(budget.bytes), max_tokens,
     });
+
     if (groups.items.len == 0) {
         try out.writeAll("\nNo matching memories.\n");
         return;
     }
+
     for (groups.items) |g| {
         try writeEntityHeader(out, &subjectEntity(result.entities, g.hits.items[0]));
         for (g.hits.items) |h| try writeFactLine(out, h, params.include_history);
@@ -144,6 +151,7 @@ pub fn renderEntity(result: *const mod.EntityResult, params: mod.EntityParams, o
         for (e.aliases, 0..) |a, i| try w.print("{s}{s}", .{ if (i == 0) "" else ", ", a });
         try w.writeByte('\n');
     }
+
     if (e.entity.description.len > 0) try w.print("{s}\n", .{e.entity.description});
     if (e.entity.summary.len > 0) try w.print("Summary: {s}\n", .{e.entity.summary});
     if (result.alternatives.len > 0) {
@@ -151,6 +159,7 @@ pub fn renderEntity(result: *const mod.EntityResult, params: mod.EntityParams, o
         for (result.alternatives, 0..) |a, i| try w.print("{s}{s} ({s}, id {f})", .{ if (i == 0) "" else "; ", a.name, @tagName(a.type), a.id });
         try w.writeByte('\n');
     }
+
     _ = budget.take(64 + e.entity.name.len + body.written().len);
 
     var facts: Writer.Allocating = .init(std.heap.page_allocator);
@@ -159,6 +168,7 @@ pub fn renderEntity(result: *const mod.EntityResult, params: mod.EntityParams, o
         const n = lineLen(writeFactLine, .{ h, true });
         if (budget.take(n)) try writeFactLine(&facts.writer, h, true);
     }
+
     if (facts.written().len > 0) {
         try w.writeAll("\n### Facts\n");
         try w.writeAll(facts.written());
@@ -174,6 +184,7 @@ pub fn renderEntity(result: *const mod.EntityResult, params: mod.EntityParams, o
         try line.writer.print("- {s} ({s})", .{ n.entity.name, @tagName(n.entity.type) });
         if (about.len > 0) try line.writer.print(" — {s}", .{clip(about, 160)});
         try line.writer.writeByte('\n');
+
         if (!budget.take(line.written().len)) continue;
         try neighbors.writer.writeAll(line.written());
         for (n.facts) |*h| {
@@ -183,6 +194,7 @@ pub fn renderEntity(result: *const mod.EntityResult, params: mod.EntityParams, o
             try writeFactLine(&neighbors.writer, h, true);
         }
     }
+
     if (neighbors.written().len > 0) {
         try w.writeAll("\n### Neighbors\n");
         try w.writeAll(neighbors.written());
@@ -192,6 +204,7 @@ pub fn renderEntity(result: *const mod.EntityResult, params: mod.EntityParams, o
     try out.print("## {s} ({s}) (id: {f}, as_of: {s}, {d}/{d} tok)\n", .{
         e.entity.name, @tagName(e.entity.type), e.entity.id, time.formatDate(result.as_of, &as_of_buf), estimateTokens(budget.bytes), max_tokens,
     });
+
     try out.writeAll(body.written());
 }
 
@@ -233,9 +246,11 @@ test "render groups by subject and tags each line" {
         .{ .id = graf, .graph_id = core.Id.nil, .name = "graf", .norm = "graf", .type = .project },
     };
     const result: mod.SearchResult = .{ .hits = &hits, .entities = &entities, .reranked = false, .as_of = t0 + day };
+
     var out: Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
     try render(&result, .{ .query = "pg.zig copy support", .project = "graf" }, &out.writer);
+
     const s = out.written();
     try std.testing.expect(std.mem.startsWith(u8, s, "## Memory for \"pg.zig copy support\" (project: graf, as_of: 2026-11-23, "));
     const expected_body =
@@ -257,10 +272,12 @@ test "render stays inside the token budget" {
     var hits: [200]Hit = undefined;
     for (&hits) |*h| h.* = testHit(subject, "graf", "graf records a fairly long fact sentence so that the budget fills up quickly.", 0, null);
     const result: mod.SearchResult = .{ .hits = &hits, .entities = &.{}, .reranked = false };
+
     for ([_]u32{ 100, 400, 1500, 4000 }) |max| {
         var out: Writer.Allocating = .init(std.testing.allocator);
         defer out.deinit();
         try render(&result, .{ .query = "q", .max_tokens = max }, &out.writer);
+
         const est = @as(f64, @floatFromInt(estimateTokens(out.written().len))) * 1.1;
         try std.testing.expect(est <= @as(f64, @floatFromInt(max)));
         if (max >= 400) try std.testing.expect(est >= @as(f64, @floatFromInt(max)) * 0.8);

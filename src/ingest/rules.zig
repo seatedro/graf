@@ -40,6 +40,7 @@ pub fn cosine(a: []const f32, b: []const f32) f32 {
         na += @as(f64, x) * x;
         nb += @as(f64, y) * y;
     }
+
     if (na == 0 or nb == 0) return 0;
     return @floatCast(dot / (@sqrt(na) * @sqrt(nb)));
 }
@@ -58,6 +59,7 @@ pub fn tokenJaccard(a_norm: []const u8, b_norm: []const u8) f32 {
             break;
         };
     }
+
     var b_count: usize = 0;
     var bi = std.mem.tokenizeScalar(u8, b_norm, ' ');
     outer: while (bi.next()) |tok| {
@@ -65,6 +67,7 @@ pub fn tokenJaccard(a_norm: []const u8, b_norm: []const u8) f32 {
         while (seen.next()) |prev| if (std.mem.eql(u8, prev, tok)) continue :outer;
         b_count += 1;
     }
+
     const uni = a_count + b_count - inter;
     if (uni == 0) return 0;
     return @as(f32, @floatFromInt(inter)) / @as(f32, @floatFromInt(uni));
@@ -157,6 +160,7 @@ pub fn conflict(new: Key, rule: RelationRule, old: Key) ?ConflictReason {
             std.mem.eql(u8, new.qualifier, old.qualifier) and !new.object.eql(old.object)) return .one_per_subject_qualifier,
         .one_per_object => if (new.object.eql(old.object) and !new.subject.eql(old.subject)) return .one_per_object,
     };
+
     if (rule.opposes) |opp| if (std.mem.eql(u8, opp, old.relation) and new.subject.eql(old.subject) and
         std.mem.eql(u8, new.qualifier, old.qualifier) and new.object.eql(old.object)) return .opposed;
     return null;
@@ -178,6 +182,7 @@ pub fn resolveConflict(old: *Fact, new: *Fact, kind: ConflictKind, commit_time: 
         old.ended_by = new.id;
         return .retracted_old;
     }
+
     if (!rangesOverlap(old.valid, new.valid)) return .none;
 
     const old_lo = old.valid.lower;
@@ -201,6 +206,7 @@ pub fn resolveConflict(old: *Fact, new: *Fact, kind: ConflictKind, commit_time: 
         old.ended_by = new.id;
         return .retracted_old;
     };
+
     old.valid.upper = minUpper(old.valid.upper, new_reference_time);
     old.end_kind = .changed;
     old.ended_by = new.id;
@@ -240,6 +246,7 @@ pub fn collapseRelation(novel_emb: []const f32, known: []const KnownRelation) ?[
             best = k.name;
         }
     }
+
     return best;
 }
 
@@ -275,6 +282,7 @@ fn fact(n: u8, lower: ?Micros, upper: ?Micros) Fact {
 test "a later state change ends the old fact at the new start (on-call handoff)" {
     var old = fact(1, 10 * day, null);
     var new = fact(2, 12 * day, null);
+
     try testing.expectEqual(Effect.ended_old, resolveConflict(&old, &new, .changed, 99 * day, 12 * day));
     try testing.expectEqual(@as(?Micros, 12 * day), old.valid.upper);
     try testing.expectEqual(core.types.EndKind.changed, old.end_kind.?);
@@ -286,6 +294,7 @@ test "a later state change ends the old fact at the new start (on-call handoff)"
 test "was_wrong retracts by closing system time, never valid time" {
     var old = fact(1, 10 * day, null);
     var new = fact(2, 12 * day, null);
+
     try testing.expectEqual(Effect.retracted_old, resolveConflict(&old, &new, .was_wrong, 13 * day, 12 * day));
     try testing.expectEqual(@as(?Micros, 13 * day), old.known.upper);
     try testing.expect(old.valid.upper == null);
@@ -295,6 +304,7 @@ test "was_wrong retracts by closing system time, never valid time" {
 test "historical backfill bounds the new fact and leaves current state alone" {
     var current = fact(1, 20 * day, null);
     var backfill = fact(2, 5 * day, null);
+
     try testing.expectEqual(Effect.bounded_new, resolveConflict(&current, &backfill, .changed, 30 * day, 30 * day));
     try testing.expect(current.valid.upper == null);
     try testing.expect(current.end_kind == null);
@@ -308,6 +318,7 @@ test "historical backfill bounds the new fact and leaves current state alone" {
 test "an old fact with an unknown start is ended by any dated change" {
     var old = fact(1, null, null);
     var new = fact(2, 3 * day, null);
+
     try testing.expectEqual(Effect.ended_old, resolveConflict(&old, &new, .changed, 9 * day, 3 * day));
     try testing.expectEqual(@as(?Micros, 3 * day), old.valid.upper);
 }
@@ -315,6 +326,7 @@ test "an old fact with an unknown start is ended by any dated change" {
 test "same start closes the old fact at the reference time" {
     var old = fact(1, 10 * day, null);
     var new = fact(2, 10 * day, null);
+
     try testing.expectEqual(Effect.ended_old, resolveConflict(&old, &new, .changed, 20 * day, 11 * day));
     try testing.expectEqual(@as(?Micros, 11 * day), old.valid.upper);
 
@@ -326,6 +338,7 @@ test "same start closes the old fact at the reference time" {
 test "a fact that already ended before the new one starts is never modified" {
     var ended = fact(1, 1 * day, 4 * day);
     var new = fact(2, 6 * day, null);
+
     try testing.expectEqual(Effect.none, resolveConflict(&ended, &new, .changed, 9 * day, 6 * day));
     try testing.expectEqual(@as(?Micros, 4 * day), ended.valid.upper);
     try testing.expect(ended.end_kind == null);
@@ -337,6 +350,7 @@ test "blast radius admits five endings and counts the rest" {
     for (0..8) |_| {
         if (b.admit()) admitted += 1;
     }
+
     try testing.expectEqual(@as(usize, 5), admitted);
     try testing.expectEqual(@as(usize, 3), b.dropped);
 }
@@ -357,6 +371,7 @@ test "cardinality conflicts" {
     var other = base;
     other.object = .{ .entity = id(3) };
     const one = ruleFor("has_oncall", null);
+
     try testing.expectEqual(ConflictReason.one_per_subject, conflict(other, one, base).?);
     try testing.expect(conflict(base, one, base) == null);
     try testing.expect(sameCanonicalKey(base, base));
@@ -370,6 +385,7 @@ test "cardinality conflicts" {
     setting2.object = .{ .value = "model b" };
     const q = ruleFor("has_setting", null);
     try testing.expectEqual(ConflictReason.one_per_subject_qualifier, conflict(setting2, q, setting).?);
+
     var other_q = setting2;
     other_q.qualifier = "embed_model";
     try testing.expect(conflict(other_q, q, setting) == null);
@@ -378,6 +394,7 @@ test "cardinality conflicts" {
     var supports = lacks;
     supports.relation = "supports_feature";
     try testing.expectEqual(ConflictReason.opposed, conflict(supports, ruleFor("supports_feature", null), lacks).?);
+
     var supports_other = supports;
     supports_other.object = .{ .value = "pipelining" };
     try testing.expect(conflict(supports_other, ruleFor("supports_feature", null), lacks) == null);
@@ -422,8 +439,10 @@ test "relation collapse picks the closest known relation above the threshold" {
         .{ .name = "fixed_by", .emb = &.{ 1, 0, 0 } },
         .{ .name = "uses", .emb = &.{ 0, 1, 0 } },
     };
+
     try testing.expectEqualStrings("fixed_by", collapseRelation(&.{ 0.98, 0.1, 0.05 }, &known).?);
     try testing.expect(collapseRelation(&.{ 0.7, 0.7, 0 }, &known) == null);
+
     try testing.expect(validRelationName("resolved_by"));
     try testing.expect(!validRelationName("ResolvedBy"));
     try testing.expect(!validRelationName("bad-name"));

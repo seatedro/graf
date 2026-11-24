@@ -37,6 +37,7 @@ pub fn readHit(arena: std.mem.Allocator, row: anytype) !Hit {
     const object_value = try optText(arena, row, 6);
     const end_kind = try optText(arena, row, 15);
     const harness = try optText(arena, row, 22);
+
     return .{
         .fact = .{
             .id = try id(row, 0),

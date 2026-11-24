@@ -20,6 +20,7 @@ const ended_sql = "SELECT " ++ db.hit_columns ++ db.hit_from ++
 pub fn get(e: *mod.Engine, arena: std.mem.Allocator, entry_id: core.Id) !?EntryOutcome {
     const conn = try e.store.pool.acquire();
     defer conn.release();
+
     var status_row = (try db.queryRow(conn, arena, "SELECT status FROM entry WHERE id = $1 AND graph_id = $2", .{ &entry_id.bytes, &e.graph_id.bytes })) orelse return null;
     const status = std.meta.stringToEnum(core.types.EntryStatus, try status_row.get([]const u8, 0)) orelse .queued;
     try status_row.deinit();
@@ -36,11 +37,13 @@ pub fn get(e: *mod.Engine, arena: std.mem.Allocator, entry_id: core.Id) !?EntryO
             try list.append(arena, hit);
         }
     }
+
     var ended: std.ArrayList(Hit) = .empty;
     {
         var result = try db.query(conn, arena, ended_sql, .{ &entry_id.bytes, &e.graph_id.bytes });
         defer result.deinit();
         while (try result.next()) |row| try ended.append(arena, try db.readHit(arena, row));
     }
+
     return .{ .status = status, .stated = stated.items, .restated = restated.items, .ended = ended.items };
 }

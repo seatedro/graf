@@ -55,6 +55,7 @@ const Harness = struct {
                 .cost_header = "x-example-cost-usd",
             },
         };
+
         h.ledger = .{};
         h.replay = .init(testing.allocator, steps);
         h.arena = .init(testing.allocator);
@@ -114,6 +115,7 @@ test "openai-responses: strict json_schema request, typed decode, header cost, o
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{fixture("responses_ok")});
     defer h.deinit();
+
     const out = try h.client.structuredAs(Entities, h.a(), request(null));
     try testing.expectEqual(@as(usize, 4), out.value.entities.len);
     try testing.expectEqualStrings("brackwater-indexer", out.value.entities[1].name);
@@ -144,6 +146,7 @@ test "anthropic-messages: native output_config format and a cached system block,
     var h: Harness = undefined;
     h.init(.@"anthropic-messages", &.{fixture("messages_ok")});
     defer h.deinit();
+
     const out = try h.client.structuredAs(Entities, h.a(), request(null));
     try testing.expectEqual(@as(usize, 4), out.value.entities.len);
     try testing.expectEqual(@as(u32, 376), out.response.usage.input_tokens);
@@ -165,8 +168,10 @@ test "openai-chat: fenced JSON is unwrapped" {
     var h: Harness = undefined;
     h.init(.@"openai-chat", &.{fixture("chat_fenced")});
     defer h.deinit();
+
     const out = try h.client.structuredAs(Entities, h.a(), request(null));
     try testing.expectEqualStrings("Dana", out.value.entities[0].name);
+
     try testing.expectEqualStrings("https://llm.example.test/v1/chat/completions", h.replay.sent.items[0].url);
     const body = try h.sentJson(0);
     try testing.expectEqualStrings("json_schema", get(body, &.{ "response_format", "type" }).string);
@@ -177,9 +182,11 @@ test "429 with Retry-After waits, cools the route down, then succeeds" {
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{ fixture("responses_429"), fixture("responses_ok") });
     defer h.deinit();
+
     const start = llm.limiter.nowMs(testing.io);
     _ = try h.client.structured(h.a(), request(null));
     try testing.expect(llm.limiter.nowMs(testing.io) - start >= 1000);
+
     try testing.expectEqual(@as(usize, 2), h.ledger.rows.items.len);
     try testing.expectEqualStrings("rate_limited_429", h.ledger.rows.items[0].error_class.?);
     try testing.expectEqual(@as(?i32, 429), h.ledger.rows.items[0].http_status);
@@ -191,6 +198,7 @@ test "anthropic 429 and 529 retry, the 529 cooling the route" {
     var h: Harness = undefined;
     h.init(.@"anthropic-messages", &.{ fixture("messages_529"), fixture("messages_ok") });
     defer h.deinit();
+
     _ = try h.client.structured(h.a(), request(null));
     try testing.expectEqualStrings("overloaded_529", h.ledger.rows.items[0].error_class.?);
     try testing.expect(h.client.limiter.routes.get(.@"anthropic-messages").cooldown_until_ms > 0);
@@ -200,6 +208,7 @@ test "5xx retries unchanged, then succeeds" {
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{ fixture("responses_500"), fixture("responses_500"), fixture("responses_ok") });
     defer h.deinit();
+
     _ = try h.client.structured(h.a(), request(null));
     try testing.expectEqual(@as(usize, 3), h.replay.sent.items.len);
     try testing.expectEqualStrings(h.replay.sent.items[0].body, h.replay.sent.items[2].body);
@@ -210,6 +219,7 @@ test "transient failures give up with requeue after three retries" {
     var h: Harness = undefined;
     h.init(.@"openai-chat", &.{ fixture("chat_502"), fixture("chat_502"), fixture("chat_502"), fixture("chat_502"), fixture("chat_ok") });
     defer h.deinit();
+
     var failure: llm.Failure = undefined;
     try testing.expectError(error.ProviderFailed, h.client.structured(h.a(), request(&failure)));
     try testing.expectEqual(llm.ErrorClass.http_5xx, failure.class);
@@ -223,6 +233,7 @@ test "a connection that never opened is not_sent and retried" {
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{ .{ .failure = .{ .err = error.ConnectionRefused, .sent = false } }, fixture("responses_ok") });
     defer h.deinit();
+
     _ = try h.client.structured(h.a(), request(null));
     try testing.expectEqualStrings("network_not_sent", h.ledger.rows.items[0].error_class.?);
     try testing.expectEqual(@as(?i32, null), h.ledger.rows.items[0].http_status);
@@ -233,6 +244,7 @@ test "a timeout after sending is possibly_sent" {
     const t: Replay.Step = .{ .failure = .{ .err = error.Canceled, .sent = true, .timed_out = true } };
     h.init(.@"openai-responses", &.{ t, t, t, t });
     defer h.deinit();
+
     var failure: llm.Failure = undefined;
     try testing.expectError(error.ProviderFailed, h.client.structured(h.a(), request(&failure)));
     try testing.expectEqual(llm.ErrorClass.timeout, failure.class);
@@ -244,6 +256,7 @@ test "context overflow is never retried: split" {
         var h: Harness = undefined;
         h.init(case[0], &.{ fixture(case[1]), fixture("responses_ok") });
         defer h.deinit();
+
         var failure: llm.Failure = undefined;
         try testing.expectError(error.ProviderFailed, h.client.structured(h.a(), request(&failure)));
         try testing.expectEqual(llm.ErrorClass.context_overflow, failure.class);
@@ -256,6 +269,7 @@ test "output cut off at the token limit splits the entry" {
     var h: Harness = undefined;
     h.init(.@"anthropic-messages", &.{fixture("messages_truncated")});
     defer h.deinit();
+
     var failure: llm.Failure = undefined;
     try testing.expectError(error.ProviderFailed, h.client.structured(h.a(), request(&failure)));
     try testing.expectEqual(llm.Disposition.split, failure.disposition);
@@ -267,13 +281,16 @@ test "401 halts the route until resumed, without retrying" {
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{ fixture("responses_401"), fixture("responses_ok") });
     defer h.deinit();
+
     var failure: llm.Failure = undefined;
     try testing.expectError(error.ProviderFailed, h.client.structured(h.a(), request(&failure)));
     try testing.expectEqual(llm.ErrorClass.auth_401_403, failure.class);
     try testing.expectEqual(llm.Disposition.pause_route, failure.disposition);
     try testing.expectEqualStrings("Authentication failed: invalid API key", failure.message);
+
     try testing.expectError(error.RouteHalted, h.client.structured(h.a(), request(null)));
     try testing.expectEqual(@as(usize, 1), h.replay.sent.items.len);
+
     h.client.resumeRoutes();
     _ = try h.client.structured(h.a(), request(null));
     try testing.expectEqual(@as(usize, 2), h.replay.sent.items.len);
@@ -283,6 +300,7 @@ test "anthropic 401 and a used-up quota both pause the route" {
     var h: Harness = undefined;
     h.init(.@"anthropic-messages", &.{fixture("messages_401")});
     defer h.deinit();
+
     var failure: llm.Failure = undefined;
     try testing.expectError(error.ProviderFailed, h.client.structured(h.a(), request(&failure)));
     try testing.expectEqual(llm.Disposition.pause_route, failure.disposition);
@@ -290,6 +308,7 @@ test "anthropic 401 and a used-up quota both pause the route" {
     var q: Harness = undefined;
     q.init(.@"openai-responses", &.{fixture("responses_429_quota")});
     defer q.deinit();
+
     try testing.expectError(error.ProviderFailed, q.client.structured(q.a(), request(&failure)));
     try testing.expectEqual(llm.ErrorClass.quota_exhausted, failure.class);
     try testing.expectEqual(@as(?llm.limiter.HaltReason, .quota), q.client.limiter.haltedReason(testing.io, .@"openai-responses"));
@@ -299,6 +318,7 @@ test "400 is dead with the provider's diagnostic" {
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{fixture("responses_400_model")});
     defer h.deinit();
+
     var failure: llm.Failure = undefined;
     try testing.expectError(error.ProviderFailed, h.client.structured(h.a(), request(&failure)));
     try testing.expectEqual(llm.Disposition.dead, failure.disposition);
@@ -309,6 +329,7 @@ test "malformed JSON gets one fresh repair request that leaves the original unto
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{ fixture("responses_bad_json"), fixture("responses_ok") });
     defer h.deinit();
+
     const req = request(null);
     const out = try h.client.structured(h.a(), req);
     try testing.expect(out.repaired);
@@ -334,6 +355,7 @@ test "a schema mismatch is repaired once, then dead" {
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{ fixture("responses_wrong_shape"), fixture("responses_ok") });
     defer h.deinit();
+
     const out = try h.client.structuredAs(Entities, h.a(), request(null));
     try testing.expect(out.response.repaired);
     const repair_text = get(try h.sentJson(1), &.{"input"}).array.items[0].object.get("content").?.string;
@@ -342,6 +364,7 @@ test "a schema mismatch is repaired once, then dead" {
     var d: Harness = undefined;
     d.init(.@"openai-responses", &.{ fixture("responses_bad_json"), fixture("responses_bad_json"), fixture("responses_ok") });
     defer d.deinit();
+
     var failure: llm.Failure = undefined;
     try testing.expectError(error.ProviderFailed, d.client.structured(d.a(), request(&failure)));
     try testing.expectEqual(llm.ErrorClass.invalid_output, failure.class);
@@ -353,9 +376,11 @@ test "explicit repair sends only the repair request" {
     var h: Harness = undefined;
     h.init(.@"anthropic-messages", &.{fixture("messages_ok")});
     defer h.deinit();
+
     const out = try h.client.repair(h.a(), request(null), "{\"entities\":[{\"name\":\"F9\"}]}", "fact F9 refers to an unknown entity");
     try testing.expect(out.repaired);
     try testing.expectEqual(@as(usize, 1), h.replay.sent.items.len);
+
     const text = get(try h.sentJson(0), &.{"messages"}).array.items[0].object.get("content").?.string;
     try testing.expect(std.mem.indexOf(u8, text, "fact F9 refers to an unknown entity") != null);
     try testing.expectEqual(core.types.LlmPurpose.repair, h.ledger.rows.items[0].purpose);
@@ -365,10 +390,12 @@ test "embeddings: dimensions in the request, rows placed by index or by position
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{ fixture("embeddings_ok"), fixture("embeddings_no_index") });
     defer h.deinit();
+
     const a = try h.client.embed(h.a(), .{ .purpose = .embed_batch, .inputs = &embed_inputs });
     try testing.expectEqual(@as(usize, 2), a.vectors.len);
     try testing.expectEqual(@as(usize, 512), a.vectors[1].len);
     try testing.expectEqual(core.types.CostStatus.priced, a.cost.status);
+
     const body = try h.sentJson(0);
     try testing.expectEqual(@as(i64, 512), get(body, &.{"dimensions"}).integer);
     try testing.expectEqualStrings("https://llm.example.test/v1/embeddings", h.replay.sent.items[0].url);
@@ -389,6 +416,7 @@ test "decide: generic request, calibrated answers, rerank fails fast so search c
         .{ .yes_no = "Is F3 the same fact?" },
         .{ .choice = .{ .prompt = "Which entity?", .options = &.{ .{ .name = "E1" }, .{ .name = "E2" }, .{ .name = "neither" } } } },
     };
+
     const answers = try h.client.decide(h.a(), .{ .purpose = .resolve, .questions = &qs });
     try testing.expectEqual(@as(f64, 0.93), answers[0].yes_no);
     try testing.expectEqualStrings("https://decide.example.test/v1/decide", h.replay.sent.items[0].url);
@@ -410,6 +438,7 @@ test "decide: stateful wire sends shared state once, maps typed answers, and pri
     h.init(.@"openai-responses", &.{fixture("decision_stateful_ok")});
     defer h.deinit();
     h.cfg.decision = .{ .base_url = "https://decide.example.test", .path = "/v1/decide", .api_key = "d-key", .model = "decider-2", .wire = .stateful, .cost_header = "x-example-cost-usd" };
+
     const entry_id = core.Id.v7(testing.io);
     const answers = try h.client.decide(h.a(), .{
         .purpose = .resolve,
@@ -445,8 +474,10 @@ test "decide: stateful wire without a cost header falls back to the rate table b
     defer h.deinit();
     h.cfg.llm.rates = &.{"decider-2.1 input=2 output=0"};
     h.cfg.decision = .{ .base_url = "https://decide.example.test", .path = "/v1/decide", .model = "decider-2", .wire = .stateful };
+
     const answers = try h.client.decide(h.a(), .{ .purpose = .resolve, .state = &.{.{ .name = "entry", .text = "x" }}, .questions = &stateful_questions });
     try testing.expectEqual(@as(f64, 0.75), answers[1].choice[2]);
+
     const row = h.ledger.rows.items[0];
     try testing.expectEqual(core.types.CostStatus.estimated, row.cost_status);
     try testing.expectApproxEqAbs(@as(f64, 0.002), row.cost_usd, 1e-12);
@@ -457,6 +488,7 @@ test "decide: a stateful refusal is recorded once and fails without retrying" {
     h.init(.@"openai-responses", &.{ fixture("decision_stateful_400"), fixture("decision_stateful_ok") });
     defer h.deinit();
     h.cfg.decision = .{ .base_url = "https://decide.example.test", .path = "/v1/decide", .model = "decider-2", .wire = .stateful, .cost_header = "x-example-cost-usd" };
+
     try testing.expectError(error.ProviderFailed, h.client.decide(h.a(), .{ .purpose = .resolve, .questions = &stateful_questions }));
     try testing.expectEqual(@as(usize, 1), h.replay.sent.items.len);
     try testing.expectEqual(@as(usize, 1), h.ledger.rows.items.len);
@@ -469,8 +501,10 @@ test "decide: a slow stateful rerank fails fast with no retry so search can fall
     h.init(.@"openai-responses", &.{ .{ .failure = .{ .err = error.Timeout, .sent = true, .timed_out = true } }, fixture("decision_stateful_ok") });
     defer h.deinit();
     h.cfg.decision = .{ .base_url = "https://decide.example.test", .path = "/v1/decide", .model = "decider-2", .wire = .stateful, .rerank_timeout_ms = 50 };
+
     try testing.expectError(error.ProviderFailed, h.client.decide(h.a(), .{ .purpose = .rerank, .state = &.{.{ .name = "query", .text = "q" }}, .questions = &stateful_questions }));
     try testing.expectEqual(@as(usize, 1), h.replay.sent.items.len);
+
     const row = h.ledger.rows.items[0];
     try testing.expectEqual(core.types.LlmPurpose.rerank, row.purpose);
     try testing.expect(!row.ok);
@@ -481,8 +515,10 @@ test "the spend cap stops background calls before they are sent" {
     h.init(.@"openai-responses", &.{fixture("responses_ok")});
     defer h.deinit();
     h.ledger.spent = 150.0;
+
     try testing.expectError(error.SpendCapReached, h.client.structured(h.a(), request(null)));
     try testing.expectEqual(@as(usize, 0), h.replay.sent.items.len);
+
     var r = request(null);
     r.priority = .interactive;
     _ = try h.client.structured(h.a(), r);
@@ -492,6 +528,7 @@ test "cancelAll stops a call" {
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{fixture("responses_ok")});
     defer h.deinit();
+
     h.client.cancelAll();
     try testing.expectError(error.Canceled, h.client.structured(h.a(), request(null)));
     try testing.expectEqual(@as(usize, 0), h.replay.sent.items.len);
@@ -501,6 +538,7 @@ test "a missing model is a configuration error, not a provider call" {
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{});
     defer h.deinit();
+
     h.cfg.llm.model = "";
     try testing.expectError(error.ModelNotConfigured, h.client.structured(h.a(), request(null)));
 }
@@ -536,6 +574,7 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
     inline for (cases) |c| {
         const route = c.route orelse .@"openai-responses";
         var failure: llm.Failure = undefined;
+
         {
             var h: Harness = undefined;
             h.init(route, &.{fixture(c.ok)});
@@ -544,6 +583,7 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
             try testing.expect(h.ledger.rows.items[0].ok);
             try testing.expectEqual(core.types.CostStatus.priced, h.ledger.rows.items[0].cost_status);
         }
+
         {
             var h: Harness = undefined;
             h.init(route, &.{ fixture(c.rate_limited), fixture(c.ok) });
@@ -552,6 +592,7 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
             try testing.expectEqualStrings("rate_limited_429", h.ledger.rows.items[0].error_class.?);
             try testing.expectEqual(@as(usize, 2), h.ledger.rows.items.len);
         }
+
         {
             var h: Harness = undefined;
             h.init(route, &.{ fixture(c.server_error), fixture(c.ok) });
@@ -559,6 +600,7 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
             try callRoute(&h, c, &failure);
             try testing.expectEqualStrings("http_5xx", h.ledger.rows.items[0].error_class.?);
         }
+
         {
             var h: Harness = undefined;
             h.init(route, &.{ fixture(c.overflow), fixture(c.ok) });
@@ -567,6 +609,7 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
             try testing.expectEqual(llm.Disposition.split, failure.disposition);
             try testing.expectEqual(@as(usize, 1), h.replay.sent.items.len);
         }
+
         {
             var h: Harness = undefined;
             h.init(route, &.{ fixture(c.unauthorized), fixture(c.ok) });
@@ -575,6 +618,7 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
             try testing.expectEqual(llm.Disposition.pause_route, failure.disposition);
             try testing.expectEqual(@as(usize, 1), h.replay.sent.items.len);
         }
+
         {
             var h: Harness = undefined;
             h.init(route, &.{ fixture(c.malformed), fixture(c.ok) });
@@ -593,6 +637,7 @@ test "without a cost header, the configured rate table prices the call as estima
     defer h.deinit();
     h.cfg.llm.cost_header = "";
     h.cfg.llm.rates = &.{"example-model input=2 output=8"};
+
     const out = try h.client.structured(h.a(), request(null));
     try testing.expectEqual(core.types.CostStatus.estimated, out.cost.status);
     try testing.expectApproxEqAbs(@as(f64, (103.0 * 2 + 44.0 * 8) / 1_000_000.0), out.cost.usd, 1e-12);

@@ -51,23 +51,27 @@ fn object(comptime T: type) []const u8 {
     const info = @typeInfo(T).@"struct";
     var props: []const u8 = "";
     var required: []const u8 = "";
+
     for (info.field_names, info.field_types, 0..) |name, F, i| {
         const sep = if (i == 0) "" else ",";
         props = props ++ sep ++ quote(name) ++ ":" ++ withDescription(schemaOf(F), fieldDescription(T, name));
         required = required ++ sep ++ quote(name);
     }
+
     return "{\"type\":\"object\",\"properties\":{" ++ props ++ "},\"required\":[" ++ required ++ "],\"additionalProperties\":false}";
 }
 
 fn taggedUnion(comptime T: type) []const u8 {
     const info = @typeInfo(T).@"union";
     var variants: []const u8 = "";
+
     for (info.field_names, info.field_types, 0..) |name, F, i| {
         if (F == void) @compileError("void union payloads are not supported in schemas: " ++ @typeName(T) ++ "." ++ name);
         variants = variants ++ (if (i == 0) "" else ",") ++
             "{\"type\":\"object\",\"properties\":{" ++ quote(name) ++ ":" ++ schemaOf(F) ++
             "},\"required\":[" ++ quote(name) ++ "],\"additionalProperties\":false}";
     }
+
     return "{\"anyOf\":[" ++ variants ++ "]}";
 }
 
@@ -154,6 +158,7 @@ test "strict schema for an extraction-shaped struct" {
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, schema, .{});
     defer parsed.deinit();
     const root = parsed.value.object;
+
     try std.testing.expectEqualStrings("object", root.get("type").?.string);
     try std.testing.expectEqual(false, root.get("additionalProperties").?.bool);
     try std.testing.expectEqual(@as(usize, 3), root.get("required").?.array.items.len);
@@ -182,8 +187,10 @@ test "the schema's type decodes a conforming reply and rejects drift" {
         \\   "text":"pg.zig supports COPY","quote":"it has COPY now","rationale":"stated","valid_from":"2026-11-20T00:00:00Z",
         \\   "valid_to":null,"confidence":0.9,"retracts":false}],"skip":false}
     ;
+
     const ok = try std.json.parseFromSlice(TestExtract, std.testing.allocator, reply, .{ .duplicate_field_behavior = .@"error" });
     defer ok.deinit();
+
     try std.testing.expectEqualStrings("pg.zig", ok.value.entities[0].name);
     try std.testing.expect(ok.value.facts[0].object == null);
 
@@ -201,6 +208,7 @@ test "nullable objects, arrays, tagged unions and escaping" {
         pick: union(enum) { id: []const u8, score: f32 },
         @"quoted\"name": bool,
     };
+
     try std.testing.expectEqualStrings(
         "{\"type\":\"object\",\"properties\":{" ++
             "\"maybe_obj\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"n\":{\"type\":\"integer\"}},\"required\":[\"n\"],\"additionalProperties\":false},{\"type\":\"null\"}]}," ++
@@ -211,6 +219,7 @@ test "nullable objects, arrays, tagged unions and escaping" {
             "},\"required\":[\"maybe_obj\",\"maybe_list\",\"pick\",\"quoted\\\"name\"],\"additionalProperties\":false}",
         jsonSchema(T),
     );
+
     const v = try std.json.parseFromSlice(T, std.testing.allocator, "{\"maybe_obj\":null,\"maybe_list\":[1,2],\"pick\":{\"score\":0.5},\"quoted\\\"name\":true}", .{});
     defer v.deinit();
     try std.testing.expectEqual(@as(f32, 0.5), v.value.pick.score);

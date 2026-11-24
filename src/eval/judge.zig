@@ -25,15 +25,18 @@ pub fn setup(arena: Allocator, config: *const core.Config, overrides: Overrides)
     if (route.len > 0) out.llm.route = std.meta.stringToEnum(core.config.Route, route) orelse return error.InvalidRoute;
     if (e.judge_base_url.len > 0) out.llm.base_url = e.judge_base_url;
     if (e.judge_api_key.len > 0) out.llm.api_key = e.judge_api_key;
+
     const model = overrides.model orelse e.judge_model;
     if (model.len == 0) {
         if (config.llm.model.len > 0) out.warning = try std.fmt.allocPrint(arena, "no judge model is set, so the extraction model {s} grades its own residual facts; set eval.judge_model or GRAF_EVAL_JUDGE_MODEL to another model family", .{config.llm.model});
         return out;
     }
+
     out.llm.model = model;
     if (sameFamily(model, config.llm.model)) {
         out.warning = try std.fmt.allocPrint(arena, "the judge model {s} is in the same family as the extraction model {s}, so residual faithfulness may be lenient", .{ model, config.llm.model });
     }
+
     return out;
 }
 
@@ -118,6 +121,7 @@ fn writeUser(w: *Writer, entry_text: []const u8, facts: []const Fact) Writer.Err
 
 pub fn judgeEntry(client: *llm.Client, arena: Allocator, entry: EntryView, facts: []const Fact) llm.Error![]const ?Verdict {
     if (facts.len == 0) return &.{};
+
     const out = try client.structuredAs(Reply, arena, .{
         .purpose = .judge,
         .system = system,
@@ -126,17 +130,20 @@ pub fn judgeEntry(client: *llm.Client, arena: Allocator, entry: EntryView, facts
         .schema_json = schema,
         .max_output_tokens = 4096,
     });
+
     return verdicts(arena, out.value, facts.len);
 }
 
 pub fn verdicts(arena: Allocator, reply: Reply, n: usize) Allocator.Error![]const ?Verdict {
     const list = try arena.alloc(?Verdict, n);
     @memset(list, null);
+
     for (reply.verdicts) |v| {
         if (v.fact == 0 or v.fact > n) continue;
         const slot = &list[v.fact - 1];
         if (slot.* == null) slot.* = .{ .supported = v.supported, .durable = v.durable, .reason = v.reason };
     }
+
     return list;
 }
 
@@ -214,11 +221,13 @@ test "planted residuals replay with the recorded cross-family verdicts" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const suite = try fixtures.loadShippedSuite(arena, testing.io);
     var extraction: core.Config = .{ .llm = .{ .base_url = "https://llm.example.test/v1", .api_key = "test-key", .model = "extract-model-1", .cost_header = "x-example-cost-usd" } };
     extraction.eval = .{ .judge_model = "claude-opus-5-5", .judge_route = "anthropic-messages" };
     const judge_setup = try setup(arena, &extraction, .{});
     try testing.expect(judge_setup.warning == null);
+
     var cfg = extraction;
     cfg.llm = judge_setup.llm;
 
@@ -226,6 +235,7 @@ test "planted residuals replay with the recorded cross-family verdicts" {
     for (planted, &steps) |p, *step| step.* = .{ .capture = p.capture };
     var replay = llm.transport.Replay.init(testing.allocator, &steps);
     defer replay.deinit();
+
     var ledger: Ledger = .{};
     defer ledger.rows.deinit(testing.allocator);
     var client = llm.Client.init(testing.allocator, testing.io, &cfg, ledger.ledger());
@@ -245,10 +255,12 @@ test "planted residuals replay with the recorded cross-family verdicts" {
             if (!want.faithful()) bad += 1;
         }
     }
+
     try testing.expectEqual(@as(usize, 5), bad);
     try testing.expectEqual(@as(usize, 0), replay.remaining());
     try testing.expectEqualStrings("https://llm.example.test/v1/messages", replay.sent.items[0].url);
     try testing.expectEqual(planted.len, ledger.rows.items.len);
+
     for (ledger.rows.items) |row| {
         try testing.expectEqual(core.types.LlmPurpose.judge, row.purpose);
         try testing.expectEqualStrings("claude-opus-5-5", row.model);
@@ -261,8 +273,10 @@ test "the prompt shows the entry and numbers every fact" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const suite = try fixtures.loadShippedSuite(arena, testing.io);
     const text = try userPrompt(arena, try suiteView(&suite, "e01"), planted[0].facts);
+
     try testing.expect(std.mem.indexOf(u8, text, "Project: github.com/tidewright/brinelog") != null);
     try testing.expect(std.mem.indexOf(u8, text, "[user] Let's start brinelog") != null);
     try testing.expect(std.mem.indexOf(u8, text, "1. brinelog is kept separate from Quayline\n   as: brinelog kept_separate_from Quayline\n") != null);
@@ -275,10 +289,13 @@ test "the prompt shows the entry and numbers every fact" {
 test "verdicts are matched by fact number and strays are dropped" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
+
     const reply = try std.json.parseFromSliceLeaky(Reply, arena_state.allocator(),
         \\{"verdicts":[{"fact":2,"reason":"b","supported":false,"durable":true},{"fact":0,"reason":"x","supported":true,"durable":true},{"fact":2,"reason":"again","supported":true,"durable":true},{"fact":9,"reason":"y","supported":true,"durable":true}]}
     , .{});
+
     const got = try verdicts(arena_state.allocator(), reply, 3);
+
     try testing.expect(got[0] == null);
     try testing.expect(!got[1].?.supported);
     try testing.expectEqualStrings("b", got[1].?.reason);

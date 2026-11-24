@@ -28,10 +28,12 @@ pub const Client = struct {
         var send_buffer: [4096]u8 = undefined;
         var writer = stream.writer(c.io, &send_buffer);
         const out = &writer.interface;
+
         const host = switch (c.target) {
             .unix => "localhost",
             .tcp => |address| address,
         };
+
         sendRequest(out, method, path, host, c.token, body) catch |err| switch (err) {
             error.WriteFailed => return writer.err orelse err,
         };
@@ -45,12 +47,14 @@ pub const Client = struct {
             .max_head_len = recv_buffer.len,
             .side = .response,
         };
+
         const head_bytes = http_reader.receiveHead() catch |err| switch (err) {
             error.ReadFailed => return reader.err orelse err,
             else => |e| return e,
         };
         const head = try std.http.Client.Response.Head.parse(head_bytes);
         const status: u16 = @backingInt(head.status);
+
         const body_reader = http_reader.bodyReader(try arena.alloc(u8, 4096), head.transfer_encoding, head.content_length);
         const data = body_reader.allocRemaining(arena, .limited(max_response_len)) catch |err| switch (err) {
             error.ReadFailed => {
@@ -59,6 +63,7 @@ pub const Client = struct {
             },
             else => |e| return e,
         };
+
         return .{ .status = status, .body = data };
     }
 
@@ -125,6 +130,7 @@ pub fn route(arena: Allocator, req: api.Request) !Call {
 
 fn sessionPath(arena: Allocator, session_id: ?[]const u8, action: []const u8) ![]const u8 {
     const id = session_id orelse return error.MissingSessionId;
+
     var out: Io.Writer.Allocating = .init(arena);
     try out.writer.writeAll("/v1/sessions/");
     try std.Uri.Component.percentEncode(&out.writer, id, isUnreserved);
@@ -137,6 +143,7 @@ fn withQuery(arena: Allocator, path: []const u8, body: []const u8, name: []const
     if (parsed != .object) return error.InvalidRequestBody;
     const value = parsed.object.get(name) orelse return path;
     if (value != .string) return error.InvalidRequestBody;
+
     var out: Io.Writer.Allocating = .init(arena);
     try out.writer.print("{s}?{s}=", .{ path, name });
     try std.Uri.Component.percentEncode(&out.writer, value.string, isUnreserved);
@@ -165,11 +172,14 @@ pub fn ensureDaemonWith(
     options: EnsureOptions,
 ) !void {
     if (try client.health()) return;
+
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.append(arena, exe_path);
     try argv.appendSlice(arena, options.args);
     try argv.append(arena, "serve");
+
     try options.spawn(io, env, argv.items, try logPath(arena, env, client.target));
+
     const started = Io.Timestamp.now(io, .awake);
     while (started.untilNow(io, .awake).toNanoseconds() < options.timeout.toNanoseconds()) {
         try io.sleep(options.poll_interval, .awake);
@@ -195,6 +205,7 @@ pub fn logPath(arena: Allocator, env: *const std.process.Environ.Map, target: Ta
 pub fn spawnDetached(io: Io, env: *const std.process.Environ.Map, argv: []const []const u8, log_path: ?[]const u8) !void {
     var log: ?Io.File = null;
     defer if (log) |file| file.close(io);
+
     if (log_path) |path| {
         if (std.fs.path.dirname(path)) |dir| try Io.Dir.cwd().createDirPath(io, dir);
         const file = try Io.Dir.cwd().createFile(io, path, .{ .truncate = false });
@@ -202,6 +213,7 @@ pub fn spawnDetached(io: Io, env: *const std.process.Environ.Map, argv: []const 
         var end = file.writerStreaming(io, &.{});
         try end.seekToUnbuffered(try file.length(io));
     }
+
     _ = try std.process.spawn(io, .{
         .argv = argv,
         .environ_map = env,
@@ -219,10 +231,12 @@ test "route maps every op to its endpoint" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const recall = try route(arena, .{ .op = .recall, .session_id = "a b/c", .body = "{\"prompt\":\"what & why?\"}" });
     try testing.expectEqual(std.http.Method.GET, recall.method);
     try testing.expectEqualStrings("/v1/sessions/a%20b%2Fc/recall?prompt=what%20%26%20why%3F", recall.path);
     try testing.expectEqual(null, recall.body);
+
     try testing.expectEqualStrings("/v1/brief", (try route(arena, .{ .op = .brief })).path);
     try testing.expectError(error.MissingSessionId, route(arena, .{ .op = .warm }));
 }
@@ -231,6 +245,7 @@ test "client handler round-trips every request through the daemon" {
     const io = testing.io;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -238,9 +253,11 @@ test "client handler round-trips every request through the daemon" {
 
     var fake: http.FakeHandler = .{ .io = io };
     defer fake.deinit();
+
     var server = http.Server.init(testing.allocator, io, fake.handler(), .{ .listen = "127.0.0.1:0", .socket_path = socket_path, .token = "t" });
     try server.start();
     defer server.deinit();
+
     var running = try io.concurrent(http.Server.run, .{&server});
     defer {
         server.stop();
@@ -251,6 +268,7 @@ test "client handler round-trips every request through the daemon" {
         .init(io, .{ .unix = socket_path }, ""),
         .init(io, .{ .tcp = try std.fmt.allocPrint(arena, "127.0.0.1:{d}", .{server.boundPort()}) }, "t"),
     };
+
     const requests = [_]api.Request{
         .{ .op = .search, .body = "{\"query\":\"q\",\"project\":\"*\"}" },
         .{ .op = .entity, .body = "{\"name_or_id\":\"brackwater\"}" },
@@ -264,14 +282,17 @@ test "client handler round-trips every request through the daemon" {
         .{ .op = .warm, .session_id = "s" },
         .{ .op = .recall, .session_id = "s1", .body = "{\"prompt\":\"what & why?\"}" },
     };
+
     for (&clients) |*c| {
         const h = c.handler();
+
         for (requests) |req| {
             const reply = try h.handle(arena, req);
             try testing.expectEqual(200, reply.status);
             try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{{\"text\":\"ok {t}\"}}", .{req.op}), reply.body);
             try fake.expectLast(req.op, req.body, req.session_id);
         }
+
         const failed = try h.handle(arena, .{ .op = .entity, .body = "{\"name_or_id\":\"missing\"}" });
         try testing.expectEqual(404, failed.status);
         try testing.expectEqualStrings("{\"error\":\"no such entity\"}", failed.body);
@@ -287,6 +308,7 @@ const SpawnProbe = struct {
     fn record(io: Io, env: *const std.process.Environ.Map, argv: []const []const u8, path: ?[]const u8) anyerror!void {
         _ = io;
         _ = env;
+
         calls += 1;
         argv_len = argv.len;
         try testing.expectEqualStrings("serve", argv[argv.len - 1]);
@@ -298,13 +320,17 @@ test "ensureDaemon returns at once when the daemon is healthy" {
     const io = testing.io;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+
     var buffer: [256]u8 = undefined;
     const socket_path = try std.fmt.bufPrint(&buffer, ".zig-cache/tmp/{s}/graf.sock", .{tmp.sub_path});
+
     var fake: http.FakeHandler = .{ .io = io };
     defer fake.deinit();
+
     var server = http.Server.init(testing.allocator, io, fake.handler(), .{ .listen = "", .socket_path = socket_path });
     try server.start();
     defer server.deinit();
+
     var running = try io.concurrent(http.Server.run, .{&server});
     defer {
         server.stop();
@@ -316,8 +342,10 @@ test "ensureDaemon returns at once when the daemon is healthy" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const client: Client = .init(io, .{ .unix = socket_path }, "");
+
     SpawnProbe.calls = 0;
     try ensureDaemonWith(arena_state.allocator(), io, &env, &client, "/bin/graf", .{ .spawn = SpawnProbe.record });
+
     try testing.expectEqual(0, SpawnProbe.calls);
 }
 
@@ -325,12 +353,15 @@ test "ensureDaemon gives up when the daemon never comes up" {
     const io = testing.io;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+
     var buffer: [256]u8 = undefined;
     const socket_path = try std.fmt.bufPrint(&buffer, ".zig-cache/tmp/{s}/run/graf.sock", .{tmp.sub_path});
+
     var env = std.process.Environ.Map.init(testing.allocator);
     defer env.deinit();
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
+
     const client: Client = .init(io, .{ .unix = socket_path }, "");
     SpawnProbe.calls = 0;
     const started = Io.Timestamp.now(io, .awake);
@@ -339,6 +370,7 @@ test "ensureDaemon gives up when the daemon never comes up" {
         .timeout = .fromMilliseconds(200),
         .args = &.{ "--config", "/etc/graf.toml" },
     }));
+
     try testing.expect(started.untilNow(io, .awake).toMilliseconds() < 2000);
     try testing.expectEqual(1, SpawnProbe.calls);
     try testing.expectEqual(4, SpawnProbe.argv_len);
@@ -353,6 +385,7 @@ const LateDaemon = struct {
         _ = env;
         _ = argv;
         _ = path;
+
         try server.start();
         future = try io.concurrent(http.Server.run, .{server});
     }
@@ -362,10 +395,13 @@ test "ensureDaemon waits for a daemon it started" {
     const io = testing.io;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+
     var buffer: [256]u8 = undefined;
     const socket_path = try std.fmt.bufPrint(&buffer, ".zig-cache/tmp/{s}/graf.sock", .{tmp.sub_path});
+
     var fake: http.FakeHandler = .{ .io = io };
     defer fake.deinit();
+
     var server = http.Server.init(testing.allocator, io, fake.handler(), .{ .listen = "", .socket_path = socket_path });
     LateDaemon.server = &server;
     LateDaemon.future = null;
@@ -380,6 +416,8 @@ test "ensureDaemon waits for a daemon it started" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const client: Client = .init(io, .{ .unix = socket_path }, "");
+
     try ensureDaemonWith(arena_state.allocator(), io, &env, &client, "/bin/graf", .{ .spawn = LateDaemon.spawn });
+
     try testing.expect(LateDaemon.future != null);
 }

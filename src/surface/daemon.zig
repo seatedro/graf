@@ -35,6 +35,7 @@ pub const Runtime = struct {
         rt.io = io;
         rt.postgres = null;
         errdefer if (rt.postgres) |*p| p.stop(io);
+
         const arena = rt.arena.allocator();
         const url = switch (try store.managed.plan(arena, io, env, config.database.url)) {
             .url => |u| u,
@@ -46,10 +47,13 @@ pub const Runtime = struct {
             .docker => try store.managed.docker.start(arena, io),
             .unavailable => return error.DatabaseNotConfigured,
         };
+
         rt.store = try store.Store.open(io, gpa, url, .{ .pool_size = opts.pool_size });
         errdefer rt.store.close();
         _ = try rt.store.migrate();
+
         rt.graph_id = try rt.store.ensureGraph(config.graph);
+
         rt.client = .init(gpa, io, config, rt.store.ledger());
         rt.client.graph_id = rt.graph_id;
         rt.backend = .{ .client = &rt.client };
@@ -90,10 +94,12 @@ fn refreshBriefsOnCommit(rt: *Runtime) Io.Cancelable!void {
         return;
     };
     defer listener.deinit();
+
     listener.listen("graf_commit", .{}) catch |err| {
         log.warn("cannot listen for commits: {s}", .{@errorName(err)});
         return;
     };
+
     while (listener.next()) |_| {
         try rt.engine.io.checkCancel();
         rt.engine.refreshBriefs() catch |err| log.warn("brief refresh failed: {s}", .{@errorName(err)});
@@ -107,6 +113,7 @@ pub const Options = struct {
 
 pub fn checkExposure(config: *const core.Config) !void {
     if (config.serve.listen.len == 0 or config.serve.token.len > 0) return;
+
     const address = try std.Io.net.IpAddress.parseLiteral(config.serve.listen);
     const loopback = switch (address) {
         .ip4 => |a| a.bytes[0] == 127,
@@ -125,6 +132,7 @@ fn replayHookSpool(cap: *capture.Capture) void {
 
 pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: *const core.Config, opts: Options) !void {
     try checkExposure(config);
+
     var rt: Runtime = undefined;
     try rt.open(gpa, io, env, config, .{ .pool_size = @intCast(@max(8, config.ingest.workers + 4)), .start_postgres = true });
     defer rt.close();
@@ -133,6 +141,7 @@ pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: 
     var cap = try capture.Capture.init(gpa, io, env, config, sink, .{});
     defer cap.deinit();
     replayHookSpool(&cap);
+
     var capy_source: ?capture.capy.Source = if (config.capyEnabled()) try capture.capy.Source.init(gpa, io, env, config, sink, .{}) else null;
     defer if (capy_source) |*c| c.deinit();
 
@@ -157,6 +166,7 @@ pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: 
         rt.client.cancelAll();
         background.cancel(io);
     }
+
     try background.concurrent(io, runWorkers, .{ &pipeline, &stop });
     try background.concurrent(io, refreshBriefsOnCommit, .{&rt});
     try background.concurrent(io, capture.Capture.run, .{&cap});
@@ -174,6 +184,7 @@ fn announceUpstream(up: *Upstream) Io.Cancelable!void {
 
 pub fn runEdge(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: *const core.Config, opts: Options) !void {
     try checkExposure(config);
+
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -183,11 +194,13 @@ pub fn runEdge(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, conf
     defer up.deinit();
     var spool = try edge.Spool.open(gpa, io, try edge.spoolDir(arena, state_dir), .{});
     defer spool.close();
+
     var cap = try capture.Capture.init(gpa, io, env, config, spool.sink(), .{});
     defer cap.deinit();
     replayHookSpool(&cap);
 
     var proxy: edge.Edge = .{ .upstream = &up, .spool = &spool, .flusher = flusher(&cap) };
+
     if (opts.socket_path) |p| if (std.fs.path.dirname(p)) |dir| Io.Dir.cwd().createDirPath(io, dir) catch {};
     var server: http.Server = .init(gpa, io, proxy.handler(), .{
         .listen = config.serve.listen,

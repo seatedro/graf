@@ -204,9 +204,11 @@ pub const PgBackend = struct {
     pub fn loadContext(b: *PgBackend, arena: Allocator, lease: store.Lease) !pipeline.Context {
         const conn = try b.store.pool.acquire();
         defer conn.release();
+
         var ebuf: [36]u8 = undefined;
         var gbuf: [36]u8 = undefined;
         const row = jsonRow(ContextRow, arena, conn, context_sql, .{ lease.entry_id.toString(&ebuf), b.graph_id.toString(&gbuf) }) catch |err| return logPgError(conn, err);
+
         var rels: std.ArrayList(resolve.RelationRow) = .empty;
         try rels.appendSlice(arena, row.relations);
         for (core.ontology.core_relations) |core_rel| {
@@ -215,12 +217,14 @@ pub const PgBackend = struct {
                 present = true;
             };
             if (present) continue;
+
             var emb: []const f32 = &.{};
             for (row.core_embeddings) |ce| if (std.mem.eql(u8, ce.name, core_rel.name)) {
                 emb = ce.emb;
             };
             try rels.append(arena, .{ .name = core_rel.name, .cardinality = core_rel.cardinality, .opposes = core_rel.opposes, .status = .core, .description = core_rel.description, .emb = emb });
         }
+
         return .{ .prior = row.prior, .relations = rels.items };
     }
 
@@ -232,6 +236,7 @@ pub const PgBackend = struct {
         var arena_state = std.heap.ArenaAllocator.init(b.store.allocator);
         defer arena_state.deinit();
         const payload = try std.json.Stringify.valueAlloc(arena_state.allocator(), .{ .names = names, .embs = embs }, .{});
+
         const conn = try b.store.pool.acquire();
         defer conn.release();
         var gbuf: [36]u8 = undefined;
@@ -245,9 +250,11 @@ pub const PgBackend = struct {
 
     pub fn prefetch(b: *PgBackend, arena: Allocator, req: pipeline.PrefetchRequest) !resolve.Prefetch {
         const payload = try prefetchPayload(arena, req);
+
         const conn = try b.store.pool.acquire();
         defer conn.release();
         var gbuf: [36]u8 = undefined;
+
         try conn.begin();
         errdefer conn.rollback() catch {};
         _ = conn.exec("SET LOCAL hnsw.iterative_scan = relaxed_order", .{}) catch |err| return logPgError(conn, err);
@@ -287,6 +294,7 @@ pub const PgBackend = struct {
         var rows: std.ArrayList(struct { id: Id, a: Id, b: Id, score: f32 }) = .empty;
         for (dups) |d| try rows.append(arena, .{ .id = Id.v7(b.io), .a = d.a, .b = d.b, .score = d.score });
         const payload = try std.json.Stringify.valueAlloc(arena, rows.items, .{});
+
         const conn = try b.store.pool.acquire();
         defer conn.release();
         var gbuf: [36]u8 = undefined;
@@ -307,10 +315,12 @@ pub const PgBackend = struct {
                 .value => {},
             }
         }
+
         var facts: std.ArrayList(Id) = .empty;
         for (cs.invalidations) |inv| try facts.append(arena, inv.fact_id);
         for (cs.retractions) |r| try facts.append(arena, r.fact_id);
         if (entities.items.len == 0 and facts.items.len == 0) return;
+
         const payload = try std.json.Stringify.valueAlloc(arena, .{ .entities = entities.items, .facts = facts.items }, .{});
         const conn = try b.store.pool.acquire();
         defer conn.release();
@@ -342,6 +352,7 @@ const release = ", lease_owner = NULL, lease_token = NULL, lease_until = NULL";
 pub fn finishOn(arena: Allocator, conn: *pg.Conn, io: std.Io, lease: store.Lease, t: pipeline.Transition) !void {
     var ebuf: [36]u8 = undefined;
     const eid = lease.entry_id.toString(&ebuf);
+
     const affected: ?i64 = switch (t) {
         .skipped => |why| conn.exec("UPDATE entry SET status = 'skipped', warnings = warnings || jsonb_build_array($3::text)" ++ release ++ fence, .{ eid, lease.token, why }),
         .dead => |why| conn.exec("UPDATE entry SET status = 'dead', last_error = jsonb_build_object('reason', $3::text)" ++ release ++ fence, .{ eid, lease.token, why }),
@@ -358,6 +369,7 @@ pub fn finishOn(arena: Allocator, conn: *pg.Conn, io: std.Io, lease: store.Lease
                 try conn.rollback();
                 break :blk 0;
             }
+
             for (halves) |h| {
                 const body = try std.json.Stringify.valueAlloc(arena, h, .{});
                 var cbuf: [36]u8 = undefined;
@@ -368,18 +380,22 @@ pub fn finishOn(arena: Allocator, conn: *pg.Conn, io: std.Io, lease: store.Lease
                     \\ON CONFLICT (graph_id, content_hash) DO NOTHING
                 , .{ eid, Id.v7(io).toString(&cbuf), body }) catch |err| return logPgError(conn, err);
             }
+
             try conn.commit();
             break :blk n;
         },
     } catch |err| return logPgError(conn, err);
+
     if ((affected orelse 0) == 0) return error.LeaseLost;
 }
 
 pub fn prefetchPayload(arena: Allocator, req: pipeline.PrefetchRequest) ![]const u8 {
     const E = struct { norms: []const []const u8, emb: []const f32 };
     const F = struct { subject: u32, object: ?u32, relation: []const u8, opposed: ?[]const u8, text: []const u8, emb: []const f32 };
+
     const ents = try arena.alloc(E, req.entity_norms.len);
     for (ents, 0..) |*e, i| e.* = .{ .norms = req.entity_norms[i], .emb = req.entity_embs[i] };
+
     const facts = try arena.alloc(F, req.fact_subject.len);
     for (facts, 0..) |*f, j| f.* = .{
         .subject = req.fact_subject[j],
@@ -389,5 +405,6 @@ pub fn prefetchPayload(arena: Allocator, req: pipeline.PrefetchRequest) ![]const
         .text = req.fact_texts[j],
         .emb = req.fact_embs[j],
     };
+
     return std.json.Stringify.valueAlloc(arena, .{ .entities = ents, .facts = facts }, .{});
 }

@@ -23,6 +23,7 @@ pub fn ensureGraph(s: *Store, name: []const u8) !Id {
     var cardinalities: [relations.len][]const u8 = undefined;
     var opposes: [relations.len]?[]const u8 = undefined;
     var object_kinds: [relations.len][]const u8 = undefined;
+
     for (relations, 0..) |relation, i| {
         names[i] = relation.name;
         descriptions[i] = relation.description;
@@ -30,6 +31,7 @@ pub fn ensureGraph(s: *Store, name: []const u8) !Id {
         opposes[i] = relation.opposes;
         object_kinds[i] = @tagName(relation.object_kind);
     }
+
     _ = try conn.exec(
         \\INSERT INTO relation (graph_id, name, description, cardinality, opposes, object_kind, status)
         \\SELECT $1, t.name, t.description, t.cardinality, t.opposes, t.object_kind, 'core'
@@ -37,20 +39,24 @@ pub fn ensureGraph(s: *Store, name: []const u8) !Id {
         \\  AS t(name, description, cardinality, opposes, object_kind)
         \\ON CONFLICT (graph_id, name) DO NOTHING
     , .{ @as([]const u8, &id.bytes), &names, &descriptions, &cardinalities, &opposes, &object_kinds });
+
     return id;
 }
 
 pub fn enqueue(s: *Store, graph_id: Id, draft_in: *const core.EntryDraft) !core.EntrySink.Outcome {
     var arena_state = std.heap.ArenaAllocator.init(s.allocator);
     defer arena_state.deinit();
+
     const redacted = try core.redactDraft(arena_state.allocator(), draft_in.*);
     const draft = &redacted;
+
     const hash = try store.contentHash(s.allocator, draft);
     const body = try std.json.Stringify.valueAlloc(s.allocator, draft.body, .{});
     defer s.allocator.free(body);
 
     const conn = try s.pool.acquire();
     defer conn.release();
+
     try conn.begin();
     errdefer conn.rollback() catch {};
 
@@ -68,6 +74,7 @@ pub fn enqueue(s: *Store, graph_id: Id, draft_in: *const core.EntryDraft) !core.
             \\  updated_at = now()
             \\RETURNING id
         , .{ @as([]const u8, &fresh.bytes), @as([]const u8, &graph_id.bytes), @tagName(src.harness), src.external_id, src.project, src.agent, src.model })).?;
+
         @memcpy(&source_buf, try row.get([]const u8, 0));
         try row.deinit();
         source_id = &source_buf;
@@ -91,6 +98,7 @@ pub fn enqueue(s: *Store, graph_id: Id, draft_in: *const core.EntryDraft) !core.
             @tagName(draft.author),     body,                             @as([]const u8, &hash),
             draft.reference_time,
         });
+
         if (row) |*r| {
             inserted = true;
             try r.deinit();
@@ -100,10 +108,12 @@ pub fn enqueue(s: *Store, graph_id: Id, draft_in: *const core.EntryDraft) !core.
     if (draft.cursor) |cursor| if (source_id) |sid| {
         _ = try conn.exec("UPDATE source SET cursor = $2, updated_at = now() WHERE id = $1", .{ sid, cursor });
     };
+
     if (inserted) {
         var gbuf: [36]u8 = undefined;
         _ = try conn.exec("SELECT pg_notify('graf_queue', $1)", .{graph_id.toString(&gbuf)});
     }
+
     try conn.commit();
     return if (inserted) .{ .queued = id } else .duplicate;
 }
@@ -202,6 +212,7 @@ pub fn saveExtraction(s: *Store, lease: Lease, extraction_json: []const u8) !voi
 pub fn saveChangeSet(s: *Store, lease: Lease, change_set: *const core.ChangeSet) !void {
     const json = try std.json.Stringify.valueAlloc(s.allocator, change_set.*, .{});
     defer s.allocator.free(json);
+
     const n = try s.pool.exec(
         \\UPDATE entry SET change_set = $3::jsonb, base_seq = $4, status = 'staged'
         \\WHERE id = $1 AND lease_token = $2 AND status IN ('extracted', 'staged')

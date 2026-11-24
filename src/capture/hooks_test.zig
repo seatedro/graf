@@ -31,6 +31,7 @@ const Stub = struct {
             s.close(stub.io);
             h.* = null;
         };
+
         stub.server.deinit(stub.io);
     }
 
@@ -50,6 +51,7 @@ const Stub = struct {
     fn handle(stub: *Stub, stream: net.Stream) !void {
         const slot = stub.count.load(.acquire);
         if (slot >= stub.log.len) return error.TooManyRequests;
+
         const buf = &stub.log[slot];
         var len: usize = 0;
         while (true) {
@@ -60,12 +62,15 @@ const Stub = struct {
             if (requestComplete(buf[0..len])) break;
             if (len == buf.len) break;
         }
+
         stub.lens[slot] = len;
         stub.count.store(slot + 1, .release);
+
         if (stub.hang) {
             stub.held[slot] = stream;
             return;
         }
+
         var wbuf: [1024]u8 = undefined;
         var writer = stream.writer(stub.io, &wbuf);
         try writer.interface.print("HTTP/1.1 {d} X\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ stub.status, stub.content_type, stub.body.len, stub.body });
@@ -115,13 +120,16 @@ const Harness = struct {
         h.arena_state = .init(testing.allocator);
         h.tmp = testing.tmpDir(.{});
         h.root = try h.tmp.dir.realPathFileAlloc(testing.io, ".", h.arena());
+
         h.env = .init(testing.allocator);
         try h.env.put("HOME", try h.path("home"));
         try h.env.put("XDG_STATE_HOME", try h.path("state"));
+
         h.config = .{};
         h.config.serve.socket = try h.path("missing.sock");
         try h.listenOn(try closedPort());
         h.out = .init(h.arena());
+
         try h.tmp.dir.createDirPath(testing.io, "repo/.git");
         try h.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.git/config", .data = "[remote \"origin\"]\n\turl = git@git.example.test:brackwater/widgets.git\n" });
     }
@@ -225,6 +233,7 @@ test "session-start over tcp accepts a JSON body for codex and sends no token wh
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
+
     var stub: Stub = .{ .io = testing.io, .server = undefined, .body = "{\"brief\":\"from json\"}", .content_type = "application/json" };
     try h.serveTcp(&stub);
     defer stub.stop();
@@ -238,12 +247,14 @@ test "prompt-submit fires warm, prints recall, and stays under 80 ms" {
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
+
     var stub: Stub = .{ .io = testing.io, .server = undefined, .body = "{\"text\":\"recalled: use the arena\"}", .content_type = "application/json" };
     try h.serveTcp(&stub);
     defer stub.stop();
 
     const ms = try h.run(.@"claude-code", .@"prompt-submit", try h.payload(",\"prompt\":\"fix the \\\"flaky\\\" test & ship\""));
     try testing.expect(ms < 80);
+
     try stub.waitFor(2);
     const warm = stub.find("POST /v1/sessions/sess-1/warm HTTP/1.1") orelse return error.MissingWarm;
     try expectContains(warm, "Content-Type: application/json\r\n");
@@ -257,17 +268,20 @@ test "stop posts flush to a fast daemon under 50 ms and spools nothing" {
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
+
     var stub: Stub = .{ .io = testing.io, .server = undefined, .status = 202 };
     try h.serveUnix(&stub);
     defer stub.stop();
 
     const ms = try h.run(.@"claude-code", .stop, try h.payload(",\"hook_event_name\":\"Stop\""));
     try testing.expect(ms < 50);
+
     const req = stub.request(0);
     try expectContains(req, "POST /v1/hooks/flush HTTP/1.1\r\n");
     const body = req[std.mem.indexOf(u8, req, "\r\n\r\n").? + 4 ..];
     const Flush = struct { harness: []const u8, session_id: []const u8, transcript_path: []const u8, cwd: []const u8 };
     const flush = try std.json.parseFromSliceLeaky(Flush, h.arena(), body, .{});
+
     try testing.expectEqualStrings("claude-code", flush.harness);
     try testing.expectEqualStrings("sess-1", flush.session_id);
     try testing.expectEqualStrings(try h.path("repo"), flush.cwd);
@@ -279,11 +293,14 @@ test "session-end spools when nothing listens, under 50 ms" {
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
+
     const ms = try h.run(.@"claude-code", .@"session-end", try h.payload(""));
     try testing.expect(ms < 50);
+
     const text = try h.spoolText();
     try testing.expect(std.mem.endsWith(u8, text, "\n"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "\n"));
+
     const entry = try std.json.parseFromSliceLeaky(spool.Entry, h.arena(), std.mem.trimEnd(u8, text, "\n"), .{});
     try testing.expectEqualStrings("claude-code", entry.harness);
     try testing.expectEqualStrings("session-end", entry.event);
@@ -296,6 +313,7 @@ test "stop and session-end spool when the daemon accepts but never answers, unde
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
+
     var stub: Stub = .{ .io = testing.io, .server = undefined, .hang = true };
     try h.serveTcp(&stub);
     defer stub.stop();
@@ -303,9 +321,11 @@ test "stop and session-end spool when the daemon accepts but never answers, unde
     const stop_ms = try h.run(.codex, .stop, try h.payload(""));
     try testing.expect(stop_ms < 50);
     try testing.expectEqualStrings("{}\n", h.out.written());
+
     const end_ms = try h.run(.@"claude-code", .@"session-end", try h.payload(""));
     try testing.expect(end_ms < 50);
     try stub.waitFor(2);
+
     const text = try h.spoolText();
     try testing.expectEqual(@as(usize, 2), std.mem.count(u8, text, "\n"));
     try expectContains(text, "\"harness\":\"codex\",\"event\":\"stop\"");
@@ -316,9 +336,11 @@ test "a daemon error status spools the flush" {
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
+
     var stub: Stub = .{ .io = testing.io, .server = undefined, .status = 503 };
     try h.serveTcp(&stub);
     defer stub.stop();
+
     _ = try h.run(.@"claude-code", .stop, try h.payload(""));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, try h.spoolText(), "\n"));
 }
@@ -327,6 +349,7 @@ test "prompt-submit and session-start print nothing within budget when the daemo
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
+
     var stub: Stub = .{ .io = testing.io, .server = undefined, .hang = true };
     try h.serveUnix(&stub);
     defer stub.stop();
@@ -334,6 +357,7 @@ test "prompt-submit and session-start print nothing within budget when the daemo
     const prompt_ms = try h.run(.@"claude-code", .@"prompt-submit", try h.payload(",\"prompt\":\"hello\""));
     try testing.expect(prompt_ms < 80);
     try testing.expectEqualStrings("", h.out.written());
+
     const start_ms = try h.run(.codex, .@"session-start", try h.payload(""));
     try testing.expect(start_ms < 250);
     try testing.expectEqualStrings("", h.out.written());
@@ -343,6 +367,7 @@ test "prompt-submit with nothing listening prints nothing, fast" {
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
+
     const ms = try h.run(.@"claude-code", .@"prompt-submit", try h.payload(",\"prompt\":\"hello\""));
     try testing.expect(ms < 80);
     try testing.expectEqualStrings("", h.out.written());
@@ -381,6 +406,7 @@ test "pi and fx are no-ops; paused, excluded, error bodies and bad stdin print n
     stub.status = 500;
     _ = try h.run(.@"claude-code", .@"session-start", try h.payload(""));
     try testing.expectEqualStrings("", h.out.written());
+
     stub.status = 200;
     stub.body = "  \n";
     _ = try h.run(.@"claude-code", .@"session-start", try h.payload(""));
@@ -402,6 +428,7 @@ test "drainSpool replays every line, removes the spool, and re-delivers after a 
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
+
     const state_dir = try h.path("state/graf");
     try testing.expectEqual(@as(usize, 0), try spool.drain(h.arena(), testing.io, state_dir, Collector{ .arena = h.arena(), .seen = undefined }, Collector.handle));
 
@@ -429,6 +456,7 @@ test "responseText accepts plain, markdown and JSON shapes" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     try testing.expectEqualStrings("hi", (try hooks.responseText(arena, .{ .status = 200, .content_type = "text/plain; charset=utf-8", .body = "hi\n" })).?);
     try testing.expectEqualStrings("r", (try hooks.responseText(arena, .{ .status = 200, .content_type = "application/json", .body = "{\"recall\":\"r\"}" })).?);
     try testing.expectEqualStrings("t", (try hooks.responseText(arena, .{ .status = 200, .content_type = "", .body = "{\"text\":\"t\"}" })).?);

@@ -88,10 +88,12 @@ pub fn fromTransport(err: anyerror, sent: bool, timed_out: bool) TransportClass 
 pub fn retryAfterMs(value: []const u8, now_unix_ms: i64) ?u32 {
     const v = std.mem.trim(u8, value, " \t");
     if (v.len == 0) return null;
+
     if (std.fmt.parseFloat(f64, v)) |secs| {
         if (!(secs >= 0) or secs > 86_400) return null;
         return @intFromFloat(@ceil(secs * 1000));
     } else |_| {}
+
     const at = parseHttpDate(v) orelse return null;
     const delta = at * 1000 - now_unix_ms;
     if (delta <= 0) return 0;
@@ -113,11 +115,13 @@ fn parseHttpDate(s: []const u8) ?i64 {
     const hh = std.fmt.parseInt(u8, it.next() orelse return null, 10) catch return null;
     const mm = std.fmt.parseInt(u8, it.next() orelse return null, 10) catch return null;
     const ss = std.fmt.parseInt(u8, it.next() orelse return null, 10) catch return null;
+
     const months = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
     var month: u8 = 0;
     for (months, 1..) |m, i| {
         if (std.ascii.eqlIgnoreCase(m, mon_s)) month = @intCast(i);
     }
+
     if (month == 0 or day == 0 or day > 31 or year < 1970 or hh > 23 or mm > 59 or ss > 60) return null;
     return (core.time.daysFromCivil(year, month, day) * 86_400) + @as(i64, hh) * 3600 + @as(i64, mm) * 60 + ss;
 }
@@ -159,6 +163,7 @@ test "retry-after in seconds, fractions and HTTP dates" {
     try std.testing.expectEqual(@as(?u32, 7000), retryAfterMs("7", 0));
     try std.testing.expectEqual(@as(?u32, 1500), retryAfterMs("1.5", 0));
     try std.testing.expectEqual(@as(?u32, null), retryAfterMs("soon", 0));
+
     const now: i64 = 784_111_777 * 1000;
     try std.testing.expectEqual(@as(?u32, 0), retryAfterMs("Sun, 06 Nov 1994 08:49:37 GMT", now));
     try std.testing.expectEqual(@as(?u32, 30_000), retryAfterMs("Sun, 06 Nov 1994 08:50:07 GMT", now));

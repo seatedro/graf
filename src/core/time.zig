@@ -36,6 +36,7 @@ pub fn parseRfc3339(s_in: []const u8) ParseError!Micros {
     const s = std.mem.trim(u8, s_in, " \t");
     var t = try date(s);
     if (s.len == 10) return t;
+
     if (!isTimeSeparator(s[10]) or s.len < 19 or s[13] != ':' or s[16] != ':') return error.InvalidTimestamp;
     t += try clock(s[11..13], s[14..16], s[17..19]);
     var i: usize = 19;
@@ -43,6 +44,7 @@ pub fn parseRfc3339(s_in: []const u8) ParseError!Micros {
         i += 1;
         t += try fraction(s, &i);
     }
+
     if (i == s.len) return error.InvalidTimestamp;
     switch (s[i]) {
         'Z', 'z' => if (i + 1 != s.len) return error.InvalidTimestamp,
@@ -52,12 +54,14 @@ pub fn parseRfc3339(s_in: []const u8) ParseError!Micros {
         },
         else => return error.InvalidTimestamp,
     }
+
     return t;
 }
 
 pub fn parseIso(s: []const u8) ParseError!Micros {
     var t = try date(s);
     if (s.len == 10) return t;
+
     if (!isTimeSeparator(s[10]) or s.len < 16 or s[13] != ':') return error.InvalidTimestamp;
     t += try clock(s[11..13], s[14..16], "00");
     var i: usize = 16;
@@ -70,6 +74,7 @@ pub fn parseIso(s: []const u8) ParseError!Micros {
             t += try fraction(s, &i);
         }
     }
+
     if (i == s.len) return t;
     switch (s[i]) {
         'Z', 'z' => return if (i + 1 == s.len) t else error.InvalidTimestamp,
@@ -135,6 +140,7 @@ fn fraction(s: []const u8, i: *usize) ParseError!Micros {
             places += 1;
         }
     }
+
     if (i.* == start) return error.InvalidTimestamp;
     while (places < 6) : (places += 1) frac *= 10;
     return frac;
@@ -184,6 +190,7 @@ test "iso timestamps parse to utc micros" {
     try testing.expectEqual(try parseIso("2026-11-29T00:00:00Z"), try parseIso("2026-11-28T16:00:00-08:00"));
     try testing.expectEqual(try parseIso("2026-11-29T00:00Z"), try parseIso("2026-11-29T05:30+0530"));
     try testing.expectEqual(try parseIso("2026-11-29T00:00Z"), try parseIso("2026-11-29T02:00+02"));
+
     for ([_][]const u8{ "yesterday", "2026-13-01", "2026-02-30", "2026-11-29T01", "2026-11-29T01:02:03.Z", "2026-11-29T01:02+2" }) |s| {
         try testing.expectError(error.InvalidTimestamp, parseIso(s));
     }

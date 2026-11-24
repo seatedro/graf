@@ -109,6 +109,7 @@ pub const Gate = struct {
     pub fn status(g: Gate) Status {
         const v = g.value orelse return .unmeasured;
         if (std.math.isNan(v)) return .fail;
+
         const ok = switch (g.bound) {
             .at_least => v >= g.limit,
             .at_most => v <= g.limit,
@@ -143,15 +144,20 @@ test "every gate must be measured and within bounds to pass" {
         .cost_per_entry_usd = 0.02,
         .crash_resume_pass_rate = 1,
     };
+
     try std.testing.expect(m.passes());
+
     m.crash_resume_pass_rate = null;
     try std.testing.expect(!m.passes());
+
     m.crash_resume_pass_rate = 1;
     m.secret_leaks = 1;
     try std.testing.expect(!m.passes());
+
     m.secret_leaks = 0;
     m.fact_density = 1.8;
     try std.testing.expect(!m.passes());
+
     m.fact_density = 1.2;
     m.residual_faithfulness = null;
     try std.testing.expect(!m.passes());

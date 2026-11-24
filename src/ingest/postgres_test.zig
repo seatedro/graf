@@ -68,6 +68,7 @@ test "ingest SQL runs against the store schema" {
         live.toString(&bufs[3]),  cache.toString(&bufs[4]),  sqlite.toString(&bufs[5]),
         fact.toString(&bufs[6]),
     };
+
     const conn = try s.pool.acquire();
     defer conn.release();
     _ = conn.exec(seed_sql, .{ t[0], t[1], t[2], t[3], t[4], t[5], t[6] }) catch |err| {
@@ -85,12 +86,14 @@ test "ingest SQL runs against the store schema" {
     const ctx = try b.loadContext(arena, lease);
     try testing.expectEqual(@as(usize, 1), ctx.prior.len);
     try testing.expectEqualStrings("The brackwater cache chose SQLite.", ctx.prior[0].facts[0]);
+
     var saw_proposed = false;
     var chose_emb: usize = 0;
     for (ctx.relations) |rel| {
         if (std.mem.eql(u8, rel.name, "cached_by")) saw_proposed = rel.status == .proposed and rel.emb.len == 512;
         if (std.mem.eql(u8, rel.name, "chose")) chose_emb = rel.emb.len;
     }
+
     try testing.expect(saw_proposed);
     try testing.expectEqual(@as(usize, 512), chose_emb);
     try testing.expect(ctx.relations.len >= core.ontology.core_relations.len + 1);
@@ -105,12 +108,14 @@ test "ingest SQL runs against the store schema" {
         .fact_embs = &.{emb},
         .fact_texts = &.{"The brackwater cache chose Postgres."},
     });
+
     try testing.expectEqual(@as(i64, 1), pre.base_seq);
     var alias_hit = false;
     for (pre.entities) |e| if (e.item == 0 and e.id.eql(cache)) {
         alias_hit = e.alias_match;
     };
     try testing.expect(alias_hit);
+
     try testing.expect(pre.facts.len >= 1);
     try testing.expect(pre.facts[0].id.eql(fact));
     try testing.expect(pre.facts[0].valid_lower != null);
@@ -136,6 +141,7 @@ test "ingest SQL runs against the store schema" {
 
     const due = try postgres.jsonRow([]const jobs.DueEntity, arena, conn, jobs.due_summaries_sql, .{ t[0], @as(i32, 5) });
     try testing.expectEqual(@as(usize, 0), due.len);
+
     try testing.expect(try jobs.runDailyPromotion(conn, graph));
     try testing.expect(!try jobs.runDailyPromotion(conn, graph));
     try testing.expectEqual(@as(i32, 1), try scalar(i32, conn, "SELECT entries FROM relation WHERE graph_id = $1::uuid AND name = 'chose'", .{t[0]}));

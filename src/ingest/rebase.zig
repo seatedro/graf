@@ -86,6 +86,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
                 break;
             }
         }
+
         if (match == null) for (touched.entities) |t| {
             if (t.merged_into != null or t.type != ne.type) continue;
             if (rules.cosine(ne.name_emb, t.emb) >= rules.merge_cosine and rules.tokenJaccard(ne.norm, t.norm) >= rules.merge_jaccard) {
@@ -93,6 +94,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
                 break;
             }
         };
+
         if (match) |id| {
             try remap.put(arena, ne.id, id);
             for (norms.items, 0..) |n, k| {
@@ -103,11 +105,13 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
             try warnings.append(arena, try std.fmt.allocPrint(arena, "rebase: {s} resolved to an entity committed concurrently", .{ne.name}));
             continue;
         }
+
         for (touched.entities) |t| {
             if (t.merged_into != null or rules.hardBlocked(ne.type, t.type) or !rules.compatible(ne.type, t.type)) continue;
             const c = rules.cosine(ne.name_emb, t.emb);
             if (c >= rules.gray_cosine) try dups.append(arena, .{ .a = ne.id, .b = t.id, .score = c });
         }
+
         try kept_entities.append(arena, ne);
     }
     cs.new_entities = kept_entities.items;
@@ -158,6 +162,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
         }
         try restatements.append(arena, r);
     }
+
     var invalidations: std.ArrayList(ChangeSet.Invalidation) = .empty;
     for (cs.invalidations) |inv| if (!ended(touched, inv.fact_id)) try invalidations.append(arena, inv);
     var retractions: std.ArrayList(ChangeSet.Retraction) = .empty;
@@ -177,6 +182,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
             .entity => |o| nf.fact.object = .{ .entity = remap.get(o) },
             .value => {},
         }
+
         const key: rules.Key = .{
             .subject = nf.fact.subject_id,
             .relation = nf.fact.relation,
@@ -208,12 +214,14 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
                 try kept.append(arena, p);
             }
             evidence = kept;
+
             for (invalidations.items) |*inv| if (inv.ended_by) |e| if (e.eql(nf.fact.id)) {
                 inv.ended_by = old.id;
             };
             for (retractions.items) |*r| if (r.ended_by) |e| if (e.eql(nf.fact.id)) {
                 r.ended_by = old.id;
             };
+
             var already = false;
             for (restatements.items) |r| if (r.fact_id.eql(old.id)) {
                 already = true;
@@ -228,6 +236,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
         for (touched.facts, 0..) |t, i| {
             if (!active[i]) continue;
             if (rules.conflict(key, rule, try t.fact.key(arena)) == null) continue;
+
             var old = t.fact.toFact(nf.fact.graph_id);
             var trial_new = nf.fact;
             switch (rules.resolveConflict(&old, &trial_new, .changed, commit_time, reference_time)) {
@@ -245,8 +254,10 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
                 },
             }
         }
+
         try new_facts.append(arena, nf);
     }
+
     if (blast.dropped > 0) try warnings.append(arena, try std.fmt.allocPrint(arena, "rebase: skipped {d} endings over the per-entry cap", .{blast.dropped}));
 
     cs.new_facts = new_facts.items;
@@ -268,6 +279,7 @@ test "rebase folds a concurrently created entity and restates a concurrently com
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const mine = testId(1);
     const theirs = testId(2);
     const subject = testId(3);
@@ -292,10 +304,12 @@ test "rebase folds a concurrently created entity and restates a concurrently com
         .evidence = &.{.{ .fact_id = my_fact, .kind = .stated, .quote = "q" }},
         .mentions = &.{ mine, subject },
     };
+
     const out = try apply(arena, &cs, .{
         .entities = &.{.{ .id = theirs, .name = "relay", .norm = "relay", .type = .software }},
         .facts = &.{.{ .active = true, .fact = .{ .item = 0, .id = their_fact, .subject_id = subject, .relation = "depends_on", .object_id = theirs, .text = "y", .valid_lower = 50, .confidence = 0.7 } }},
     }, 200, 100);
+
     try testing.expectEqual(@as(usize, 0), out.possible_duplicates.len);
     try testing.expectEqual(@as(usize, 0), cs.new_entities.len);
     try testing.expectEqual(@as(usize, 0), cs.new_facts.len);
@@ -311,6 +325,7 @@ test "rebase ends a concurrently committed single-valued fact and drops work on 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const subject = testId(3);
     const my_fact = testId(10);
     const their_fact = testId(11);
@@ -333,12 +348,14 @@ test "rebase ends a concurrently committed single-valued fact and drops work on 
         .restatements = &.{.{ .fact_id = gone, .confidence = 0.95 }},
         .evidence = &.{ .{ .fact_id = my_fact, .kind = .stated }, .{ .fact_id = gone, .kind = .restated } },
     };
+
     _ = try apply(arena, &cs, .{
         .facts = &.{
             .{ .active = true, .fact = .{ .item = 0, .id = their_fact, .subject_id = subject, .relation = "has_status", .object_value = "open", .text = "y", .valid_lower = 200, .confidence = 0.9 } },
             .{ .active = false, .fact = .{ .item = 0, .id = gone, .subject_id = subject, .relation = "uses", .object_value = "z", .text = "z", .valid_lower = 10, .valid_upper = 20, .confidence = 0.9 } },
         },
     }, 400, 300);
+
     try testing.expectEqual(@as(usize, 1), cs.new_facts.len);
     try testing.expectEqual(@as(usize, 1), cs.invalidations.len);
     try testing.expect(cs.invalidations[0].fact_id.eql(their_fact));
@@ -351,6 +368,7 @@ test "rebase follows concurrent merges and records gray-band duplicates" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const merged_away = testId(5);
     const survivor = testId(6);
     const mine = testId(7);
@@ -361,10 +379,12 @@ test "rebase follows concurrent merges and records gray-band duplicates" {
         .new_aliases = &.{.{ .entity_id = merged_away, .alias = "rly", .norm = "rly" }},
         .mentions = &.{ merged_away, mine },
     };
+
     const out = try apply(arena, &cs, .{ .entities = &.{
         .{ .id = merged_away, .name = "rly", .norm = "rly", .type = .software, .merged_into = survivor },
         .{ .id = lookalike, .name = "relay proxy", .norm = "relay proxy", .type = .software, .emb = &.{ 1, 0.4 } },
     } }, 10, 5);
+
     try testing.expect(cs.mentions[0].eql(survivor));
     try testing.expect(cs.new_aliases[0].entity_id.eql(survivor));
     try testing.expectEqual(@as(usize, 1), cs.new_entities.len);

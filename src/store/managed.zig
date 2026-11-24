@@ -26,11 +26,13 @@ pub fn findToolchain(arena: std.mem.Allocator, io: std.Io, path_env: ?[]const u8
         while (it.next()) |dir| try candidates.append(arena, dir);
     }
     try candidates.appendSlice(arena, &well_known_bins);
+
     for (candidates.items) |dir| {
         const tc: Toolchain = .{ .bin_dir = dir };
         if (!try hasServerBinaries(arena, io, tc)) continue;
         if (try vectorControl(arena, io, tc) != null) return tc;
     }
+
     return null;
 }
 
@@ -50,6 +52,7 @@ pub fn vectorControl(arena: std.mem.Allocator, io: std.Io, tc: Toolchain) !?[]co
         try std.fs.path.join(arena, &.{ prefix, "share", "extension" }),
         try std.fs.path.join(arena, &.{ "/usr/share/postgresql", major, "extension" }),
     };
+
     for (shares) |dir| {
         const control = try std.fs.path.join(arena, &.{ dir, "vector.control" });
         std.Io.Dir.accessAbsolute(io, control, .{}) catch continue;
@@ -67,6 +70,7 @@ pub fn defaultDataDir(arena: std.mem.Allocator, env: *const std.process.Environ.
 pub fn databaseUrl(arena: std.mem.Allocator, data_dir: []const u8) ![]const u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
     try out.writer.print("postgres://{s}@localhost/{s}?host=", .{ user, database });
+
     for (data_dir) |c| {
         if (std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.' or c == '~') {
             try out.writer.writeByte(c);
@@ -113,6 +117,7 @@ pub const Server = struct {
         const arena = arena_state.allocator();
 
         const url = try databaseUrl(url_arena, data_dir);
+
         const status = try std.process.run(arena, io, .{ .argv = &.{ try tc.tool(arena, "pg_ctl"), "status", "-D", data_dir } });
         var child: ?std.process.Child = null;
         if (!status.term.success()) {
@@ -168,11 +173,13 @@ fn waitReady(gpa: std.mem.Allocator, io: std.Io, conn_opts: pg.Conn.Opts) !void 
 fn ensureDatabase(gpa: std.mem.Allocator, io: std.Io, conn_opts: pg.Conn.Opts) !void {
     var conn = try pg.Conn.openAndAuth(io, gpa, conn_opts, maintenance_auth);
     defer conn.deinit();
+
     const exists = blk: {
         var row = try conn.row("SELECT 1 FROM pg_database WHERE datname = $1", .{database}) orelse break :blk false;
         try row.deinit();
         break :blk true;
     };
+
     if (!exists) _ = try conn.exec("CREATE DATABASE " ++ database, .{});
 }
 
@@ -233,6 +240,7 @@ test "data dir follows XDG_DATA_HOME, then HOME" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var env: std.process.Environ.Map = .init(arena.allocator());
+
     try env.put("HOME", "/home/u");
     try std.testing.expectEqualStrings("/home/u/.local/share/graf/pg", try defaultDataDir(arena.allocator(), &env));
     try env.put("XDG_DATA_HOME", "/data");
@@ -270,6 +278,7 @@ test "managed cluster initializes socket-only, starts, serves pgvector and stops
     var s = try store.Store.open(io, gpa, srv.url, .{ .pool_size = 1 });
     defer s.close();
     _ = try s.migrate();
+
     var row = (try s.pool.row("SELECT current_setting('listen_addresses'), extversion FROM pg_extension WHERE extname = 'vector'", .{})).?;
     defer row.deinit() catch {};
     try std.testing.expectEqualStrings("", try row.get([]const u8, 0));

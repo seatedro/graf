@@ -25,21 +25,25 @@ pub fn append(arena: Allocator, io: Io, state_dir: []const u8, entry: Entry) !vo
 
     try Dir.cwd().createDirPath(io, state_dir);
     const path = try state.spoolPath(arena, state_dir);
+
     var attempt: usize = 0;
     while (attempt < 8) : (attempt += 1) {
         const fd = try posix.openat(posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true, .CLOEXEC = true }, 0o600);
         const file: File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
         defer file.close(io);
         try file.lock(io, .exclusive);
+
         const opened = try file.stat(io);
         const current = Dir.cwd().statFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => continue,
             else => |e| return e,
         };
         if (opened.inode != current.inode) continue;
+
         try file.writeStreamingAll(io, line.written());
         return;
     }
+
     return error.SpoolContended;
 }
 
@@ -52,11 +56,13 @@ pub fn drain(
 ) !usize {
     const spool = try state.spoolPath(arena, state_dir);
     const draining = try std.fs.path.join(arena, &.{ state_dir, draining_file });
+
     var delivered: usize = 0;
     var pass: usize = 0;
     while (pass < 2) : (pass += 1) {
         const leftover = if (Dir.cwd().access(io, draining, .{})) |_| true else |_| false;
         if (!leftover and !try claim(io, spool, draining)) break;
+
         const text = try Dir.cwd().readFileAlloc(io, draining, arena, .unlimited);
         var lines = std.mem.splitScalar(u8, text, '\n');
         while (lines.next()) |line| {
@@ -65,8 +71,10 @@ pub fn drain(
             try handler(ctx, entry);
             delivered += 1;
         }
+
         try Dir.cwd().deleteFile(io, draining);
     }
+
     return delivered;
 }
 
@@ -77,6 +85,7 @@ fn claim(io: Io, spool: []const u8, draining: []const u8) !bool {
     };
     defer file.close(io);
     try file.lock(io, .exclusive);
+
     Dir.cwd().rename(spool, Dir.cwd(), draining, io) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => |e| return e,

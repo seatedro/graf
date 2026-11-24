@@ -88,6 +88,7 @@ fn jitter(s: *State, base: u32) u64 {
     s.rng ^= s.rng << 13;
     s.rng ^= s.rng >> 7;
     s.rng ^= s.rng << 17;
+
     const span = @as(u64, base) * s.policy.jitter_permille / 1000;
     return if (span == 0) 0 else s.rng % (span + 1);
 }
@@ -124,9 +125,11 @@ test "transient classes retry three times with 1, 2, 4 s plus at most 20% jitter
 test "rate limits honour Retry-After, else back off 2, 4, 8, 16 s, always cooling the route" {
     var s = State.init(7);
     _ = step(&s, .start, 0);
+
     var a = step(&s, .{ .failed = .{ .class = .rate_limited_429, .retry_after_ms = 3500 } }, 1000);
     try expectSend(a, 4500, 4500, .original, true);
     try testing.expectEqual(@as(?u64, 4500), a.send.cooldown_until_ms);
+
     a = step(&s, .{ .failed = .{ .class = .rate_limited_429 } }, 10_000);
     try expectSend(a, 14_000, 14_000, .original, true);
     try expectSend(step(&s, .{ .failed = .{ .class = .rate_limited_429 } }, 20_000), 28_000, 28_000, .original, true);
@@ -174,5 +177,6 @@ test "jitter is reproducible from the seed" {
     var b = State.init(1234);
     _ = step(&a, .start, 0);
     _ = step(&b, .start, 0);
+
     try testing.expectEqual(step(&a, .{ .failed = .{ .class = .timeout } }, 0).send.at_ms, step(&b, .{ .failed = .{ .class = .timeout } }, 0).send.at_ms);
 }
