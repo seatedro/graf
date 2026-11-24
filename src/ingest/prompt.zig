@@ -34,9 +34,9 @@ const extraction_rules =
 const examples =
     \\Example 1
     \\Entry:
-    \\[user] We picked SQLite for the acme cache because it needs no server. Dana owns the cache now.
+    \\[user] We picked SQLite for the brackwater cache because it needs no server. Dana owns the cache now.
     \\Output:
-    \\{"skip":null,"entities":[{"ref":"n1","name":"acme cache","type":"code","aliases":[],"description":"Cache service in the acme project."},{"ref":"n2","name":"SQLite","type":"software","aliases":[],"description":"Embedded SQL database."},{"ref":"n3","name":"Dana","type":"person","aliases":[],"description":"Engineer."}],"facts":[{"subject":"n1","relation":"chose","qualifier":null,"object":"n2","value":null,"text":"The acme cache chose SQLite.","rationale":"It needs no server.","valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"user","quote":"We picked SQLite for the acme cache because it needs no server."},{"subject":"n1","relation":"owned_by","qualifier":null,"object":"n3","value":null,"text":"The acme cache is owned by Dana.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"user","quote":"Dana owns the cache now."}],"new_relations":[]}
+    \\{"skip":null,"entities":[{"ref":"n1","name":"brackwater cache","type":"code","aliases":[],"description":"Cache service in the brackwater project."},{"ref":"n2","name":"SQLite","type":"software","aliases":[],"description":"Embedded SQL database."},{"ref":"n3","name":"Dana","type":"person","aliases":[],"description":"Engineer."}],"facts":[{"subject":"n1","relation":"chose","qualifier":null,"object":"n2","value":null,"text":"The brackwater cache chose SQLite.","rationale":"It needs no server.","valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"user","quote":"We picked SQLite for the brackwater cache because it needs no server."},{"subject":"n1","relation":"owned_by","qualifier":null,"object":"n3","value":null,"text":"The brackwater cache is owned by Dana.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"user","quote":"Dana owns the cache now."}],"new_relations":[]}
     \\
     \\Example 2
     \\Reference time: 2026-03-04T10:00:00Z (Wednesday, UTC)

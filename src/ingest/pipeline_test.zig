@@ -39,20 +39,20 @@ fn at(s: []const u8) core.Micros {
     return time.parse(s) catch unreachable;
 }
 
-const relay_marco =
-    \\{"skip":null,"entities":[{"ref":"n1","name":"Relay","type":"software","aliases":[],"description":"Request gateway."},{"ref":"n2","name":"Marco","type":"person","aliases":[],"description":"Engineer."}],
-    \\"facts":[{"subject":"n1","relation":"has_oncall","qualifier":null,"object":"n2","value":null,"text":"Marco is on call for Relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"agent","quote":"Marco is currently on call for Relay."},
+const relay_hollis =
+    \\{"skip":null,"entities":[{"ref":"n1","name":"Relay","type":"software","aliases":[],"description":"Request gateway."},{"ref":"n2","name":"Hollis","type":"person","aliases":[],"description":"Engineer."}],
+    \\"facts":[{"subject":"n1","relation":"has_oncall","qualifier":null,"object":"n2","value":null,"text":"Hollis is on call for Relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"agent","quote":"Hollis is currently on call for Relay."},
     \\{"subject":"n1","relation":"located_at","qualifier":null,"object":null,"value":"infra/relay","text":"Relay lives under infra/relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"agent","quote":"Relay lives under infra/relay"}],"new_relations":[]}
 ;
 
-const relay_elena =
-    \\{"skip":null,"entities":[{"ref":"n1","name":"Relay","type":"software","aliases":[],"description":"Request gateway."},{"ref":"n2","name":"Elena","type":"person","aliases":[],"description":"Engineer."}],
-    \\"facts":[{"subject":"n1","relation":"has_oncall","qualifier":null,"object":"n2","value":null,"text":"Elena is on call for Relay.","rationale":null,"valid_from":"2026-11-20T17:00:00Z","valid_to":null,"time_basis":"relative","scope":"project","author":"user","quote":"Elena took over on call for Relay starting today at 17:00 UTC."}],"new_relations":[]}
+const relay_juno =
+    \\{"skip":null,"entities":[{"ref":"n1","name":"Relay","type":"software","aliases":[],"description":"Request gateway."},{"ref":"n2","name":"Juno","type":"person","aliases":[],"description":"Engineer."}],
+    \\"facts":[{"subject":"n1","relation":"has_oncall","qualifier":null,"object":"n2","value":null,"text":"Juno is on call for Relay.","rationale":null,"valid_from":"2026-11-20T17:00:00Z","valid_to":null,"time_basis":"relative","scope":"project","author":"user","quote":"Juno took over on call for Relay starting today at 17:00 UTC."}],"new_relations":[]}
 ;
 
-const elena_restated =
-    \\{"skip":null,"entities":[{"ref":"n1","name":"relay","type":"software","aliases":[],"description":""},{"ref":"n2","name":"Elena","type":"person","aliases":[],"description":""}],
-    \\"facts":[{"subject":"n1","relation":"has_oncall","qualifier":null,"object":"n2","value":null,"text":"Elena is on call for Relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"user","quote":"Elena has Relay on call this week."}],"new_relations":[]}
+const juno_restated =
+    \\{"skip":null,"entities":[{"ref":"n1","name":"relay","type":"software","aliases":[],"description":""},{"ref":"n2","name":"Juno","type":"person","aliases":[],"description":""}],
+    \\"facts":[{"subject":"n1","relation":"has_oncall","qualifier":null,"object":"n2","value":null,"text":"Juno is on call for Relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"user","quote":"Juno has Relay on call this week."}],"new_relations":[]}
 ;
 
 const skip_json = "{\"skip\":\"test output only\",\"entities\":[],\"facts\":[],\"new_relations\":[]}";
@@ -65,12 +65,12 @@ test "entries flow through extraction, resolution and commit into the expected g
     var h = try Harness.init();
     defer h.deinit();
 
-    const entry1 = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), "acme/monorepo", turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
-    const entry2 = try h.backend.add("session-b", at("2026-11-20T18:00:00Z"), "acme/monorepo", turns("Heads up: Elena took over on call for Relay starting today at 17:00 UTC."));
-    const entry3 = try h.backend.add("session-c", at("2026-11-22T09:00:00Z"), "acme/monorepo", turns("Elena has Relay on call this week."));
+    const entry1 = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), "brackwater/monorepo", turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
+    const entry2 = try h.backend.add("session-b", at("2026-11-20T18:00:00Z"), "brackwater/monorepo", turns("Heads up: Juno took over on call for Relay starting today at 17:00 UTC."));
+    const entry3 = try h.backend.add("session-c", at("2026-11-22T09:00:00Z"), "brackwater/monorepo", turns("Juno has Relay on call this week."));
     const entry4 = try h.backend.add("session-d", at("2026-11-22T10:00:00Z"), null, turns("run the tests"));
 
-    try h.model.push(.{ .json = relay_marco });
+    try h.model.push(.{ .json = relay_hollis });
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(@as(u32, 1), h.model.count(.extract));
     try testing.expectEqual(@as(u32, 0), h.model.count(.resolve));
@@ -78,35 +78,35 @@ test "entries flow through extraction, resolution and commit into the expected g
     try testing.expectEqual(@as(usize, 2), h.backend.entities.items.len);
     try testing.expectEqual(@as(usize, 2), h.backend.facts.items.len);
 
-    try h.model.push(.{ .json = relay_elena });
+    try h.model.push(.{ .json = relay_juno });
     try h.model.push(.{ .json = "{\"entity_links\":[],\"fact_verdicts\":[{\"fact_index\":0,\"duplicate_of\":null,\"contradicts\":[{\"fact\":\"F1\",\"kind\":\"changed\",\"at\":null}]}]}" });
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(@as(u32, 1), h.model.count(.resolve));
     try testing.expectEqual(@as(usize, 3), h.backend.entities.items.len);
     const resolution_prompt = h.model.requests.items[2].user;
-    try testing.expect(std.mem.indexOf(u8, resolution_prompt, "Marco is on call for Relay.") != null);
+    try testing.expect(std.mem.indexOf(u8, resolution_prompt, "Hollis is on call for Relay.") != null);
 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var marco_fact: ?core.Fact = null;
-    var elena_fact: ?core.Fact = null;
+    var hollis_fact: ?core.Fact = null;
+    var juno_fact: ?core.Fact = null;
     for (h.backend.facts.items) |f| {
-        if (std.mem.eql(u8, f.fact.text, "Marco is on call for Relay.")) marco_fact = f.fact;
-        if (std.mem.eql(u8, f.fact.text, "Elena is on call for Relay.")) elena_fact = f.fact;
+        if (std.mem.eql(u8, f.fact.text, "Hollis is on call for Relay.")) hollis_fact = f.fact;
+        if (std.mem.eql(u8, f.fact.text, "Juno is on call for Relay.")) juno_fact = f.fact;
     }
-    try testing.expectEqual(@as(?core.Micros, at("2026-11-20T17:00:00Z")), marco_fact.?.valid.upper);
-    try testing.expectEqual(core.types.EndKind.changed, marco_fact.?.end_kind.?);
-    try testing.expect(marco_fact.?.known.upper == null);
-    try testing.expect(elena_fact.?.valid.upper == null);
-    try testing.expect(marco_fact.?.subject_id.eql(elena_fact.?.subject_id));
+    try testing.expectEqual(@as(?core.Micros, at("2026-11-20T17:00:00Z")), hollis_fact.?.valid.upper);
+    try testing.expectEqual(core.types.EndKind.changed, hollis_fact.?.end_kind.?);
+    try testing.expect(hollis_fact.?.known.upper == null);
+    try testing.expect(juno_fact.?.valid.upper == null);
+    try testing.expect(hollis_fact.?.subject_id.eql(juno_fact.?.subject_id));
     try testing.expectEqual(@as(usize, 2), (try h.backend.activeFacts(arena)).len);
 
-    try h.model.push(.{ .json = elena_restated });
+    try h.model.push(.{ .json = juno_restated });
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(@as(u32, 1), h.model.count(.resolve));
     try testing.expectEqual(@as(usize, 3), h.backend.facts.items.len);
-    try testing.expectApproxEqAbs(@as(f32, 0.93), h.backend.fact(elena_fact.?.id).?.fact.confidence, 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 0.93), h.backend.fact(juno_fact.?.id).?.fact.confidence, 1e-6);
 
     try h.model.push(.{ .json = skip_json });
     try testing.expectEqual(ingest.Outcome.skipped, try h.step());
@@ -120,8 +120,8 @@ test "entries flow through extraction, resolution and commit into the expected g
 test "a crash after extraction resumes without paying for extraction again" {
     var h = try Harness.init();
     defer h.deinit();
-    const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
-    try h.model.push(.{ .json = relay_marco });
+    const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
+    try h.model.push(.{ .json = relay_hollis });
     h.backend.crash_after_extraction = true;
     try testing.expectError(error.SimulatedCrash, h.step());
     try testing.expectEqual(core.types.EntryStatus.extracted, h.backend.row(entry).status);
@@ -137,8 +137,8 @@ test "a crash after extraction resumes without paying for extraction again" {
 test "a lost lease fences the commit" {
     var h = try Harness.init();
     defer h.deinit();
-    _ = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
-    try h.model.push(.{ .json = relay_marco });
+    _ = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
+    try h.model.push(.{ .json = relay_hollis });
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     var lease = h.backend.claim().?;
@@ -151,7 +151,7 @@ test "a lost lease fences the commit" {
 test "provider failures requeue, kill, or split the entry" {
     var h = try Harness.init();
     defer h.deinit();
-    const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
+    const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
 
     try h.model.push(.{ .fail = .requeue });
     try testing.expectEqual(ingest.Outcome.requeued, try h.step());
@@ -186,9 +186,9 @@ test "provider failures requeue, kill, or split the entry" {
 test "malformed extraction output gets one repair, then the entry dies" {
     var h = try Harness.init();
     defer h.deinit();
-    const ok = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
+    const ok = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
     try h.model.push(.{ .json = "```json\n{\"skip\": null}\n```" });
-    try h.model.push(.{ .json = relay_marco });
+    try h.model.push(.{ .json = relay_hollis });
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(@as(u32, 1), h.model.count(.repair));
     try testing.expectEqual(core.types.EntryStatus.committed, h.backend.row(ok).status);
@@ -203,11 +203,11 @@ test "malformed extraction output gets one repair, then the entry dies" {
 test "an unusable resolution answer falls back to the deterministic rules" {
     var h = try Harness.init();
     defer h.deinit();
-    _ = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
-    _ = try h.backend.add("session-b", at("2026-11-20T18:00:00Z"), null, turns("Heads up: Elena took over on call for Relay starting today at 17:00 UTC."));
-    try h.model.push(.{ .json = relay_marco });
+    _ = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
+    _ = try h.backend.add("session-b", at("2026-11-20T18:00:00Z"), null, turns("Heads up: Juno took over on call for Relay starting today at 17:00 UTC."));
+    try h.model.push(.{ .json = relay_hollis });
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
-    try h.model.push(.{ .json = relay_elena });
+    try h.model.push(.{ .json = relay_juno });
     try h.model.push(.{ .json = "{\"entity_links\":[{\"ref\":\"n9\",\"existing\":\"E7\"}],\"fact_verdicts\":[]}" });
     try h.model.push(.{ .json = "garbage" });
     try testing.expectEqual(ingest.Outcome.committed, try h.step());

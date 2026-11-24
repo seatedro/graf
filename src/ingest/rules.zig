@@ -403,7 +403,7 @@ test "entity type guards" {
 
 test "token jaccard and cosine" {
     try testing.expectEqual(@as(f32, 1.0), tokenJaccard("pg zig", "pg zig"));
-    try testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), tokenJaccard("acme gateway", "acme relay"), 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), tokenJaccard("brackwater gateway", "brackwater relay"), 1e-6);
     try testing.expectEqual(@as(f32, 0.0), tokenJaccard("", "x"));
     try testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), tokenJaccard("a a b", "a c"), 1e-6);
     try testing.expectApproxEqAbs(@as(f32, 1.0), cosine(&.{ 1, 2 }, &.{ 2, 4 }), 1e-6);

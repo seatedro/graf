@@ -69,9 +69,9 @@ const Scenario = struct {
 };
 
 const relay = id(10);
-const marco = id(11);
-const elena = id(12);
-const marco_oncall = id(50);
+const hollis = id(11);
+const juno = id(12);
+const hollis_oncall = id(50);
 
 fn relayOncallPrefetch(item_subject: u32, item_object: u32, fact_item: u32) resolve.Prefetch {
     _ = item_object;
@@ -79,15 +79,15 @@ fn relayOncallPrefetch(item_subject: u32, item_object: u32, fact_item: u32) reso
         .base_seq = 7,
         .entities = &.{
             .{ .item = item_subject, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .alias_match = true, .cosine = 1.0 },
-            .{ .item = 1, .id = marco, .name = "Marco", .norm = "marco", .type = .person, .cosine = 0.55 },
+            .{ .item = 1, .id = hollis, .name = "Hollis", .norm = "hollis", .type = .person, .cosine = 0.55 },
         },
         .facts = &.{.{
             .item = fact_item,
-            .id = marco_oncall,
+            .id = hollis_oncall,
             .subject_id = relay,
             .relation = "has_oncall",
-            .object_id = marco,
-            .text = "Marco is on call for Relay.",
+            .object_id = hollis,
+            .text = "Hollis is on call for Relay.",
             .valid_lower = at("2026-11-19T22:00:00Z"),
             .confidence = 0.9,
         }},
@@ -98,24 +98,24 @@ test "an on-call handoff ends the previous holder at the stated time" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var handoff = fct("n1", "has_oncall", "n2", null, "Elena took over on call for Relay starting today at 17:00 UTC");
+    var handoff = fct("n1", "has_oncall", "n2", null, "Juno took over on call for Relay starting today at 17:00 UTC");
     handoff.valid_from = "2026-11-20T17:00:00Z";
     handoff.time_basis = .explicit;
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-20T18:00:00Z"),
-        .body = "Heads up: Elena took over on call for Relay starting today at 17:00 UTC. Marco rotated off.",
-        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Elena", .person) }, .facts = &.{handoff}, .new_relations = &.{} },
+        .body = "Heads up: Juno took over on call for Relay starting today at 17:00 UTC. Hollis rotated off.",
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Juno", .person) }, .facts = &.{handoff}, .new_relations = &.{} },
         .prefetch = relayOncallPrefetch(0, 1, 0),
     }).run();
     const cs = out.cs;
     try testing.expectEqual(@as(i64, 7), cs.base_seq);
     try testing.expectEqual(@as(usize, 1), cs.new_entities.len);
-    try testing.expectEqualStrings("Elena", cs.new_entities[0].name);
+    try testing.expectEqualStrings("Juno", cs.new_entities[0].name);
     try testing.expectEqual(@as(usize, 1), cs.new_facts.len);
     try testing.expect(cs.new_facts[0].fact.subject_id.eql(relay));
     try testing.expectEqual(@as(usize, 1), cs.invalidations.len);
-    try testing.expect(cs.invalidations[0].fact_id.eql(marco_oncall));
+    try testing.expect(cs.invalidations[0].fact_id.eql(hollis_oncall));
     try testing.expectEqual(at("2026-11-20T17:00:00Z"), cs.invalidations[0].valid_upper);
     try testing.expect(cs.invalidations[0].ended_by.?.eql(cs.new_facts[0].fact.id));
     try testing.expectEqual(@as(usize, 0), cs.retractions.len);
@@ -133,7 +133,7 @@ test "a dated historical on-call period never ends the current holder" {
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-21T20:00:00Z"),
-        .body = "Historical note: Priya was on call for Relay from November 10, 2026 until November 17, 2026, before Marco.",
+        .body = "Historical note: Priya was on call for Relay from November 10, 2026 until November 17, 2026, before Hollis.",
         .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Priya", .person) }, .facts = &.{past}, .new_relations = &.{} },
         .prefetch = relayOncallPrefetch(0, 1, 0),
     }).run();
@@ -147,13 +147,13 @@ test "an undated backfill that predates current state is bounded by it" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var past = fct("n1", "has_oncall", "n2", null, "Priya was on call for Relay before Marco");
+    var past = fct("n1", "has_oncall", "n2", null, "Priya was on call for Relay before Hollis");
     past.valid_from = "2026-11-10T00:00:00Z";
     past.time_basis = .explicit;
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-21T20:00:00Z"),
-        .body = "Priya was on call for Relay before Marco",
+        .body = "Priya was on call for Relay before Hollis",
         .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Priya", .person) }, .facts = &.{past}, .new_relations = &.{} },
         .prefetch = relayOncallPrefetch(0, 1, 0),
     }).run();
@@ -320,15 +320,15 @@ test "an organization and its similarly named software stay apart, and a person 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const acme_org = id(41);
+    const brackwater_org = id(41);
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-21T01:00:00Z"),
-        .body = "Acme maintains acme-box, a sandbox tool. Acme Robotics is a different company.",
-        .raw = .{ .skip = null, .entities = &.{ ent("n1", "acme-box", .software), ent("n2", "Acme", .person) }, .facts = &.{}, .new_relations = &.{} },
+        .body = "Brackwater maintains brackwater-box, a sandbox tool. Brackwater Robotics is a different company.",
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "brackwater-box", .software), ent("n2", "Brackwater", .person) }, .facts = &.{}, .new_relations = &.{} },
         .prefetch = .{ .entities = &.{
-            .{ .item = 0, .id = acme_org, .name = "Acme", .norm = "acme", .type = .organization, .cosine = 0.86 },
-            .{ .item = 1, .id = acme_org, .name = "Acme", .norm = "acme", .type = .organization, .alias_match = true, .cosine = 1.0 },
+            .{ .item = 0, .id = brackwater_org, .name = "Brackwater", .norm = "brackwater", .type = .organization, .cosine = 0.86 },
+            .{ .item = 1, .id = brackwater_org, .name = "Brackwater", .norm = "brackwater", .type = .organization, .alias_match = true, .cosine = 1.0 },
         } },
         .resolution = .{
             .entity_links = &.{ .{ .ref = "n1", .existing = "E1" }, .{ .ref = "n2", .existing = "E1" } },

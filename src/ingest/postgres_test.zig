@@ -16,8 +16,8 @@ const seed_sql =
     \\s AS (INSERT INTO source (id, graph_id, harness, external_id) SELECT $2::uuid, id, 'test', $2::text FROM g RETURNING id, graph_id),
     \\done AS (
     \\  INSERT INTO entry (id, graph_id, source_id, seq_in_source, kind, author, body, content_hash, reference_time, status, extraction)
-    \\  SELECT $3::uuid, graph_id, id, 1, 'turns', 'user', '{"text":"We picked SQLite for the acme cache."}', sha256(convert_to($3::text, 'UTF8')), now() - interval '1 hour', 'committed',
-    \\    '{"facts":[{"text":"The acme cache chose SQLite."}]}'
+    \\  SELECT $3::uuid, graph_id, id, 1, 'turns', 'user', '{"text":"We picked SQLite for the brackwater cache."}', sha256(convert_to($3::text, 'UTF8')), now() - interval '1 hour', 'committed',
+    \\    '{"facts":[{"text":"The brackwater cache chose SQLite."}]}'
     \\  FROM s RETURNING id, graph_id),
     \\live AS (
     \\  INSERT INTO entry (id, graph_id, source_id, seq_in_source, kind, author, body, content_hash, reference_time, status, lease_owner, lease_token, lease_until)
@@ -25,14 +25,14 @@ const seed_sql =
     \\  FROM s RETURNING id),
     \\a AS (
     \\  INSERT INTO entity (id, graph_id, name, norm, type, name_emb, created_seq, updated_seq)
-    \\  SELECT $5::uuid, graph_id, 'acme cache', 'acme cache', 'code', array_fill(0.1::real, ARRAY[512])::vector(512)::halfvec(512), 1, 1 FROM done RETURNING id, graph_id),
+    \\  SELECT $5::uuid, graph_id, 'brackwater cache', 'brackwater cache', 'code', array_fill(0.1::real, ARRAY[512])::vector(512)::halfvec(512), 1, 1 FROM done RETURNING id, graph_id),
     \\b AS (
     \\  INSERT INTO entity (id, graph_id, name, norm, type, name_emb, created_seq, updated_seq)
     \\  SELECT $6::uuid, graph_id, 'SQLite', 'sqlite', 'software', array_fill(-0.1::real, ARRAY[512])::vector(512)::halfvec(512), 1, 1 FROM a RETURNING id, graph_id),
-    \\al AS (INSERT INTO entity_alias (graph_id, norm, entity_id, alias) SELECT graph_id, 'acme cache service', id, 'acme cache service' FROM a),
+    \\al AS (INSERT INTO entity_alias (graph_id, norm, entity_id, alias) SELECT graph_id, 'brackwater cache service', id, 'brackwater cache service' FROM a),
     \\f AS (
     \\  INSERT INTO fact (id, graph_id, subject_id, relation, object_id, text, scope, valid, known, author, confidence, emb, created_seq)
-    \\  SELECT $7::uuid, a.graph_id, a.id, 'chose', b.id, 'The acme cache chose SQLite.', 'project', tstzrange(now() - interval '1 hour', NULL), tstzrange(now(), NULL), 'user', 0.9,
+    \\  SELECT $7::uuid, a.graph_id, a.id, 'chose', b.id, 'The brackwater cache chose SQLite.', 'project', tstzrange(now() - interval '1 hour', NULL), tstzrange(now(), NULL), 'user', 0.9,
     \\    array_fill(0.1::real, ARRAY[512])::vector(512)::halfvec(512), 1
     \\  FROM a, b RETURNING id, graph_id),
     \\ev AS (INSERT INTO fact_evidence (fact_id, entry_id, kind, quote) SELECT f.id, done.id, 'stated', 'We picked SQLite' FROM f, done),
@@ -85,7 +85,7 @@ test "ingest SQL runs against the store schema" {
 
     const ctx = try b.loadContext(arena, lease);
     try testing.expectEqual(@as(usize, 1), ctx.prior.len);
-    try testing.expectEqualStrings("The acme cache chose SQLite.", ctx.prior[0].facts[0]);
+    try testing.expectEqualStrings("The brackwater cache chose SQLite.", ctx.prior[0].facts[0]);
     var saw_proposed = false;
     var chose_emb: usize = 0;
     for (ctx.relations) |rel| {
@@ -98,14 +98,14 @@ test "ingest SQL runs against the store schema" {
 
     const pre = try b.prefetch(arena, lease, .{
         .graph_id = graph,
-        .entity_norms = &.{ &.{"acme cache service"}, &.{"postgres"} },
+        .entity_norms = &.{ &.{"brackwater cache service"}, &.{"postgres"} },
         .entity_embs = &.{ emb, emb },
         .fact_subject = &.{0},
         .fact_object = &.{1},
         .fact_relations = &.{"chose"},
         .fact_opposed = &.{"rejected"},
         .fact_embs = &.{emb},
-        .fact_texts = &.{"The acme cache chose Postgres."},
+        .fact_texts = &.{"The brackwater cache chose Postgres."},
     });
     try testing.expectEqual(@as(i64, 1), pre.base_seq);
     var alias_hit = false;

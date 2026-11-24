@@ -302,7 +302,7 @@ test "a run against unbuilt pipeline pieces reports unmeasured gates instead of 
     const config: core.Config = .{ .database = .{ .url = url } };
     var name_buf: [36]u8 = undefined;
     const graph = try std.fmt.allocPrint(arena, "eval-run-{s}", .{core.Id.v7(std.testing.io).toString(&name_buf)});
-    const report = try run(arena, std.testing.io, &config, .{ .graph = graph, .suite_dir = try fixtures.shippedSuiteDir(arena, std.testing.io) });
+    const report = try run(arena, std.testing.io, &config, .{ .graph = graph, .suite_dir = try fixtures.shippedSuiteDir(arena, std.testing.io), .entry_timeout_ms = 2_000 });
     try std.testing.expect(!report.metrics.passes());
     try std.testing.expect(report.metrics.crash_resume_pass_rate == null);
     try std.testing.expectEqual(@as(?u32, 0), report.metrics.secret_leaks);

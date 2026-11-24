@@ -31,7 +31,7 @@ test "norm folds case and punctuation" {
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("pg zig", normInto(&buf, "pg.zig"));
     try std.testing.expectEqualStrings("pg zig", normInto(&buf, "  PG-Zig "));
-    try std.testing.expectEqualStrings("acme s gateway v2", normInto(&buf, "Acme's gateway (v2)"));
+    try std.testing.expectEqualStrings("brackwater s gateway v2", normInto(&buf, "Brackwater's gateway (v2)"));
     try std.testing.expectEqualStrings("", normInto(&buf, "--"));
     try std.testing.expectEqualStrings("caf\xc3\xa9", normInto(&buf, "Caf\xc3\xa9"));
 }

@@ -322,17 +322,17 @@ test "one bad fact is dropped and the rest survive without repair" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const body = "lantern uses acme relay. lantern lacks streaming.";
+    const body = "lantern uses brackwater relay. lantern lacks streaming.";
     const raw: ExtractResult = .{
         .skip = null,
-        .entities = &.{ ent("n1", "Lantern", .project), ent("n2", "Acme Relay", .software) },
+        .entities = &.{ ent("n1", "Lantern", .project), ent("n2", "Brackwater Relay", .software) },
         .facts = &.{
-            fct("n1", "uses", "n2", null, "lantern uses acme relay"),
+            fct("n1", "uses", "n2", null, "lantern uses brackwater relay"),
             fct("n1", "lacks_feature", null, "streaming", "lantern lacks streaming"),
-            fct("n9", "uses", "n2", null, "lantern uses acme relay"),
+            fct("n9", "uses", "n2", null, "lantern uses brackwater relay"),
             fct("n1", "Uses", "n2", null, "x"),
             fct("n1", "uses", null, null, "x"),
-            fct("Acme Relay", "maintains", "n1", null, "lantern uses acme relay"),
+            fct("Brackwater Relay", "maintains", "n1", null, "lantern uses brackwater relay"),
         },
         .new_relations = &.{},
     };
@@ -410,16 +410,16 @@ test "dated statements about different periods do not self-correct" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const body = "Priya was on call Nov 10 to Nov 17, then Marco took over.";
+    const body = "Priya was on call Nov 10 to Nov 17, then Hollis took over.";
     var priya = fct("n1", "has_oncall", "n2", null, "Priya was on call Nov 10 to Nov 17");
     priya.valid_from = "2026-11-10";
     priya.valid_to = "2026-11-17";
-    var marco = fct("n1", "has_oncall", "n3", null, "then Marco took over");
-    marco.valid_from = "2026-11-17T00:00:00Z";
+    var hollis = fct("n1", "has_oncall", "n3", null, "then Hollis took over");
+    hollis.valid_from = "2026-11-17T00:00:00Z";
     const raw: ExtractResult = .{
         .skip = null,
-        .entities = &.{ ent("n1", "Acme Relay", .software), ent("n2", "Priya", .person), ent("n3", "Marco", .person) },
-        .facts = &.{ priya, marco },
+        .entities = &.{ ent("n1", "Brackwater Relay", .software), ent("n2", "Priya", .person), ent("n3", "Hollis", .person) },
+        .facts = &.{ priya, hollis },
         .new_relations = &.{},
     };
     const c = try check(arena, raw, body, ref_time);
