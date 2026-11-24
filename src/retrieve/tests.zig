@@ -5,7 +5,7 @@ const mod = @import("mod.zig");
 const time = @import("time.zig");
 const render = @import("render.zig");
 
-const day = time.us_per_day;
+const day = std.time.us_per_day;
 const dims = 512;
 
 pub fn hashEmbed(out: []f32, s: []const u8) void {
@@ -210,18 +210,20 @@ pub fn cleanup(s: *store.Store, graph: core.Id) void {
 const Fixture = struct {
     s: store.Store,
     seed: Seed,
+    arena: std.heap.ArenaAllocator,
     embedder: HashEmbedder = .{},
     config: core.Config = .{},
     engine: mod.Engine = undefined,
 
     fn init(f: *Fixture) !void {
-        f.* = .{ .s = try store.testing.open(), .seed = undefined };
+        f.* = .{ .s = try store.testing.open(), .seed = undefined, .arena = .init(std.testing.allocator) };
         errdefer f.s.close();
         f.seed = try seed(&f.s, std.testing.io);
         f.engine = .init(std.testing.allocator, std.testing.io, &f.s, &f.config, f.seed.graph, .{ .embedder = f.embedder.embedder() });
     }
 
     fn deinit(f: *Fixture) void {
+        f.arena.deinit();
         f.engine.deinit();
         cleanup(&f.s, f.seed.graph);
         f.s.close();
@@ -241,9 +243,7 @@ test "search hides ended and retracted facts unless asked" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    const arena = f.arena.allocator();
     const sd = f.seed;
 
     const now = try f.engine.search(arena, .{ .query = "pg.zig COPY support", .project = "graf" });
@@ -275,9 +275,7 @@ test "search boosts the caller's project and scopes to it" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    const arena = f.arena.allocator();
     const sd = f.seed;
     const q = "uses Postgres 17 with pgvector for storage";
 
@@ -309,9 +307,7 @@ test "search falls back to deterministic order when the reranker is slow" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    const arena = f.arena.allocator();
     const sd = f.seed;
     const q = "what does graf use for storage";
 
@@ -338,12 +334,10 @@ test "search without an embedder uses the lexical and entity arms" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
     f.engine.embedder = null;
-    const res = try f.engine.search(arena_state.allocator(), .{ .query = "tell me about pg-zig", .project = "graf" });
+    const res = try f.engine.search(f.arena.allocator(), .{ .query = "tell me about pg-zig", .project = "graf" });
     try std.testing.expect(contains(res.hits, f.seed.f_pgzig_supports_copy));
-    var out: std.Io.Writer.Allocating = .init(arena_state.allocator());
+    var out: std.Io.Writer.Allocating = .init(f.arena.allocator());
     try mod.render(&res, .{ .query = "tell me about pg-zig", .project = "graf" }, &out.writer);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "### pg.zig (software)") != null);
 }
@@ -352,9 +346,7 @@ test "entity resolves aliases and walks two hops" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    const arena = f.arena.allocator();
     const sd = f.seed;
 
     const pg = try f.engine.entity(arena, .{ .name_or_id = "PostgreSQL", .depth = 2 });
@@ -362,8 +354,6 @@ test "entity resolves aliases and walks two hops" {
     try std.testing.expect(contains(pg.facts, sd.f_graf_uses_pg));
     try std.testing.expect(contains(pg.facts, sd.f_quayline_uses_pg));
     try std.testing.expect(!contains(pg.facts, sd.f_graf_pg18));
-    var graf_neighbor: ?mod.EntityResult = null;
-    _ = &graf_neighbor;
     var found_status = false;
     for (pg.neighbors) |n| if (n.entity.id.eql(sd.graf)) {
         found_status = contains(n.facts, sd.f_graf_status);
@@ -390,9 +380,7 @@ test "forget closes system time and asks before forgetting several facts" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    const arena = f.arena.allocator();
     const sd = f.seed;
 
     const many = try f.engine.forget(arena, .{ .query = "Postgres" });
@@ -416,9 +404,7 @@ test "brief is deterministic, bounded and fast" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    const arena = f.arena.allocator();
 
     const io = std.testing.io;
     const cold_start = std.Io.Timestamp.now(io, .awake);
@@ -461,9 +447,7 @@ test "recall merges the warmed cache and never repeats a fact" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    const arena = f.arena.allocator();
 
     try f.engine.warm("s1", "storage engine for graf", "graf");
     const embeds = f.embedder.calls;

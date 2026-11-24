@@ -11,12 +11,10 @@ pub const EntryOutcome = struct {
     ended: []const Hit = &.{},
 };
 
-const join = " FROM fact f JOIN entity se ON se.id = f.subject_id LEFT JOIN entity oe ON oe.id = f.object_id";
-
-const evidence_sql = "SELECT " ++ db.hit_columns ++ ", ev.kind" ++ join ++
+const evidence_sql = "SELECT " ++ db.hit_columns ++ ", ev.kind" ++ db.hit_from ++
     " JOIN fact_evidence ev ON ev.fact_id = f.id WHERE ev.entry_id = $1 AND f.graph_id = $2 AND ev.kind IN ('stated', 'restated') ORDER BY f.id";
 
-const ended_sql = "SELECT " ++ db.hit_columns ++ join ++
+const ended_sql = "SELECT " ++ db.hit_columns ++ db.hit_from ++
     " WHERE f.graph_id = $2 AND f.ended_by IN (SELECT fact_id FROM fact_evidence WHERE entry_id = $1 AND kind = 'stated') ORDER BY f.id";
 
 pub fn get(e: *mod.Engine, arena: std.mem.Allocator, entry_id: core.Id) !?EntryOutcome {

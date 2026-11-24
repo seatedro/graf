@@ -68,9 +68,9 @@ fn lineLen(comptime f: anytype, args: anytype) usize {
     return @intCast(counter.fullCount());
 }
 
-fn findEntity(entities: []const core.Entity, id: core.Id) ?*const core.Entity {
-    for (entities) |*e| if (e.id.eql(id)) return e;
-    return null;
+fn subjectEntity(entities: []const core.Entity, hit: *const Hit) core.Entity {
+    for (entities) |e| if (e.id.eql(hit.fact.subject_id)) return e;
+    return .{ .id = hit.fact.subject_id, .graph_id = hit.fact.graph_id, .name = hit.subject_name, .norm = "", .type = hit.subject_type };
 }
 
 pub fn render(result: *const mod.SearchResult, params: mod.SearchParams, out: *Writer) !void {
@@ -92,8 +92,7 @@ pub fn render(result: *const mod.SearchResult, params: mod.SearchParams, out: *W
         };
         var cost = lineLen(writeFactLine, .{ hit, params.include_history });
         if (group == null) {
-            const e = findEntity(result.entities, hit.fact.subject_id) orelse &core.Entity{ .id = hit.fact.subject_id, .graph_id = hit.fact.graph_id, .name = hit.subject_name, .norm = "", .type = hit.subject_type };
-            cost += lineLen(writeEntityHeader, .{e});
+            cost += lineLen(writeEntityHeader, .{&subjectEntity(result.entities, hit)});
         }
         if (!budget.take(cost)) continue;
         if (group == null) {
@@ -126,9 +125,7 @@ pub fn render(result: *const mod.SearchResult, params: mod.SearchParams, out: *W
         return;
     }
     for (groups.items) |g| {
-        const h0 = g.hits.items[0];
-        const e = findEntity(result.entities, g.subject) orelse &core.Entity{ .id = g.subject, .graph_id = h0.fact.graph_id, .name = h0.subject_name, .norm = "", .type = h0.subject_type };
-        try writeEntityHeader(out, e);
+        try writeEntityHeader(out, &subjectEntity(result.entities, g.hits.items[0]));
         for (g.hits.items) |h| try writeFactLine(out, h, params.include_history);
     }
     try out.writeAll(index_text);
@@ -221,7 +218,7 @@ fn testHit(subject: core.Id, subject_name: []const u8, fact_text: []const u8, lo
 }
 
 test "render groups by subject and tags each line" {
-    const day = time.us_per_day;
+    const day = std.time.us_per_day;
     const t0 = try time.parseIso("2026-11-22");
     const pgzig = core.Id.fromParts(1, @splat(1));
     const graf = core.Id.fromParts(1, @splat(2));

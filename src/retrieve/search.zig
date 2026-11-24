@@ -1,7 +1,6 @@
 const std = @import("std");
 const core = @import("core");
 const store = @import("store");
-const pg = @import("pg");
 const db = @import("db.zig");
 const rank = @import("rank.zig");
 const time = @import("time.zig");
