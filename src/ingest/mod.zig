@@ -46,6 +46,8 @@ pub const rules = @import("rules.zig");
 pub const time = @import("time.zig");
 pub const extract = @import("extract.zig");
 pub const resolve = @import("resolve.zig");
+pub const schema = @import("schema.zig");
+pub const prompt = @import("prompt.zig");
 
 pub const ConflictKind = rules.ConflictKind;
 
