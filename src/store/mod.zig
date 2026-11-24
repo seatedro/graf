@@ -179,22 +179,6 @@ pub fn contentHash(gpa: std.mem.Allocator, draft: *const core.EntryDraft) ![32]u
     return out;
 }
 
-pub fn normalizeAlias(arena: std.mem.Allocator, s: []const u8) ![]const u8 {
-    if (comptime @hasDecl(core, "text") and @hasDecl(core.text, "norm")) return core.text.norm(arena, s);
-    var out: std.ArrayList(u8) = .empty;
-    var pending_space = false;
-    for (s) |c| {
-        if (c < 0x80 and !std.ascii.isAlphanumeric(c)) {
-            pending_space = out.items.len != 0;
-            continue;
-        }
-        if (pending_space) try out.append(arena, ' ');
-        pending_space = false;
-        try out.append(arena, std.ascii.toLower(c));
-    }
-    return out.toOwnedSlice(arena);
-}
-
 pub fn idFromPg(raw: []const u8) !Id {
     if (raw.len != 16) return error.InvalidId;
     return .{ .bytes = raw[0..16].* };
@@ -301,16 +285,6 @@ test "migrations apply, are idempotent, and create halfvec(512) columns" {
     )) orelse return error.MissingColumn;
     defer row.deinit() catch {};
     try std.testing.expectEqualStrings("halfvec(512)", try row.get([]const u8, 0));
-}
-
-test "normalizeAlias folds case, punctuation and whitespace" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    try std.testing.expectEqualStrings("pg zig", try normalizeAlias(a, "pg.zig"));
-    try std.testing.expectEqualStrings("pg zig", try normalizeAlias(a, "pg-zig"));
-    try std.testing.expectEqualStrings("pg zig", try normalizeAlias(a, " PG_Zig "));
-    try std.testing.expectEqualStrings("karlseguin s driver", try normalizeAlias(a, "  Karlseguin's   Driver!"));
 }
 
 test "content hash ignores reference time and cursor but not the source" {
