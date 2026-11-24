@@ -119,6 +119,91 @@ test "an on-call handoff ends the previous holder at the stated time" {
     try testing.expect(out.plan.needsResolution());
 }
 
+test "a handoff that also says the previous holder rotated off ends it once and adds one row" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var handoff = fct("n1", "has_oncall", "n2", null, "Juno took over on call for Relay starting today at 17:00 UTC");
+    handoff.valid_from = "2026-11-20T17:00:00Z";
+    handoff.time_basis = .explicit;
+    var rotated = fct("n1", "has_oncall", "n3", null, "Hollis rotated off");
+    rotated.valid_to = "2026-11-20T17:00:00Z";
+    rotated.time_basis = .explicit;
+    const prefetch: resolve.Prefetch = .{
+        .entities = &.{
+            .{ .item = 0, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .alias_match = true, .cosine = 1.0 },
+            .{ .item = 2, .id = hollis, .name = "Hollis", .norm = "hollis", .type = .person, .alias_match = true, .cosine = 1.0 },
+        },
+        .facts = &.{.{
+            .item = 0,
+            .id = hollis_oncall,
+            .subject_id = relay,
+            .relation = "has_oncall",
+            .object_id = hollis,
+            .text = "Hollis is on call for Relay.",
+            .valid_lower = at("2026-11-19T22:00:00Z"),
+            .confidence = 0.9,
+        }},
+    };
+    const orders = [_][]const ingest.ExtractedFact{ &.{ handoff, rotated }, &.{ rotated, handoff } };
+    for (orders) |facts| {
+        const out = try (Scenario{
+            .arena = arena,
+            .reference_time = at("2026-11-20T18:00:00Z"),
+            .body = "Heads up: Juno took over on call for Relay starting today at 17:00 UTC. Hollis rotated off.",
+            .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Juno", .person), ent("n3", "Hollis", .person) }, .facts = facts, .new_relations = &.{} },
+            .prefetch = prefetch,
+        }).run();
+        try testing.expectEqual(@as(usize, 2), out.checked.result.facts.len);
+        try testing.expectEqual(@as(usize, 1), out.cs.new_facts.len);
+        try testing.expectEqualStrings("Juno took over on call for Relay starting today at 17:00 UTC", out.cs.new_facts[0].fact.text);
+        try testing.expectEqual(@as(usize, 1), out.cs.invalidations.len);
+        try testing.expect(out.cs.invalidations[0].fact_id.eql(hollis_oncall));
+        try testing.expectEqual(at("2026-11-20T17:00:00Z"), out.cs.invalidations[0].valid_upper);
+        try testing.expectEqual(@as(usize, 1), out.cs.restatements.len);
+        try testing.expect(out.cs.restatements[0].fact_id.eql(hollis_oncall));
+    }
+}
+
+fn endedHollisPrefetch() resolve.Prefetch {
+    return .{
+        .entities = &.{
+            .{ .item = 0, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .alias_match = true, .cosine = 1.0 },
+            .{ .item = 1, .id = hollis, .name = "Hollis", .norm = "hollis", .type = .person, .alias_match = true, .cosine = 1.0 },
+        },
+        .facts = &.{.{
+            .item = 0,
+            .id = hollis_oncall,
+            .subject_id = relay,
+            .relation = "has_oncall",
+            .object_id = hollis,
+            .text = "Hollis is on call for Relay.",
+            .valid_lower = at("2026-11-19T22:00:00Z"),
+            .valid_upper = at("2026-11-20T17:00:00Z"),
+            .confidence = 0.9,
+        }},
+    };
+}
+
+test "restating a fact that already ended adds a new period instead of evidence" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var back = fct("n1", "has_oncall", "n2", null, "Hollis is back on call for Relay since this morning.");
+    back.valid_from = "2026-11-25T08:00:00Z";
+    back.time_basis = .relative;
+    const out = try (Scenario{
+        .arena = arena,
+        .reference_time = at("2026-11-25T09:00:00Z"),
+        .body = "Hollis is back on call for Relay since this morning.",
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Hollis", .person) }, .facts = &.{back}, .new_relations = &.{} },
+        .prefetch = endedHollisPrefetch(),
+    }).run();
+    try testing.expectEqual(@as(usize, 0), out.cs.restatements.len);
+    try testing.expectEqual(@as(usize, 1), out.cs.new_facts.len);
+    try testing.expectEqual(@as(usize, 0), out.cs.invalidations.len);
+}
+
 test "a dated historical on-call period never ends the current holder" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

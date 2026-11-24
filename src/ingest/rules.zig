@@ -130,6 +130,10 @@ pub fn sameCanonicalKey(a: Key, b: Key) bool {
         std.mem.eql(u8, a.qualifier, b.qualifier) and a.object.eql(b.object);
 }
 
+pub fn sameFact(a: Key, b: Key) bool {
+    return sameCanonicalKey(a, b) and rangesOverlap(a.valid, b.valid);
+}
+
 pub fn rangesOverlap(a: core.Range, b: core.Range) bool {
     if (a.upper) |au| if (b.lower) |bl| if (au <= bl) return false;
     if (b.upper) |bu| if (a.lower) |al| if (bu <= al) return false;
