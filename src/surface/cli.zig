@@ -231,6 +231,14 @@ pub fn run(init: std.process.Init) !u8 {
                 return printReply(arena, reply, parsed.has("--json"), out, err);
             }
 
+            if (try capture.state.socketPath(arena, cfg, init.environ_map)) |sock| {
+                var c = client.Client.init(io, .{ .unix = sock }, cfg.serve.token);
+                if (c.health() catch false) {
+                    const reply = c.handler().handle(arena, req) catch |e| return fail(err, @tagName(command), e);
+                    return printReply(arena, reply, parsed.has("--json"), out, err);
+                }
+            }
+
             var rt: daemon.Runtime = undefined;
             rt.open(init.gpa, io, init.environ_map, cfg, .{ .pool_size = 2 }) catch |e| return fail(err, @tagName(command), e);
             defer rt.close();
@@ -500,13 +508,20 @@ fn doctor(arena: Allocator, init: std.process.Init, cfg: *const core.Config, loa
         return if (failures > 0) 1 else 0;
     }
 
-    if (cfg.database.url.len == 0) {
-        try Check.line(out, .fail, "database: no database.url or GRAF_DATABASE_URL", .{});
+    const db_url: ?[]const u8 = switch (try store.managed.plan(arena, io, init.environ_map, cfg.database.url)) {
+        .url => |u| u,
+        .managed => |m| try store.managed.databaseUrl(arena, m.data_dir),
+        .docker => store.managed.docker.url,
+        .unavailable => null,
+    };
+
+    if (db_url == null) {
+        try Check.line(out, .fail, "database: no database.url or GRAF_DATABASE_URL, and no Postgres with pgvector or Docker for a managed database", .{});
         failures += 1;
-    } else if (store.Store.open(io, init.gpa, cfg.database.url, .{ .pool_size = 1 })) |opened| {
+    } else if (store.Store.open(io, init.gpa, db_url.?, .{ .pool_size = 1 })) |opened| {
         var s = opened;
         defer s.close();
-        try Check.line(out, .ok, "database: connected to {f}", .{core.config.MaskedUrl{ .url = cfg.database.url }});
+        try Check.line(out, .ok, "database: connected to {f}", .{core.config.MaskedUrl{ .url = db_url.? }});
         try doctorDatabase(&s, cfg, out);
     } else |e| {
         try Check.line(out, .fail, "database: cannot connect ({s})", .{@errorName(e)});
