@@ -871,3 +871,33 @@ test "excluded projects and paths are never read into entries" {
     try again.tick(t0 + 10 * std.time.us_per_min);
     try testing.expectEqual(@as(usize, 0), sink.entries.items.len);
 }
+
+test "secrets never reach an entry from any part of a turn" {
+    var h: Harness = try .init();
+    defer h.deinit();
+    var sink: FakeSink = .init(testing.allocator);
+    defer sink.deinit();
+    const a = h.arena.allocator();
+    const gateway_key = try std.mem.concat(a, u8, &.{ "ak_live_", "Q7xV2mK9pL4rT8wZ", "3nB6cD1fH5jN0sY2" });
+    const model_key = try std.mem.concat(a, u8, &.{ "sk-" ++ "ant-api03-", "Zr4Tq9LmXw2Vb7Nc", "K1pS8dF3gH6jY0uE", "5aWq-RtYu_Io9Pz" });
+    const token = try std.mem.concat(a, u8, &.{ "gh" ++ "p_", "a1B2c3D4e5F6g7H8", "i9J0k1L2m3N4o5P6q7R8" });
+    const transcript = try std.fmt.allocPrint(a,
+        \\{{"type":"user","cwd":"/home/dev/acme/widget","message":{{"role":"user","content":"Try hitting the gateway with ACME_GATEWAY_API_KEY={s} and verify https://gateway.example.test/v1 responds."}},"timestamp":"2026-11-20T17:00:00.000Z"}}
+        \\{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t1","name":"Bash","input":{{"command":"curl -H 'Authorization: Bearer {s}' https://gateway.example.test/v1/models"}}}}]}},"timestamp":"2026-11-20T17:00:02.000Z"}}
+        \\{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"t1","content":"GITHUB_TOKEN={s}\nok"}}]}},"timestamp":"2026-11-20T17:00:03.000Z"}}
+        \\{{"type":"assistant","message":{{"content":[{{"type":"text","text":"The gateway answered 200 OK."}}]}},"timestamp":"2026-11-20T17:00:04.000Z"}}
+        \\
+    , .{ gateway_key, model_key, token });
+    try h.write(transcript);
+    var t = h.tailer(&sink, .{});
+    defer t.deinit();
+    try t.scan(t0 + std.time.us_per_min);
+    try t.tick(t0 + 10 * std.time.us_per_min);
+    try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
+    const body = sink.entries.items[0].body;
+    for ([_][]const u8{ gateway_key, model_key, token, "Q7xV2mK9pL4rT8wZ", "K1pS8dF3gH6jY0uE", "i9J0k1L2m3N4o5P6" }) |secret| {
+        try testing.expect(std.mem.indexOf(u8, body, secret) == null);
+    }
+    try testing.expect(std.mem.indexOf(u8, body, "https://gateway.example.test/v1") != null);
+    try testing.expect(std.mem.indexOf(u8, body, "[REDACTED:") != null);
+}
