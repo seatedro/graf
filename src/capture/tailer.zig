@@ -824,3 +824,27 @@ test "a hook flush seals a complete exchange without waiting for idle" {
     try testing.expectEqual(@as(usize, 4), sink.episodes.items[0].turns);
     try testing.expect(!try t.flush("/elsewhere/x.jsonl", t0));
 }
+
+test "files untouched since the capture epoch are skipped until they grow" {
+    var h: Harness = try .init();
+    defer h.deinit();
+    var sink: FakeSink = .init(testing.allocator);
+    defer sink.deinit();
+    try h.write(claude_fixture);
+    {
+        const file = try h.tmp.dir.openFile(testing.io, "proj/session.jsonl", .{ .mode = .read_write });
+        defer file.close(testing.io);
+        try file.setTimestamps(testing.io, .{ .modify_timestamp = .{ .new = .fromNanoseconds(@as(i96, t0) * std.time.ns_per_us) } });
+    }
+    const since = t0 + std.time.us_per_day;
+    var t = h.tailer(&sink, .{ .since = since });
+    defer t.deinit();
+    try t.scan(since);
+    try testing.expectEqual(@as(u64, 0), t.stats.lines);
+    try h.append("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Resumed a day later.\"},\"timestamp\":\"2026-11-21T18:00:00.000Z\"}\n");
+    try t.scan(since + std.time.us_per_hour);
+    try t.tick(since + 2 * std.time.us_per_hour);
+    try testing.expectEqual(@as(u64, 1), t.stats.lines);
+    try testing.expectEqual(@as(usize, 1), sink.episodes.items.len);
+    try testing.expect(std.mem.indexOf(u8, sink.episodes.items[0].body, "Resumed a day later.") != null);
+}
