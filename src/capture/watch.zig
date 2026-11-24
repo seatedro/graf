@@ -3,6 +3,14 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
+const log = std.log.scoped(.capture);
+
+pub const max_watch_fds = 4096;
+
+pub fn watchBudget(soft_limit: u64) usize {
+    return @intCast(@min(soft_limit / 2, max_watch_fds));
+}
+
 pub const Changes = struct {
     paths: std.ArrayList([]const u8) = .empty,
     rescan: bool = false,
@@ -49,11 +57,17 @@ const Inotify = struct {
     gpa: Allocator,
     fd: i32,
     dirs: std.AutoHashMapUnmanaged(i32, []const u8) = .empty,
+    exhausted: bool = false,
 
     pub fn init(gpa: Allocator) Inotify {
         const rc = linux.inotify_init1(linux.IN.NONBLOCK | linux.IN.CLOEXEC);
-        const fd: i32 = if (linux.errno(rc) == .SUCCESS) @intCast(rc) else -1;
-        return .{ .gpa = gpa, .fd = fd };
+        const err = linux.errno(rc);
+        if (err != .SUCCESS) {
+            log.warn("cannot start inotify ({t}); transcripts are picked up by periodic scans", .{err});
+            return .{ .gpa = gpa, .fd = -1 };
+        }
+
+        return .{ .gpa = gpa, .fd = @intCast(rc) };
     }
 
     pub fn deinit(w: *Inotify) void {
@@ -78,6 +92,7 @@ const Inotify = struct {
         defer walker.deinit();
 
         while (walker.next(io) catch null) |entry| {
+            if (w.exhausted) return;
             if (entry.kind != .directory) continue;
             const full = try std.fs.path.join(w.gpa, &.{ root, entry.path });
             defer w.gpa.free(full);
@@ -93,7 +108,15 @@ const Inotify = struct {
         const z = try w.gpa.dupeSentinel(u8, path, 0);
         defer w.gpa.free(z);
         const rc = linux.inotify_add_watch(w.fd, z, mask);
-        if (linux.errno(rc) != .SUCCESS) return false;
+        switch (linux.errno(rc)) {
+            .SUCCESS => {},
+            .NOSPC, .NOMEM => {
+                if (!w.exhausted) log.warn("inotify watch limit reached at {d} directories; the rest are picked up by periodic scans", .{w.dirs.count()});
+                w.exhausted = true;
+                return false;
+            },
+            else => return false,
+        }
 
         const wd: i32 = @intCast(rc);
         const gop = try w.dirs.getOrPut(w.gpa, wd);
@@ -131,6 +154,7 @@ const Inotify = struct {
 
                 if (ev.mask & linux.IN.IGNORED != 0) {
                     if (w.dirs.fetchRemove(ev.wd)) |kv| w.gpa.free(kv.value);
+                    w.exhausted = false;
                     continue;
                 }
 
@@ -157,11 +181,17 @@ const Kqueue = struct {
     watched: std.StringHashMapUnmanaged(Entry) = .empty,
     by_fd: std.AutoHashMapUnmanaged(c_int, []const u8) = .empty,
     files: usize = 0,
+    budget: usize,
+    warned: bool = false,
 
     const Entry = struct { fd: c_int, dir: bool };
 
     pub fn init(gpa: Allocator) Kqueue {
-        return .{ .gpa = gpa, .kq = c.kqueue() };
+        const soft: u64 = if (std.posix.getrlimit(.NOFILE)) |l| l.cur else |_| 256;
+        const kq = c.kqueue();
+        if (kq < 0) log.warn("cannot start kqueue ({t}); transcripts are picked up by periodic scans", .{c.errno(kq)});
+
+        return .{ .gpa = gpa, .kq = kq, .budget = watchBudget(soft) };
     }
 
     pub fn deinit(w: *Kqueue) void {
@@ -191,11 +221,22 @@ const Kqueue = struct {
         defer walker.deinit();
 
         while (walker.next(io) catch null) |entry| {
+            if (w.full()) return;
             if (entry.kind != .directory) continue;
-            const full = try std.fs.path.join(w.gpa, &.{ root, entry.path });
-            defer w.gpa.free(full);
-            _ = try w.add(full, true);
+            const full_path = try std.fs.path.join(w.gpa, &.{ root, entry.path });
+            defer w.gpa.free(full_path);
+            _ = try w.add(full_path, true);
         }
+    }
+
+    fn full(w: *const Kqueue) bool {
+        return w.watched.count() >= w.budget;
+    }
+
+    fn warnFull(w: *Kqueue) void {
+        if (w.warned) return;
+        w.warned = true;
+        log.warn("watching {d} paths, the open file budget; changes elsewhere are picked up by periodic scans", .{w.watched.count()});
     }
 
     pub fn watchFile(w: *Kqueue, path: []const u8) !void {
@@ -205,10 +246,24 @@ const Kqueue = struct {
 
     fn add(w: *Kqueue, path: []const u8, dir: bool) !bool {
         if (w.watched.contains(path)) return false;
+        if (w.full()) {
+            w.warnFull();
+            return false;
+        }
+
         const z = try w.gpa.dupeSentinel(u8, path, 0);
         defer w.gpa.free(z);
         const fd = c.open(z, .{ .EVTONLY = true, .CLOEXEC = true });
-        if (fd < 0) return false;
+        if (fd < 0) {
+            switch (c.errno(fd)) {
+                .MFILE, .NFILE => {
+                    w.budget = w.watched.count();
+                    w.warnFull();
+                },
+                else => {},
+            }
+            return false;
+        }
 
         const change: c.Kevent = .{
             .ident = @intCast(fd),
@@ -298,4 +353,65 @@ test "inotify reports appends to files in watched trees" {
     var found = false;
     for (changes.paths.items) |p| found = found or std.mem.eql(u8, p, want);
     try std.testing.expect(found);
+}
+
+test "the watch budget leaves half the open file limit for everything else" {
+    try std.testing.expectEqual(@as(usize, 128), watchBudget(256));
+    try std.testing.expectEqual(@as(usize, 0), watchBudget(0));
+    try std.testing.expectEqual(@as(usize, max_watch_fds), watchBudget(65536));
+    try std.testing.expectEqual(@as(usize, max_watch_fds), watchBudget(std.math.maxInt(u64)));
+}
+
+test "a watcher started without free descriptors degrades to scanning instead of failing" {
+    if (Watcher == Polling) return error.SkipZigTest;
+
+    const io = std.testing.io;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "proj/a");
+    const root = try tmp.dir.realPathFileAlloc(io, ".", arena);
+
+    const before = try std.posix.getrlimit(.NOFILE);
+    try std.posix.setrlimit(.NOFILE, .{ .cur = 0, .max = before.max });
+    var w: Watcher = .init(std.testing.allocator);
+    try std.posix.setrlimit(.NOFILE, before);
+    defer w.deinit();
+
+    try std.testing.expect(!w.active());
+    try w.watchTree(io, root);
+    try w.watchFile(root);
+
+    var changes: Changes = .{};
+    try w.poll(io, arena, &changes);
+    try std.testing.expect(!changes.rescan);
+    try std.testing.expectEqual(@as(usize, 0), changes.paths.items.len);
+}
+
+test "kqueue stops opening descriptors at its budget" {
+    if (Watcher != Kqueue) return error.SkipZigTest;
+
+    const io = std.testing.io;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    for ([_][]const u8{ "a/1", "a/2", "b/1", "b/2", "c/1" }) |sub| try tmp.dir.createDirPath(io, sub);
+    try tmp.dir.writeFile(io, .{ .sub_path = "a/1/s.jsonl", .data = "{}\n" });
+    const root = try tmp.dir.realPathFileAlloc(io, ".", arena);
+
+    var w: Kqueue = .init(std.testing.allocator);
+    defer w.deinit();
+    w.budget = 4;
+
+    try w.watchTree(io, root);
+    try std.testing.expect(w.active());
+    try std.testing.expectEqual(@as(usize, 4), w.watched.count());
+
+    try w.watchFile(try std.fs.path.join(arena, &.{ root, "a", "1", "s.jsonl" }));
+    try std.testing.expectEqual(@as(usize, 4), w.watched.count());
+    try std.testing.expectEqual(@as(usize, 0), w.files);
 }

@@ -28,7 +28,7 @@ const usage =
     \\  mcp                          MCP server over stdio (starts the daemon if needed)
     \\  hook <harness> <event>       harness hook entry point
     \\  install                      add graf's MCP server and hooks to each harness
-    \\      [--harness H] [--command PATH] [--dry-run]
+    \\      [--harness H,...] [--command PATH] [--dry-run]
     \\  pause                        stop capturing transcripts until resume
     \\  resume                       capture transcripts again
     \\  source capy                  tail Capy threads through the public API
@@ -51,6 +51,24 @@ const usage =
 
 const value_flags = [_][]const u8{ "--project", "--as-of", "--known-at", "--harness", "--max-tokens", "--depth", "--valid-from", "--query", "--reason", "--suite", "--command", "--upstream", "--since", "--max-entries", "--cap-usd" };
 
+fn isValueFlag(a: []const u8) bool {
+    for (value_flags) |f| if (std.mem.eql(u8, f, a)) return true;
+    return false;
+}
+
+fn isHelpFlag(a: []const u8) bool {
+    return std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h");
+}
+
+fn wantsHelp(rest: []const []const u8) bool {
+    var i: usize = 0;
+    while (i < rest.len) : (i += 1) {
+        if (isHelpFlag(rest[i])) return true;
+        if (isValueFlag(rest[i])) i += 1;
+    }
+    return false;
+}
+
 const Args = struct {
     positional: []const []const u8,
     rest: []const []const u8,
@@ -62,10 +80,10 @@ const Args = struct {
         while (i < rest.len) : (i += 1) {
             const a = rest[i];
             if (std.mem.startsWith(u8, a, "--")) {
-                for (value_flags) |f| if (std.mem.eql(u8, f, a)) {
+                if (isValueFlag(a)) {
                     if (i + 1 >= rest.len) return error.MissingFlagValue;
                     i += 1;
-                };
+                }
                 continue;
             }
 
@@ -79,6 +97,16 @@ const Args = struct {
         var i: usize = 0;
         while (i + 1 < a.rest.len) : (i += 1) if (std.mem.eql(u8, a.rest[i], name)) return a.rest[i + 1];
         return null;
+    }
+
+    fn values(a: Args, arena: Allocator, name: []const u8) ![]const []const u8 {
+        var found: std.ArrayList([]const u8) = .empty;
+        var i: usize = 0;
+        while (i + 1 < a.rest.len) : (i += 1) if (std.mem.eql(u8, a.rest[i], name)) {
+            i += 1;
+            try found.append(arena, a.rest[i]);
+        };
+        return found.items;
     }
 
     fn has(a: Args, name: []const u8) bool {
@@ -113,11 +141,11 @@ pub fn run(init: std.process.Init) !u8 {
 
     var config_path: ?[]const u8 = null;
     var i: usize = 1;
-    while (i < args.len and std.mem.startsWith(u8, args[i], "--")) : (i += 1) {
+    while (i < args.len and std.mem.startsWith(u8, args[i], "-")) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--config") and i + 1 < args.len) {
             i += 1;
             config_path = args[i];
-        } else if (std.mem.eql(u8, args[i], "--help")) {
+        } else if (isHelpFlag(args[i])) {
             try out.writeAll(usage);
             return 0;
         } else {
@@ -136,6 +164,11 @@ pub fn run(init: std.process.Init) !u8 {
         return 2;
     };
     const rest = args[i + 1 ..];
+
+    if (command != .hook and command != .eval and wantsHelp(rest)) {
+        try out.writeAll(usage);
+        return 0;
+    }
 
     switch (command) {
         .help => {
@@ -506,13 +539,13 @@ fn runInstall(arena: Allocator, init: std.process.Init, rest: []const []const u8
     var opts: capture.install.Options = .{ .dry_run = parsed.has("--dry-run") };
     if (parsed.value("--command")) |c| opts.command = c;
 
-    if (parsed.value("--harness")) |h| {
-        const harness = std.meta.stringToEnum(core.Harness, h) orelse {
-            try err.print("graf install: unknown harness '{s}'\n", .{h});
+    opts.harnesses = capture.install.parseHarnesses(arena, try parsed.values(arena, "--harness")) catch |e| switch (e) {
+        error.UnknownHarness => {
+            try err.writeAll("graf install: --harness takes claude-code, codex, pi, fx or all\n");
             return 2;
-        };
-        opts.harnesses = try arena.dupe(core.Harness, &.{harness});
-    }
+        },
+        else => |other| return other,
+    };
 
     const report = capture.install.install(arena, init.io, init.environ_map, opts, out) catch |e| return fail(err, "install", e);
     if (!report.changed() and !report.failed()) try out.writeAll("already installed\n");
@@ -647,4 +680,33 @@ fn doctorDatabase(s: *store.Store, cfg: *const core.Config, out: *Writer) !void 
 
     const dead = try row.get(i64, 2);
     try out.print("[{s}] graph '{s}': {d} current facts, {d} entries pending, {d} dead\n", .{ if (dead > 0) "warn" else "ok", cfg.graph, try row.get(i64, 3), try row.get(i64, 1), dead });
+}
+
+const testing = std.testing;
+
+test "help flags short-circuit every subcommand, but not flag values" {
+    try testing.expect(wantsHelp(&.{"--help"}));
+    try testing.expect(wantsHelp(&.{"-h"}));
+    try testing.expect(wantsHelp(&.{ "--harness", "codex", "--help" }));
+    try testing.expect(wantsHelp(&.{ "--dry-run", "-h" }));
+
+    try testing.expect(!wantsHelp(&.{}));
+    try testing.expect(!wantsHelp(&.{ "--harness", "codex", "--dry-run" }));
+    try testing.expect(!wantsHelp(&.{ "--query", "--help" }));
+    try testing.expect(!wantsHelp(&.{ "--command", "-h" }));
+}
+
+test "repeated value flags are all collected in order" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const parsed = try Args.parse(arena, &.{ "--harness", "claude-code", "--dry-run", "--harness", "codex,pi", "--command", "/opt/graf" });
+    const got = try parsed.values(arena, "--harness");
+    try testing.expectEqual(@as(usize, 2), got.len);
+    try testing.expectEqualStrings("claude-code", got[0]);
+    try testing.expectEqualStrings("codex,pi", got[1]);
+
+    try testing.expectEqual(@as(usize, 0), (try parsed.values(arena, "--upstream")).len);
+    try testing.expectEqualStrings("/opt/graf", parsed.value("--command").?);
 }
