@@ -25,6 +25,8 @@ export GRAF_TEST_DATABASE_URL=postgres://graf:graf@127.0.0.1:54329/graf_test
 
 graf reads `~/.config/graf/config.toml` (see [config.example.toml](config.example.toml)) and `GRAF_*` environment variables, which take precedence.
 
+To share one graph across machines, run a hub and point the others at it as edges; see [docs/hub.md](docs/hub.md).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -17,6 +17,7 @@ pub const Config = struct {
     ingest: Ingest = .{},
     serve: Serve = .{},
     capture: Capture = .{},
+    edge: Edge = .{},
     sources: Sources = .{},
     eval: Eval = .{},
 
@@ -82,6 +83,12 @@ pub const Config = struct {
         exclude_paths: []const []const u8 = &.{},
     };
 
+    pub const Edge = struct {
+        upstream: []const u8 = "",
+        token: []const u8 = "",
+        timeout_ms: u32 = 10_000,
+    };
+
     pub const Sources = struct {
         capy: Capy = .{},
 
@@ -125,6 +132,9 @@ pub const env_vars = [_]struct { []const u8, []const u8, []const u8 }{
     .{ "GRAF_EMBED_MODEL", "embed", "model" },
     .{ "GRAF_DECISION_BASE_URL", "decision", "base_url" },
     .{ "GRAF_DECISION_API_KEY", "decision", "api_key" },
+    .{ "GRAF_SERVE_TOKEN", "serve", "token" },
+    .{ "GRAF_UPSTREAM_URL", "edge", "upstream" },
+    .{ "GRAF_UPSTREAM_TOKEN", "edge", "token" },
     .{ "GRAF_DECISION_MODEL", "decision", "model" },
     .{ "GRAF_EVAL_JUDGE_MODEL", "eval", "judge_model" },
     .{ "GRAF_EVAL_JUDGE_ROUTE", "eval", "judge_route" },
@@ -458,6 +468,33 @@ test "per-route limits and the rate table" {
     try std.testing.expectError(error.InvalidRate, parseRate("model-c input=1 output=2 cached=1"));
     try std.testing.expectError(error.InvalidConfig, parse(arena_state.allocator(), "[llm]\nrates = [\"model-c input=-1 output=2\"]\n", &diag));
     try std.testing.expect(std.mem.indexOf(u8, diag.message, "llm.rates") != null);
+}
+
+test "hub and edge settings come from the file and the environment" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var diag: toml.Diagnostic = .{};
+    var cfg = try parse(arena, "[edge]\nupstream = \"https://hub.example.ts.net\"\ntimeout_ms = 2500\n", &diag);
+    try std.testing.expectEqualStrings("https://hub.example.ts.net", cfg.edge.upstream);
+    try std.testing.expectEqual(@as(u32, 2500), cfg.edge.timeout_ms);
+    try std.testing.expectEqual(@as(u32, 10_000), (Config{}).edge.timeout_ms);
+
+    var env = Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("GRAF_SERVE_TOKEN", "serve-secret");
+    try env.put("GRAF_UPSTREAM_URL", "https://other.example.ts.net");
+    try env.put("GRAF_UPSTREAM_TOKEN", "edge-secret");
+    applyEnv(&cfg, &env);
+    try std.testing.expectEqualStrings("serve-secret", cfg.serve.token);
+    try std.testing.expectEqualStrings("https://other.example.ts.net", cfg.edge.upstream);
+    try std.testing.expectEqualStrings("edge-secret", cfg.edge.token);
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try writeMasked(&cfg, &out.writer);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "secret") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "[edge]") != null);
 }
 
 test "decision wire format and cost header inheritance" {

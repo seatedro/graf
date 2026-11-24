@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "graf",
+  "version": "0.1.0",
+  "description": "Persistent memory across sessions and harnesses, served by a graf hub.",
+  "license": "MIT",
+  "extensions": {
+    "ai.capy": {
+      "displayName": "graf",
+      "recipes": {
+        "graf": {
+          "connection": "organization",
+          "secrets": {
+            "Authorization": {
+              "description": "Bearer followed by the hub's serve.token, for example: Bearer 3f9c..."
+            }
+          }
+        }
+      }
+    }
+  }
+}

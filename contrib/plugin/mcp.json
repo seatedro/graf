@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "graf": {
+      "type": "streamable-http",
+      "url": "https://hub.example.ts.net/mcp"
+    }
+  }
+}

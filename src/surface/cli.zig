@@ -8,6 +8,8 @@ const client = @import("client.zig");
 const daemon = @import("daemon.zig");
 const mcp = @import("mcp.zig");
 const service = @import("service.zig");
+const edge = @import("edge.zig");
+const Upstream = @import("upstream.zig").Upstream;
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
@@ -21,6 +23,7 @@ const usage =
     \\commands:
     \\  init                         create or migrate the database
     \\  serve                        run the daemon (HTTP, MCP, ingestion, capture)
+    \\      [--edge] [--upstream URL]   run as an edge of a hub: capture locally, push to the hub
     \\  mcp                          MCP server over stdio (starts the daemon if needed)
     \\  hook <harness> <event>       harness hook entry point
     \\  install                      add graf's MCP server and hooks to each harness
@@ -43,7 +46,7 @@ const usage =
     \\
 ;
 
-const value_flags = [_][]const u8{ "--project", "--as-of", "--known-at", "--harness", "--max-tokens", "--depth", "--valid-from", "--query", "--reason", "--suite", "--command" };
+const value_flags = [_][]const u8{ "--project", "--as-of", "--known-at", "--harness", "--max-tokens", "--depth", "--valid-from", "--query", "--reason", "--suite", "--command", "--upstream" };
 
 const Args = struct {
     positional: []const []const u8,
@@ -166,7 +169,22 @@ pub fn run(init: std.process.Init) !u8 {
             return 0;
         },
         .serve => {
-            daemon.run(init.gpa, io, init.environ_map, cfg, .{ .version = version, .socket_path = try capture.state.socketPath(arena, cfg, init.environ_map) }) catch |e| return fail(err, "serve", e);
+            const parsed = Args.parse(arena, rest) catch {
+                try err.writeAll("graf serve: a flag is missing its value\n");
+                return 2;
+            };
+            var serve_cfg = cfg.*;
+            if (parsed.value("--upstream")) |url| serve_cfg.edge.upstream = url;
+            const opts: daemon.Options = .{ .version = version, .socket_path = try capture.state.socketPath(arena, cfg, init.environ_map) };
+            if (serve_cfg.edge.upstream.len > 0) {
+                daemon.runEdge(init.gpa, io, init.environ_map, &serve_cfg, opts) catch |e| return fail(err, "serve --edge", e);
+                return 0;
+            }
+            if (parsed.has("--edge")) {
+                try err.writeAll("graf serve --edge: set --upstream, edge.upstream or GRAF_UPSTREAM_URL\n");
+                return 2;
+            }
+            daemon.run(init.gpa, io, init.environ_map, cfg, opts) catch |e| return fail(err, "serve", e);
             return 0;
         },
         .mcp => return runMcp(init, cfg, config_path, err),
@@ -193,6 +211,12 @@ pub fn run(init: std.process.Init) !u8 {
                 try err.print("graf {s}: {s}\n\n{s}", .{ @tagName(command), usageError(e), usage });
                 return 2;
             };
+            if (cfg.edge.upstream.len > 0) {
+                var up = Upstream.init(init.gpa, io, cfg.edge.upstream, cfg.edge.token, cfg.edge.timeout_ms) catch |e| return fail(err, @tagName(command), e);
+                defer up.deinit();
+                const reply = up.handler().handle(arena, req) catch |e| return fail(err, @tagName(command), e);
+                return printReply(arena, reply, parsed.has("--json"), out, err);
+            }
             var rt: daemon.Runtime = undefined;
             rt.open(init.gpa, io, init.environ_map, cfg, .{ .pool_size = 2 }) catch |e| return fail(err, @tagName(command), e);
             defer rt.close();
@@ -278,6 +302,9 @@ fn fail(err: *Writer, what: []const u8, e: anyerror) !u8 {
         error.DatabaseNotConfigured => "set database.url or GRAF_DATABASE_URL, or install Postgres with pgvector or Docker for a managed database",
         error.ConnectionRefused => "cannot reach Postgres; is it running? (graf doctor)",
         error.NotImplemented => "not available in this build yet",
+        error.TokenRequired => "serve.listen is not a loopback address; set serve.token or GRAF_SERVE_TOKEN",
+        error.InvalidUpstreamUrl => "the hub URL must look like https://hub.example.ts.net",
+        error.NoStateDir => "set HOME or XDG_STATE_HOME",
         else => "",
     };
     try err.print("graf {s}: {s}{s}{s}\n", .{ what, @errorName(e), if (hint.len > 0) ": " else "", hint });
@@ -288,6 +315,11 @@ fn runMcp(init: std.process.Init, cfg: *const core.Config, config_path: ?[]const
     const arena = init.arena.allocator();
     const io = init.io;
     const env = init.environ_map;
+    if (cfg.edge.upstream.len > 0) {
+        var up = Upstream.init(init.gpa, io, cfg.edge.upstream, cfg.edge.token, cfg.edge.timeout_ms) catch |e| return fail(err, "mcp", e);
+        defer up.deinit();
+        return serveMcp(init, up.handler());
+    }
     const socket = try capture.state.socketPath(arena, cfg, env) orelse {
         try err.writeAll("graf mcp: cannot place the daemon socket; set serve.socket or HOME\n");
         return 1;
@@ -299,8 +331,13 @@ fn runMcp(init: std.process.Init, cfg: *const core.Config, config_path: ?[]const
         try err.print("graf mcp: daemon unavailable ({s}); tool calls will fail until it starts\n", .{@errorName(e)});
         try err.flush();
     };
+    return serveMcp(init, c.handler());
+}
 
-    var handler = c.handler();
+fn serveMcp(init: std.process.Init, inner: api.Handler) !u8 {
+    const io = init.io;
+    const env = init.environ_map;
+    var handler = inner;
     var defaults: service.DefaultProject = undefined;
     if (env.get("GRAF_PROJECT")) |p| if (p.len > 0) {
         defaults = .{ .inner = handler, .project = p };
@@ -389,6 +426,36 @@ fn doctor(arena: Allocator, init: std.process.Init, cfg: *const core.Config, loa
     };
 
     try Check.line(out, .ok, "config: {s} ({s})", .{ loaded.path orelse "(none)", if (loaded.file_found) "loaded" else "defaults" });
+
+    if (cfg.edge.upstream.len > 0) {
+        if (Upstream.init(init.gpa, io, cfg.edge.upstream, cfg.edge.token, cfg.edge.timeout_ms)) |opened| {
+            var up = opened;
+            defer up.deinit();
+            if (try up.health()) {
+                try Check.line(out, .ok, "hub: reachable at {s}", .{up.base});
+            } else {
+                try Check.line(out, .fail, "hub: cannot reach {s}/v1/health", .{up.base});
+                failures += 1;
+            }
+        } else |e| {
+            try Check.line(out, .fail, "hub: {s}", .{@errorName(e)});
+            failures += 1;
+        }
+        if (try capture.state.dir(arena, init.environ_map)) |state_dir| {
+            var spool = try edge.Spool.open(init.gpa, io, try edge.spoolDir(arena, state_dir), .{});
+            defer spool.close();
+            const waiting = try spool.pending();
+            try Check.line(out, if (waiting > 0) .warn else .ok, "edge spool: {d} entries waiting for the hub", .{waiting});
+        }
+        if (try capture.state.socketPath(arena, cfg, init.environ_map)) |sock| {
+            var c = client.Client.init(io, .{ .unix = sock }, cfg.serve.token);
+            if (c.health() catch false)
+                try Check.line(out, .ok, "edge daemon: running at {s}", .{sock})
+            else
+                try Check.line(out, .warn, "edge daemon: not running; graf serve captures local transcripts", .{});
+        }
+        return if (failures > 0) 1 else 0;
+    }
 
     if (cfg.database.url.len == 0) {
         try Check.line(out, .fail, "database: no database.url or GRAF_DATABASE_URL", .{});

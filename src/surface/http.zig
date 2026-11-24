@@ -41,6 +41,7 @@ const Response = struct {
     status: std.http.Status,
     body: []const u8 = "",
     close: bool = false,
+    allow: ?[]const u8 = null,
 };
 
 pub const Server = struct {
@@ -126,11 +127,24 @@ pub const Server = struct {
             var request = http_server.receiveHead() catch return;
             const keep_alive = request.head.keep_alive;
             const response = s.respondTo(arena_state.allocator(), &request, transport) catch return;
-            const json = [_]std.http.Header{.{ .name = "content-type", .value = "application/json" }};
+            var headers: [3]std.http.Header = undefined;
+            var count: usize = 0;
+            if (response.body.len > 0) {
+                headers[count] = .{ .name = "content-type", .value = "application/json" };
+                count += 1;
+            }
+            if (response.allow) |allow| {
+                headers[count] = .{ .name = "allow", .value = allow };
+                count += 1;
+            }
+            if (response.status == .unauthorized) {
+                headers[count] = .{ .name = "www-authenticate", .value = "Bearer realm=\"graf\"" };
+                count += 1;
+            }
             request.respond(response.body, .{
                 .status = response.status,
                 .keep_alive = !response.close,
-                .extra_headers = if (response.body.len > 0) &json else &.{},
+                .extra_headers = headers[0..count],
             }) catch return;
             if (response.close or !keep_alive) return;
         }
@@ -145,7 +159,11 @@ pub const Server = struct {
         if (!authorized and !(route != null and route.?.endpoint == .health))
             return errorResponse(arena, .unauthorized, "unauthorized");
         const found = route orelse return errorResponse(arena, .not_found, "not found");
-        if (request.head.method != found.method) return errorResponse(arena, .method_not_allowed, "method not allowed");
+        if (request.head.method != found.method) {
+            var response = try errorResponse(arena, .method_not_allowed, "method not allowed");
+            response.allow = @tagName(found.method);
+            return response;
+        }
 
         switch (found.endpoint) {
             .health => return .{
@@ -153,8 +171,11 @@ pub const Server = struct {
                 .body = try std.json.Stringify.valueAlloc(arena, .{ .ok = true, .version = s.options.version }, .{}),
             },
             .mcp => {
+                if (header(request, "mcp-protocol-version")) |version| {
+                    if (!mcp.supportsVersion(version)) return errorResponse(arena, .bad_request, "unsupported MCP-Protocol-Version");
+                }
                 const body = readBody(arena, request) catch |err| return bodyError(arena, err);
-                const reply = try mcp.handleMessage(arena, s.handler, s.options.version, body) orelse
+                const reply = try mcp.handlePost(arena, s.handler, s.options.version, body) orelse
                     return .{ .status = .accepted };
                 return .{ .status = .ok, .body = reply };
             },
@@ -274,6 +295,7 @@ fn bearerMatches(request: *const std.http.Server.Request, token: []const u8) boo
 fn originAllowed(request: *const std.http.Server.Request) bool {
     const origin = header(request, "origin") orelse return true;
     const rest = std.mem.cutPrefix(u8, origin, "http://") orelse std.mem.cutPrefix(u8, origin, "https://") orelse return false;
+    if (header(request, "host")) |host| if (std.ascii.eqlIgnoreCase(host, rest)) return true;
     const host = if (std.mem.startsWith(u8, rest, "["))
         rest[0 .. (std.mem.findScalar(u8, rest, ']') orelse return false) + 1]
     else
