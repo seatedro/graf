@@ -5,7 +5,7 @@ const llm = @import("llm");
 
 pub const time = @import("time.zig");
 pub const rank = @import("rank.zig");
-pub const render_ = @import("render.zig");
+const render_ = @import("render.zig");
 const db = @import("db.zig");
 const search_ = @import("search.zig");
 const entity_ = @import("entity.zig");
@@ -17,7 +17,6 @@ pub const testing = @import("tests.zig");
 pub const Hit = db.Hit;
 pub const render = render_.render;
 pub const renderEntity = render_.renderEntity;
-pub const estimateTokens = render_.estimateTokens;
 pub const EntityResult = entity_.EntityResult;
 pub const ForgetResult = entity_.ForgetResult;
 pub const RecallCache = recall_.RecallCache;
@@ -165,10 +164,6 @@ pub const Engine = struct {
         return brief_.refreshAll(e);
     }
 
-    pub fn buildBrief(e: *Engine, arena: std.mem.Allocator, project: ?[]const u8) ![]const u8 {
-        return brief_.build(e, arena, project);
-    }
-
     pub fn entryOutcome(e: *Engine, arena: std.mem.Allocator, entry_id: core.Id) !?EntryOutcome {
         return outcome_.get(e, arena, entry_id);
     }
@@ -185,7 +180,6 @@ pub const Engine = struct {
 test {
     std.testing.refAllDecls(@This());
     _ = time;
-
     _ = rank;
     _ = render_;
     _ = search_;

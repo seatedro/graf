@@ -8,6 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -36,7 +37,7 @@ jobs:
       - name: Build
         run: zig build
       - name: Test (unit + Postgres integration)
-        run: zig build test --summary all
+        run: zig build test --summary all --test-timeout 2m
       - name: Vendor-neutrality check
         env:
           DENYLIST: ${{ secrets.GRAF_DENYLIST }}
@@ -56,6 +57,7 @@ jobs:
 
   nix:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: DeterminateSystems/nix-installer-action@main
@@ -63,5 +65,5 @@ jobs:
         run: |
           nix run .#devdb
           eval "$(nix run .#devdb -- env)"
-          nix develop --command zig build test --summary all
+          nix develop --command zig build test --summary all --test-timeout 2m
           nix run .#devdb -- down

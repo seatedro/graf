@@ -10,17 +10,7 @@ const Io = std.Io;
 
 pub const Event = enum { @"session-start", @"prompt-submit", stop, @"session-end" };
 
-pub const SpoolEntry = spool.Entry;
-
 pub const max_recall_prompt_bytes = 2048;
-
-pub fn budget(event: Event) Io.Duration {
-    return .fromMilliseconds(switch (event) {
-        .@"session-start" => 250,
-        .@"prompt-submit" => 80,
-        .stop, .@"session-end" => 50,
-    });
-}
 
 pub fn networkBudget(event: Event) Io.Duration {
     return .fromMilliseconds(switch (event) {
@@ -113,16 +103,6 @@ pub fn run(arena: Allocator, io: Io, env: *const Environ.Map, config: *const cor
             }) catch {};
         },
     }
-}
-
-pub fn drainSpool(
-    arena: Allocator,
-    io: Io,
-    state_dir: []const u8,
-    ctx: anytype,
-    comptime handler: fn (@TypeOf(ctx), SpoolEntry) anyerror!void,
-) !usize {
-    return spool.drain(arena, io, state_dir, ctx, handler);
 }
 
 const Call = struct {

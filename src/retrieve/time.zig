@@ -1,8 +1,6 @@
 const std = @import("std");
 const core = @import("core");
 
-pub const us_per_day: i64 = 86_400 * std.time.us_per_s;
-
 pub fn now(io: std.Io) core.Micros {
     return @intCast(@divFloor(std.Io.Timestamp.now(io, .real).nanoseconds, std.time.ns_per_us));
 }
@@ -15,7 +13,7 @@ pub fn parseIso(s: []const u8) ParseError!core.Micros {
     const month = try int(s[5..7]);
     const day = try int(s[8..10]);
     if (month < 1 or month > 12 or day < 1 or day > 31) return error.InvalidTimestamp;
-    var t: i64 = daysFromCivil(year, month, day) * us_per_day;
+    var t: i64 = daysFromCivil(year, month, day) * std.time.us_per_day;
     var i: usize = 10;
     if (i == s.len) return t;
     if (s[i] != 'T' and s[i] != 't' and s[i] != ' ') return error.InvalidTimestamp;
@@ -61,7 +59,7 @@ pub fn parseIso(s: []const u8) ParseError!core.Micros {
 }
 
 pub fn formatDate(t: core.Micros, buf: *[10]u8) []const u8 {
-    const days = @divFloor(t, us_per_day);
+    const days = @divFloor(t, std.time.us_per_day);
     const c = civilFromDays(days);
     _ = std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u32, @intCast(c.year)), c.month, c.day }) catch unreachable;
     return buf;

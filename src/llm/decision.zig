@@ -86,11 +86,8 @@ pub fn decodeResponse(arena: std.mem.Allocator, body: []const u8, questions: []c
         }
     }
     var out: Decoded = .{ .answers = answers };
+    wire.readBodyCost(root, &out);
     if (root.get("usage")) |u| if (u == .object) {
-        if (u.object.get("cost")) |c| out.body_cost = wire.number(c);
-        if (u.object.get("cost_status")) |cs| if (cs == .string) {
-            out.body_cost_status = std.meta.stringToEnum(core.types.CostStatus, cs.string);
-        };
         if (u.object.get("input_tokens")) |t| if (t == .integer) {
             out.usage.input_tokens = std.math.cast(u32, t.integer) orelse 0;
         };

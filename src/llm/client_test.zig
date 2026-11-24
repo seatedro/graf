@@ -283,14 +283,15 @@ test "anthropic 401 and a used-up quota both pause the route" {
     var h: Harness = undefined;
     h.init(.@"anthropic-messages", &.{fixture("messages_401")});
     defer h.deinit();
-    try testing.expectError(error.ProviderFailed, h.client.structured(h.a(), request(null)));
-    try testing.expectEqual(llm.Disposition.pause_route, h.client.last_failure.?.disposition);
+    var failure: llm.Failure = undefined;
+    try testing.expectError(error.ProviderFailed, h.client.structured(h.a(), request(&failure)));
+    try testing.expectEqual(llm.Disposition.pause_route, failure.disposition);
 
     var q: Harness = undefined;
     q.init(.@"openai-responses", &.{fixture("responses_429_quota")});
     defer q.deinit();
-    try testing.expectError(error.ProviderFailed, q.client.structured(q.a(), request(null)));
-    try testing.expectEqual(llm.ErrorClass.quota_exhausted, q.client.last_failure.?.class);
+    try testing.expectError(error.ProviderFailed, q.client.structured(q.a(), request(&failure)));
+    try testing.expectEqual(llm.ErrorClass.quota_exhausted, failure.class);
     try testing.expectEqual(@as(?llm.limiter.HaltReason, .quota), q.client.limiter.haltedReason(testing.io, .@"openai-responses"));
 }
 
@@ -364,8 +365,7 @@ test "embeddings: dimensions in the request, rows placed by index or by position
     var h: Harness = undefined;
     h.init(.@"openai-responses", &.{ fixture("embeddings_ok"), fixture("embeddings_no_index") });
     defer h.deinit();
-    const inputs = [_][]const u8{ "brackwater-indexer uses pgvector", "Dana owns brackwater-indexer" };
-    const a = try h.client.embed(h.a(), .{ .purpose = .embed_batch, .inputs = &inputs });
+    const a = try h.client.embed(h.a(), .{ .purpose = .embed_batch, .inputs = &embed_inputs });
     try testing.expectEqual(@as(usize, 2), a.vectors.len);
     try testing.expectEqual(@as(usize, 512), a.vectors[1].len);
     try testing.expectEqual(core.types.CostStatus.priced, a.cost.status);
@@ -373,7 +373,7 @@ test "embeddings: dimensions in the request, rows placed by index or by position
     try testing.expectEqual(@as(i64, 512), get(body, &.{"dimensions"}).integer);
     try testing.expectEqualStrings("https://llm.example.test/v1/embeddings", h.replay.sent.items[0].url);
 
-    const b = try h.client.embed(h.a(), .{ .purpose = .embed_query, .inputs = &inputs, .priority = .interactive });
+    const b = try h.client.embed(h.a(), .{ .purpose = .embed_query, .inputs = &embed_inputs, .priority = .interactive });
     try testing.expectEqual(a.vectors[0][0], b.vectors[0][0]);
     try testing.expectEqual(a.vectors[1][511], b.vectors[1][511]);
     try testing.expectEqualStrings("embeddings", h.ledger.rows.items[1].route);
@@ -396,8 +396,6 @@ test "decide: generic request, calibrated answers, rerank fails fast so search c
     try testing.expectEqual(core.types.CostStatus.priced, h.ledger.rows.items[0].cost_status);
     try testing.expectEqualStrings("typed-decisions", h.ledger.rows.items[0].route);
 
-    var failure: llm.Failure = undefined;
-    _ = &failure;
     try testing.expectError(error.ProviderFailed, h.client.decide(h.a(), .rerank, &qs));
     try testing.expectEqual(@as(usize, 2), h.replay.sent.items.len);
 }
@@ -448,17 +446,6 @@ const cases = [_]Case{
     .{ .route = null, .ok = "embeddings_ok", .rate_limited = "responses_429", .server_error = "responses_500", .overflow = "responses_context_overflow", .unauthorized = "responses_401", .malformed = "embeddings_cut_off" },
 };
 
-const all_fixtures = .{
-    "responses_ok", "responses_429", "responses_500", "responses_context_overflow", "responses_401",      "responses_bad_json",
-    "messages_ok",  "messages_429",  "messages_500",  "messages_context_overflow",  "messages_401",       "messages_bad_json",
-    "chat_ok",      "chat_502",      "chat_bad_json", "embeddings_ok",              "embeddings_cut_off",
-};
-
-fn step(name: []const u8) Replay.Step {
-    inline for (all_fixtures) |f| if (std.mem.eql(u8, f, name)) return fixture(f);
-    unreachable;
-}
-
 const embed_inputs = [_][]const u8{ "brackwater-indexer uses pgvector", "Dana owns brackwater-indexer" };
 
 fn callRoute(h: *Harness, c: Case, failure: *llm.Failure) !void {
@@ -470,12 +457,12 @@ fn callRoute(h: *Harness, c: Case, failure: *llm.Failure) !void {
 }
 
 test "every route replays success, 429, 5xx, context overflow, 401 and malformed output with no network" {
-    for (cases) |c| {
+    inline for (cases) |c| {
         const route = c.route orelse .@"openai-responses";
         var failure: llm.Failure = undefined;
         {
             var h: Harness = undefined;
-            h.init(route, &.{step(c.ok)});
+            h.init(route, &.{fixture(c.ok)});
             defer h.deinit();
             try callRoute(&h, c, &failure);
             try testing.expect(h.ledger.rows.items[0].ok);
@@ -483,7 +470,7 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
         }
         {
             var h: Harness = undefined;
-            h.init(route, &.{ step(c.rate_limited), step(c.ok) });
+            h.init(route, &.{ fixture(c.rate_limited), fixture(c.ok) });
             defer h.deinit();
             try callRoute(&h, c, &failure);
             try testing.expectEqualStrings("rate_limited_429", h.ledger.rows.items[0].error_class.?);
@@ -491,14 +478,14 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
         }
         {
             var h: Harness = undefined;
-            h.init(route, &.{ step(c.server_error), step(c.ok) });
+            h.init(route, &.{ fixture(c.server_error), fixture(c.ok) });
             defer h.deinit();
             try callRoute(&h, c, &failure);
             try testing.expectEqualStrings("http_5xx", h.ledger.rows.items[0].error_class.?);
         }
         {
             var h: Harness = undefined;
-            h.init(route, &.{ step(c.overflow), step(c.ok) });
+            h.init(route, &.{ fixture(c.overflow), fixture(c.ok) });
             defer h.deinit();
             try testing.expectError(error.ProviderFailed, callRoute(&h, c, &failure));
             try testing.expectEqual(llm.Disposition.split, failure.disposition);
@@ -506,7 +493,7 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
         }
         {
             var h: Harness = undefined;
-            h.init(route, &.{ step(c.unauthorized), step(c.ok) });
+            h.init(route, &.{ fixture(c.unauthorized), fixture(c.ok) });
             defer h.deinit();
             try testing.expectError(error.ProviderFailed, callRoute(&h, c, &failure));
             try testing.expectEqual(llm.Disposition.pause_route, failure.disposition);
@@ -514,7 +501,7 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
         }
         {
             var h: Harness = undefined;
-            h.init(route, &.{ step(c.malformed), step(c.ok) });
+            h.init(route, &.{ fixture(c.malformed), fixture(c.ok) });
             defer h.deinit();
             try callRoute(&h, c, &failure);
             try testing.expectEqual(@as(usize, 2), h.ledger.rows.items.len);
@@ -530,7 +517,6 @@ test "without a cost header, the configured rate table prices the call as estima
     defer h.deinit();
     h.cfg.llm.cost_header = "";
     h.cfg.llm.rates = &.{"example-model input=2 output=8"};
-    h.client.rates = h.cfg.llm.rates;
     const out = try h.client.structured(h.a(), request(null));
     try testing.expectEqual(core.types.CostStatus.estimated, out.cost.status);
     try testing.expectApproxEqAbs(@as(f64, (103.0 * 2 + 44.0 * 8) / 1_000_000.0), out.cost.usd, 1e-12);

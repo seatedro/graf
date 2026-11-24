@@ -3,7 +3,6 @@ const core = @import("core");
 const store = @import("store");
 const retrieve = @import("retrieve");
 const capture = @import("capture");
-const api = @import("api.zig");
 const http = @import("http.zig");
 const mcp = @import("mcp.zig");
 const client = @import("client.zig");
@@ -227,29 +226,19 @@ test "serve and hook round trip over the Unix socket" {
 }
 
 test "default project fills requests that omit one" {
-    const Recorder = struct {
-        body: []const u8 = "",
-        fn handler(r: *@This()) api.Handler {
-            return .{ .ptr = r, .vtable = &.{ .handle = handle } };
-        }
-        fn handle(ptr: *anyopaque, arena: std.mem.Allocator, req: api.Request) anyerror!api.Reply {
-            const r: *@This() = @ptrCast(@alignCast(ptr));
-            r.body = try arena.dupe(u8, req.body);
-            return .{ .body = "{}" };
-        }
-    };
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var rec: Recorder = .{};
-    var d: service.DefaultProject = .{ .inner = rec.handler(), .project = "github.com/brackwater/app" };
+    var fake: http.FakeHandler = .{ .io = testing.io };
+    defer fake.deinit();
+    var d: service.DefaultProject = .{ .inner = fake.handler(), .project = "github.com/brackwater/app" };
     const h = d.handler();
     _ = try h.handle(arena, .{ .op = .search, .body = "{\"query\":\"q\"}" });
-    try testing.expectEqualStrings("{\"query\":\"q\",\"project\":\"github.com/brackwater/app\"}", rec.body);
+    try fake.expectLast(.search, "{\"query\":\"q\",\"project\":\"github.com/brackwater/app\"}", null);
     _ = try h.handle(arena, .{ .op = .search, .body = "{\"query\":\"q\",\"project\":\"*\"}" });
-    try testing.expectEqualStrings("{\"query\":\"q\",\"project\":\"*\"}", rec.body);
+    try fake.expectLast(.search, "{\"query\":\"q\",\"project\":\"*\"}", null);
     _ = try h.handle(arena, .{ .op = .remember, .body = "{\"text\":\"t\",\"scope\":\"global\"}" });
-    try testing.expectEqualStrings("{\"text\":\"t\",\"scope\":\"global\"}", rec.body);
+    try fake.expectLast(.remember, "{\"text\":\"t\",\"scope\":\"global\"}", null);
     _ = try h.handle(arena, .{ .op = .forget, .body = "{\"query\":\"q\"}" });
-    try testing.expectEqualStrings("{\"query\":\"q\"}", rec.body);
+    try fake.expectLast(.forget, "{\"query\":\"q\"}", null);
 }

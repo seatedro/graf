@@ -103,11 +103,9 @@ pub fn loadGraphState(arena: Allocator, pool: *pg.Pool, graph_id: core.Id, links
 
     var facts: std.ArrayList(score.Fact) = .empty;
     {
-        const sql = try std.fmt.allocPrint(arena,
-            \\SELECT id::text, subject_id::text, relation, qualifier, object_id::text, object_value, text, end_kind,
-            \\{s}, {s}
-            \\FROM fact WHERE graph_id = $1 ORDER BY created_seq, id
-        , .{ try std.fmt.allocPrint(arena, range_bounds, .{"valid"}), try std.fmt.allocPrint(arena, range_bounds, .{"known"}) });
+        const sql = "SELECT id::text, subject_id::text, relation, qualifier, object_id::text, object_value, text, end_kind,\n" ++
+            std.fmt.comptimePrint(range_bounds, .{"valid"}) ++ ", " ++ std.fmt.comptimePrint(range_bounds, .{"known"}) ++
+            "\nFROM fact WHERE graph_id = $1 ORDER BY created_seq, id";
         var result = try pool.query(sql, .{gid});
         defer result.deinit();
         while (try result.next()) |row| {

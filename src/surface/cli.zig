@@ -164,7 +164,7 @@ pub fn run(init: std.process.Init) !u8 {
             return 0;
         },
         .serve => {
-            daemon.run(init.gpa, io, init.environ_map, cfg, .{ .version = version, .socket_path = try api.socketPath(arena, init.environ_map, cfg) }) catch |e| return fail(err, "serve", e);
+            daemon.run(init.gpa, io, init.environ_map, cfg, .{ .version = version, .socket_path = try capture.state.socketPath(arena, cfg, init.environ_map) }) catch |e| return fail(err, "serve", e);
             return 0;
         },
         .mcp => return runMcp(init, cfg, config_path, err),
@@ -193,7 +193,7 @@ pub fn run(init: std.process.Init) !u8 {
             var rt: daemon.Runtime = undefined;
             rt.open(init.gpa, io, init.environ_map, cfg, .{ .pool_size = 2 }) catch |e| return fail(err, @tagName(command), e);
             defer rt.close();
-            var svc: service.Service = .{ .gpa = init.gpa, .io = io, .engine = &rt.engine, .sink = rt.store.sink(rt.graph_id), .remember_harness = .cli };
+            var svc: service.Service = .{ .gpa = init.gpa, .io = io, .engine = &rt.engine, .sink = rt.store.sink(rt.graph_id) };
             defer svc.deinit();
             const reply = svc.handler().handle(arena, req) catch |e| return fail(err, @tagName(command), e);
             return printReply(arena, reply, parsed.has("--json"), out, err);
@@ -285,7 +285,7 @@ fn runMcp(init: std.process.Init, cfg: *const core.Config, config_path: ?[]const
     const arena = init.arena.allocator();
     const io = init.io;
     const env = init.environ_map;
-    const socket = try api.socketPath(arena, env, cfg) orelse {
+    const socket = try capture.state.socketPath(arena, cfg, env) orelse {
         try err.writeAll("graf mcp: cannot place the daemon socket; set serve.socket or HOME\n");
         return 1;
     };
@@ -365,7 +365,7 @@ fn doctor(arena: Allocator, init: std.process.Init, cfg: *const core.Config, loa
         var s = opened;
         defer s.close();
         try Check.line(out, .ok, "database: connected to {f}", .{core.config.MaskedUrl{ .url = cfg.database.url }});
-        failures += try doctorDatabase(arena, &s, cfg, out);
+        try doctorDatabase(&s, cfg, out);
     } else |e| {
         try Check.line(out, .fail, "database: cannot connect ({s})", .{@errorName(e)});
         failures += 1;
@@ -382,7 +382,7 @@ fn doctor(arena: Allocator, init: std.process.Init, cfg: *const core.Config, loa
     else
         try Check.line(out, .warn, "rerank: no decision backend; search uses the deterministic order", .{});
 
-    if (try api.socketPath(arena, init.environ_map, cfg)) |sock| {
+    if (try capture.state.socketPath(arena, cfg, init.environ_map)) |sock| {
         var c = client.Client.init(io, .{ .unix = sock }, cfg.serve.token);
         if (c.health() catch false)
             try Check.line(out, .ok, "daemon: running at {s}", .{sock})
@@ -392,8 +392,7 @@ fn doctor(arena: Allocator, init: std.process.Init, cfg: *const core.Config, loa
     return if (failures > 0) 1 else 0;
 }
 
-fn doctorDatabase(arena: Allocator, s: *store.Store, cfg: *const core.Config, out: *Writer) !u32 {
-    var failures: u32 = 0;
+fn doctorDatabase(s: *store.Store, cfg: *const core.Config, out: *Writer) !void {
     const ext = s.pool.row("SELECT count(*) FILTER (WHERE extname = 'vector'), count(*) FILTER (WHERE extname = 'pg_trgm') FROM pg_extension", .{}) catch null;
     if (ext) |r| {
         var row = r;
@@ -412,7 +411,7 @@ fn doctorDatabase(arena: Allocator, s: *store.Store, cfg: *const core.Config, ou
     const total = store.migrations.all.len;
     if (applied < total) {
         try out.print("[warn] schema: {d} of {d} migrations applied (run graf init)\n", .{ applied, total });
-        return failures;
+        return;
     }
     try out.print("[ok] schema: {d} migrations applied\n", .{applied});
     var row = (s.pool.row(
@@ -420,12 +419,9 @@ fn doctorDatabase(arena: Allocator, s: *store.Store, cfg: *const core.Config, ou
         .{cfg.graph},
     ) catch null) orelse {
         try out.print("[warn] graph '{s}': not created yet (graf init)\n", .{cfg.graph});
-        return failures;
+        return;
     };
     defer row.deinit() catch {};
     const dead = try row.get(i64, 2);
     try out.print("[{s}] graph '{s}': {d} current facts, {d} entries pending, {d} dead\n", .{ if (dead > 0) "warn" else "ok", cfg.graph, try row.get(i64, 3), try row.get(i64, 1), dead });
-    _ = arena;
-    if (dead > 0) failures += 0;
-    return failures;
 }

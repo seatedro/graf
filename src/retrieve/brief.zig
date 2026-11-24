@@ -41,19 +41,18 @@ pub const BriefCache = struct {
 const section_tokens = .{ .prefs = 200, .project = 400, .recent = 200 };
 
 const base_where = "f.graph_id = $1 AND upper_inf(f.known) AND f.confidence >= 0.70";
-const from = " FROM fact f JOIN entity se ON se.id = f.subject_id LEFT JOIN entity oe ON oe.id = f.object_id WHERE ";
 
-const prefs_sql = "SELECT " ++ db.hit_columns ++ from ++ base_where ++
+const prefs_sql = "SELECT " ++ db.hit_columns ++ db.hit_from ++ " WHERE " ++ base_where ++
     " AND f.valid @> now() AND f.scope = 'global' AND f.relation IN ('prefers', 'avoids') AND f.confidence >= 0.75" ++
     " ORDER BY f.confidence DESC, lower(f.valid) DESC NULLS LAST, f.id LIMIT 20";
 
-const recent_sql = "SELECT " ++ db.hit_columns ++ from ++ base_where ++
+const recent_sql = "SELECT " ++ db.hit_columns ++ db.hit_from ++ " WHERE " ++ base_where ++
     " AND (f.scope = 'global' OR f.project = $2::text) AND (" ++
     "(f.relation IN ('chose', 'rejected', 'has_status') AND f.valid @> now() AND lower(f.known) >= now() - interval '14 days')" ++
     " OR (f.end_kind = 'changed' AND upper(f.valid) <= now() AND upper(f.valid) >= now() - interval '14 days'))" ++
     " ORDER BY greatest(lower(f.known), upper(f.valid)) DESC, f.id LIMIT 20";
 
-const project_sql = "SELECT " ++ db.hit_columns ++ ", se.summary" ++ from ++ base_where ++
+const project_sql = "SELECT " ++ db.hit_columns ++ ", se.summary" ++ db.hit_from ++ " WHERE " ++ base_where ++
     " AND f.valid @> now() AND f.project = $2::text AND f.scope = 'project'" ++
     " ORDER BY f.confidence * (0.85 + 0.15 * exp(-extract(epoch FROM now() - coalesce(" ++ db.lowerBound("f.valid") ++
     ", lower(f.known))) / 86400.0 / 60.0)) DESC, f.id LIMIT 40";
@@ -114,16 +113,16 @@ fn buildAndStore(e: *mod.Engine, arena: std.mem.Allocator, project: ?[]const u8)
     return body;
 }
 
-fn query(conn: anytype, arena: std.mem.Allocator, sql: []const u8, args: anytype, with_summary: bool, summaries: ?*std.AutoHashMapUnmanaged(core.Id, []const u8)) ![]Hit {
+fn query(conn: anytype, arena: std.mem.Allocator, sql: []const u8, args: anytype, summaries: ?*std.AutoHashMapUnmanaged(core.Id, []const u8)) ![]Hit {
     var out: std.ArrayList(Hit) = .empty;
     var result = try db.query(conn, arena, sql, args);
     defer result.deinit();
     while (try result.next()) |row| {
         const hit = try db.readHit(arena, row);
         try out.append(arena, hit);
-        if (with_summary) {
+        if (summaries) |m| {
             const s = try db.text(arena, row, db.hit_column_count);
-            if (s.len > 0) try summaries.?.put(arena, hit.fact.subject_id, s);
+            if (s.len > 0) try m.put(arena, hit.fact.subject_id, s);
         }
     }
     return out.items;
@@ -137,9 +136,9 @@ pub fn build(e: *mod.Engine, arena: std.mem.Allocator, project: ?[]const u8) ![]
     {
         const conn = try e.store.pool.acquire();
         defer conn.release();
-        prefs = try query(conn, arena, prefs_sql, .{&e.graph_id.bytes}, false, null);
-        recent = try query(conn, arena, recent_sql, .{ &e.graph_id.bytes, project }, false, null);
-        if (project) |p| facts = try query(conn, arena, project_sql, .{ &e.graph_id.bytes, p }, true, &summaries);
+        prefs = try query(conn, arena, prefs_sql, .{&e.graph_id.bytes}, null);
+        recent = try query(conn, arena, recent_sql, .{ &e.graph_id.bytes, project }, null);
+        if (project) |p| facts = try query(conn, arena, project_sql, .{ &e.graph_id.bytes, p }, &summaries);
     }
 
     var shown: std.AutoHashMapUnmanaged(core.Id, void) = .empty;

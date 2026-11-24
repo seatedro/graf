@@ -94,10 +94,8 @@ pub const Client = struct {
     limiter: Limiter,
     http: transport.Http,
     transport: ?Transport = null,
-    rates: []const []const u8,
     policy: recovery.Policy = .{},
     shutdown: std.atomic.Value(bool) = .init(false),
-    last_failure: ?Failure = null,
 
     pub fn init(allocator: std.mem.Allocator, io: Io, config: *const core.Config, ledger: ?core.LlmLedger) Client {
         return .{
@@ -106,7 +104,6 @@ pub const Client = struct {
             .config = config,
             .ledger = ledger,
             .limiter = .init(.fromConfig(config), ledger),
-            .rates = config.llm.rates,
             .http = .init(allocator, io),
         };
     }
@@ -125,17 +122,17 @@ pub const Client = struct {
     }
 
     pub fn structured(c: *Client, arena: std.mem.Allocator, req: StructuredRequest) Error!StructuredResponse {
-        return c.runStructured(arena, req, validateObject, .original, null);
+        return c.runStructured(arena, req, validateObject, null);
     }
 
     pub fn structuredAs(c: *Client, comptime T: type, arena: std.mem.Allocator, req: StructuredRequest) Error!Typed(T) {
-        const response = try c.runStructured(arena, req, Validator(T).validate, .original, null);
+        const response = try c.runStructured(arena, req, Validator(T).validate, null);
         const value = std.json.parseFromSliceLeaky(T, arena, response.json, parse_options) catch return error.ProviderFailed;
         return .{ .value = value, .response = response };
     }
 
     pub fn repair(c: *Client, arena: std.mem.Allocator, req: StructuredRequest, broken: []const u8, problem: []const u8) Error!StructuredResponse {
-        return c.runStructured(arena, req, validateObject, .repair, .{ .broken = broken, .problem = problem });
+        return c.runStructured(arena, req, validateObject, .{ .broken = broken, .problem = problem });
     }
 
     pub fn embed(c: *Client, arena: std.mem.Allocator, req: EmbedRequest) Error!EmbedResponse {
@@ -229,7 +226,6 @@ pub const Client = struct {
         arena: std.mem.Allocator,
         req: StructuredRequest,
         validate: *const fn (std.mem.Allocator, []const u8) ?[]const u8,
-        phase: recovery.Phase,
         repair_input: ?RepairInput,
     ) Error!StructuredResponse {
         const cfg = c.config.llm;
@@ -243,7 +239,7 @@ pub const Client = struct {
             .schema_json = req.schema_json,
             .max_output_tokens = req.max_output_tokens,
         };
-        const original = if (phase == .original) try requestBody(arena, route, prompt) else "";
+        const original = if (repair_input == null) try requestBody(arena, route, prompt) else "";
         const preset_repair = if (repair_input) |r| try repairBody(arena, route, prompt, r.broken, r.problem) else null;
 
         const Ctx = struct {
@@ -286,7 +282,7 @@ pub const Client = struct {
             .input_tokens = std.math.cast(u32, (req.system.len + req.user.len) / 4 + 1) orelse std.math.maxInt(u32),
             .bounds = c.bounds(),
             .failure = req.failure,
-            .start_phase = phase,
+            .start_phase = if (repair_input == null) .original else .repair,
         }, original, &ctx.repair_body, &ctx, Ctx.decode);
         return .{
             .json = ctx.text,
@@ -361,18 +357,17 @@ pub const Client = struct {
 
         while (true) {
             const send = switch (action) {
-                .done => unreachable,
                 .give_up => |g| {
                     if (g.disposition == .pause_route)
                         c.limiter.halt(io, call.key, if (g.class == .auth_401_403) .auth else .quota);
-                    c.report(call.failure, .{
+                    if (call.failure) |out| out.* = .{
                         .class = g.class,
                         .certainty = certainty,
                         .disposition = g.disposition,
                         .http_status = last_status,
                         .retry_after_ms = last_retry_after,
                         .message = last_message,
-                    });
+                    };
                     return error.ProviderFailed;
                 },
                 .send => |s| s,
@@ -383,12 +378,12 @@ pub const Client = struct {
             const body = if (is_repair) (if (repair_body) |rb| rb.* orelse "" else "") else original_body;
 
             c.limiter.acquire(io, call.key, call.priority, call.input_tokens) catch |err| {
-                c.report(call.failure, .{
+                if (call.failure) |out| out.* = .{
                     .class = if (err == error.SpendCapReached) .quota_exhausted else .auth_401_403,
                     .certainty = .not_sent,
                     .disposition = if (err == error.SpendCapReached) .requeue else .pause_route,
                     .message = @errorName(err),
-                });
+                };
                 return err;
             };
             attempt += 1;
@@ -447,7 +442,7 @@ pub const Client = struct {
                         last_retry_after = retryAfter(res, io);
                         last_message = wire.errorMessage(arena, res.body);
                         row.error_class = @tagName(class);
-                        row.cost_usd, row.cost_status = costPair(cost.resolve(header(res, call.cost_header), null, null, .{}, call.model, null, c.rates));
+                        row.cost_usd, row.cost_status = costPair(cost.resolve(header(res, call.cost_header), null, null, .{}, call.model, null, c.config.llm.rates));
                         c.record(&row);
                         action = recovery.step(&state, .{ .failed = .{ .class = class, .retry_after_ms = last_retry_after } }, now);
                         continue;
@@ -464,9 +459,9 @@ pub const Client = struct {
                         row.output_tokens = @intCast(@min(o.usage.output_tokens, std.math.maxInt(i32)));
                         row.cache_read_tokens = @intCast(@min(o.usage.cache_read_tokens, std.math.maxInt(i32)));
                         row.cache_write_tokens = @intCast(@min(o.usage.cache_write_tokens, std.math.maxInt(i32)));
-                        resolved = cost.resolve(header(res, call.cost_header), o.body_cost, o.body_cost_status, o.usage, call.model, o.model, c.rates);
+                        resolved = cost.resolve(header(res, call.cost_header), o.body_cost, o.body_cost_status, o.usage, call.model, o.model, c.config.llm.rates);
                     } else {
-                        resolved = cost.resolve(header(res, call.cost_header), null, null, .{}, call.model, null, c.rates);
+                        resolved = cost.resolve(header(res, call.cost_header), null, null, .{}, call.model, null, c.config.llm.rates);
                     }
                     row.cost_usd, row.cost_status = costPair(resolved);
                     switch (decoded) {
@@ -510,11 +505,6 @@ pub const Client = struct {
                 },
             }
         }
-    }
-
-    fn report(c: *Client, out: ?*Failure, f: Failure) void {
-        c.last_failure = f;
-        if (out) |p| p.* = f;
     }
 
     fn record(c: *Client, row: *const core.LlmCall) void {

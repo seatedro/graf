@@ -125,8 +125,9 @@ pub const Server = struct {
         }
         errdefer if (child) |*c| stopChild(io, c);
 
-        try waitReady(gpa, io, data_dir);
-        try ensureDatabase(gpa, io, data_dir);
+        const conn_opts: pg.Conn.Opts = .{ .host = try socketPath(arena, data_dir, null) };
+        try waitReady(gpa, io, conn_opts);
+        try ensureDatabase(gpa, io, conn_opts);
         return .{ .child = child, .url = url };
     }
 
@@ -149,17 +150,12 @@ pub fn socketPath(arena: std.mem.Allocator, dir: []const u8, port: ?u16) ![]cons
     return std.fmt.allocPrint(arena, "{s}/.s.PGSQL.{d}", .{ std.mem.trimEnd(u8, dir, "/"), port orelse 5432 });
 }
 
-fn connectOpts(arena: std.mem.Allocator, data_dir: []const u8, db: []const u8) !struct { pg.Conn.Opts, pg.Conn.AuthOpts } {
-    return .{ .{ .host = try socketPath(arena, data_dir, null) }, .{ .username = user, .database = db, .timeout = 5_000 } };
-}
+const maintenance_auth: pg.Conn.AuthOpts = .{ .username = user, .database = "postgres", .timeout = 5_000 };
 
-fn waitReady(gpa: std.mem.Allocator, io: std.Io, data_dir: []const u8) !void {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const opts = try connectOpts(arena_state.allocator(), data_dir, "postgres");
+fn waitReady(gpa: std.mem.Allocator, io: std.Io, conn_opts: pg.Conn.Opts) !void {
     var attempt: usize = 0;
     while (attempt < 300) : (attempt += 1) {
-        if (pg.Conn.openAndAuth(io, gpa, opts[0], opts[1])) |c| {
+        if (pg.Conn.openAndAuth(io, gpa, conn_opts, maintenance_auth)) |c| {
             var conn = c;
             conn.deinit();
             return;
@@ -169,11 +165,8 @@ fn waitReady(gpa: std.mem.Allocator, io: std.Io, data_dir: []const u8) !void {
     return error.PostgresNotReady;
 }
 
-fn ensureDatabase(gpa: std.mem.Allocator, io: std.Io, data_dir: []const u8) !void {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const opts = try connectOpts(arena_state.allocator(), data_dir, "postgres");
-    var conn = try pg.Conn.openAndAuth(io, gpa, opts[0], opts[1]);
+fn ensureDatabase(gpa: std.mem.Allocator, io: std.Io, conn_opts: pg.Conn.Opts) !void {
+    var conn = try pg.Conn.openAndAuth(io, gpa, conn_opts, maintenance_auth);
     defer conn.deinit();
     const exists = blk: {
         var row = try conn.row("SELECT 1 FROM pg_database WHERE datname = $1", .{database}) orelse break :blk false;

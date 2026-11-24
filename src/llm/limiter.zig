@@ -218,15 +218,16 @@ pub const Limiter = struct {
     }
 
     fn refreshSpend(l: *Limiter, io: Io) void {
-        const ledger = l.ledger orelse return l.rollSpendPeriodsLocked(io);
         const now_ms = nowMs(io);
         const now_us = nowUs(io);
         {
             l.mutex.lockUncancelable(io);
             defer l.mutex.unlock(io);
             l.rollSpendPeriods(now_us);
+            if (l.ledger == null) return;
             if (l.spend.refreshed_ms) |at| if (now_ms -| at < l.opts.spend_refresh_ms) return;
         }
+        const ledger = l.ledger.?;
         const periods = periodStarts(now_us);
         const day = ledger.spentSince(periods.day) catch return;
         const month = ledger.spentSince(periods.month) catch return;
@@ -239,12 +240,6 @@ pub const Limiter = struct {
             .month_usd = month,
             .refreshed_ms = now_ms,
         };
-    }
-
-    fn rollSpendPeriodsLocked(l: *Limiter, io: Io) void {
-        l.mutex.lockUncancelable(io);
-        defer l.mutex.unlock(io);
-        l.rollSpendPeriods(nowUs(io));
     }
 
     fn rollSpendPeriods(l: *Limiter, now_us: i64) void {
@@ -364,14 +359,11 @@ test "the monthly cap from the ledger pauses background work" {
 }
 
 test "UTC period starts" {
-    const t = (classifyDays(2026, 11, 23) * 86_400 + 3_600) * std.time.us_per_s;
+    const daysFromCivil = @import("classify.zig").daysFromCivil;
+    const t = (daysFromCivil(2026, 11, 23) * 86_400 + 3_600) * std.time.us_per_s;
     const p = periodStarts(t);
-    try testing.expectEqual(classifyDays(2026, 11, 23) * 86_400 * std.time.us_per_s, p.day);
-    try testing.expectEqual(classifyDays(2026, 11, 1) * 86_400 * std.time.us_per_s, p.month);
-}
-
-fn classifyDays(y: i64, m: i64, d: i64) i64 {
-    return @import("classify.zig").daysFromCivil(y, m, d);
+    try testing.expectEqual(daysFromCivil(2026, 11, 23) * 86_400 * std.time.us_per_s, p.day);
+    try testing.expectEqual(daysFromCivil(2026, 11, 1) * 86_400 * std.time.us_per_s, p.month);
 }
 
 test "route limits come from each endpoint's config section" {

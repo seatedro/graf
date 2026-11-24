@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const hooks = @import("hooks.zig");
+const spool = @import("hooks_spool.zig");
 const state = @import("state.zig");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
@@ -19,17 +20,6 @@ const Stub = struct {
     lens: [8]usize = @splat(0),
     held: [8]?net.Stream = @splat(null),
     future: ?Io.Future(void) = null,
-
-    fn listenTcp(stub: *Stub) !u16 {
-        const addr: net.IpAddress = .{ .ip4 = .loopback(0) };
-        stub.server = try addr.listen(stub.io, .{});
-        return stub.server.socket.address.getPort();
-    }
-
-    fn listenUnix(stub: *Stub, path: []const u8) !void {
-        const addr = try net.UnixAddress.init(path);
-        stub.server = try addr.listen(stub.io, .{});
-    }
 
     fn start(stub: *Stub) !void {
         stub.future = try stub.io.concurrent(loop, .{stub});
@@ -130,7 +120,7 @@ const Harness = struct {
         try h.env.put("XDG_STATE_HOME", try h.path("state"));
         h.config = .{};
         h.config.serve.socket = try h.path("missing.sock");
-        h.config.serve.listen = try std.fmt.allocPrint(h.arena(), "127.0.0.1:{d}", .{try closedPort()});
+        try h.listenOn(try closedPort());
         h.out = .init(h.arena());
         try h.tmp.dir.createDirPath(testing.io, "repo/.git");
         try h.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.git/config", .data = "[remote \"origin\"]\n\turl = git@git.example.test:brackwater/widgets.git\n" });
@@ -148,6 +138,30 @@ const Harness = struct {
 
     fn path(h: *Harness, sub: []const u8) ![]const u8 {
         return std.fs.path.join(h.arena(), &.{ h.root, sub });
+    }
+
+    fn listenOn(h: *Harness, port: u16) !void {
+        h.config.serve.listen = try std.fmt.allocPrint(h.arena(), "127.0.0.1:{d}", .{port});
+    }
+
+    fn serveTcp(h: *Harness, stub: *Stub) !void {
+        const addr: net.IpAddress = .{ .ip4 = .loopback(0) };
+        stub.server = try addr.listen(stub.io, .{});
+        try h.listenOn(stub.server.socket.address.getPort());
+        try stub.start();
+    }
+
+    fn serveUnix(h: *Harness, stub: *Stub) !void {
+        h.config.serve.socket = try h.path("graf.sock");
+        const addr = try net.UnixAddress.init(h.config.serve.socket);
+        stub.server = try addr.listen(stub.io, .{});
+        try stub.start();
+    }
+
+    fn expectOutput(h: *Harness, hook_event_name: []const u8, context: []const u8) !void {
+        const parsed = try std.json.parseFromSliceLeaky(ParsedOutput, h.arena(), h.out.written(), .{});
+        try testing.expectEqualStrings(hook_event_name, parsed.hookSpecificOutput.hookEventName);
+        try testing.expectEqualStrings(context, parsed.hookSpecificOutput.additionalContext);
     }
 
     fn payload(h: *Harness, extra: []const u8) ![]const u8 {
@@ -193,12 +207,10 @@ test "session-start over the unix socket prints the brief for claude-code with t
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
-    h.config.serve.socket = try h.path("graf.sock");
     h.config.serve.token = "tok-example";
 
     var stub: Stub = .{ .io = testing.io, .server = undefined, .body = "## Brief\nbrackwater/widgets uses zig\n", .content_type = "text/markdown" };
-    try stub.listenUnix(h.config.serve.socket);
-    try stub.start();
+    try h.serveUnix(&stub);
     defer stub.stop();
 
     _ = try h.run(.@"claude-code", .@"session-start", try h.payload(",\"hook_event_name\":\"SessionStart\",\"source\":\"startup\""));
@@ -206,9 +218,7 @@ test "session-start over the unix socket prints the brief for claude-code with t
     try expectContains(req, "GET /v1/brief?project=git.example.test%2Fbrackwater%2Fwidgets HTTP/1.1\r\n");
     try expectContains(req, "Authorization: Bearer tok-example\r\n");
 
-    const parsed = try std.json.parseFromSliceLeaky(ParsedOutput, h.arena(), h.out.written(), .{});
-    try testing.expectEqualStrings("SessionStart", parsed.hookSpecificOutput.hookEventName);
-    try testing.expectEqualStrings("## Brief\nbrackwater/widgets uses zig", parsed.hookSpecificOutput.additionalContext);
+    try h.expectOutput("SessionStart", "## Brief\nbrackwater/widgets uses zig");
 }
 
 test "session-start over tcp accepts a JSON body for codex and sends no token when unset" {
@@ -216,16 +226,12 @@ test "session-start over tcp accepts a JSON body for codex and sends no token wh
     try h.init();
     defer h.deinit();
     var stub: Stub = .{ .io = testing.io, .server = undefined, .body = "{\"brief\":\"from json\"}", .content_type = "application/json" };
-    const port = try stub.listenTcp();
-    h.config.serve.listen = try std.fmt.allocPrint(h.arena(), "127.0.0.1:{d}", .{port});
-    try stub.start();
+    try h.serveTcp(&stub);
     defer stub.stop();
 
     _ = try h.run(.codex, .@"session-start", try h.payload(""));
     try testing.expect(std.mem.indexOf(u8, stub.request(0), "Authorization") == null);
-    const parsed = try std.json.parseFromSliceLeaky(ParsedOutput, h.arena(), h.out.written(), .{});
-    try testing.expectEqualStrings("SessionStart", parsed.hookSpecificOutput.hookEventName);
-    try testing.expectEqualStrings("from json", parsed.hookSpecificOutput.additionalContext);
+    try h.expectOutput("SessionStart", "from json");
 }
 
 test "prompt-submit fires warm, prints recall, and stays under 80 ms" {
@@ -233,9 +239,7 @@ test "prompt-submit fires warm, prints recall, and stays under 80 ms" {
     try h.init();
     defer h.deinit();
     var stub: Stub = .{ .io = testing.io, .server = undefined, .body = "{\"text\":\"recalled: use the arena\"}", .content_type = "application/json" };
-    const port = try stub.listenTcp();
-    h.config.serve.listen = try std.fmt.allocPrint(h.arena(), "127.0.0.1:{d}", .{port});
-    try stub.start();
+    try h.serveTcp(&stub);
     defer stub.stop();
 
     const ms = try h.run(.@"claude-code", .@"prompt-submit", try h.payload(",\"prompt\":\"fix the \\\"flaky\\\" test & ship\""));
@@ -246,19 +250,15 @@ test "prompt-submit fires warm, prints recall, and stays under 80 ms" {
     try expectContains(warm, "\r\n\r\n{\"prompt\":\"fix the \\\"flaky\\\" test & ship\"}");
     _ = stub.find("GET /v1/sessions/sess-1/recall?prompt=fix%20the%20%22flaky%22%20test%20%26%20ship HTTP/1.1") orelse return error.MissingRecall;
 
-    const parsed = try std.json.parseFromSliceLeaky(ParsedOutput, h.arena(), h.out.written(), .{});
-    try testing.expectEqualStrings("UserPromptSubmit", parsed.hookSpecificOutput.hookEventName);
-    try testing.expectEqualStrings("recalled: use the arena", parsed.hookSpecificOutput.additionalContext);
+    try h.expectOutput("UserPromptSubmit", "recalled: use the arena");
 }
 
 test "stop posts flush to a fast daemon under 50 ms and spools nothing" {
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
-    h.config.serve.socket = try h.path("graf.sock");
     var stub: Stub = .{ .io = testing.io, .server = undefined, .status = 202 };
-    try stub.listenUnix(h.config.serve.socket);
-    try stub.start();
+    try h.serveUnix(&stub);
     defer stub.stop();
 
     const ms = try h.run(.@"claude-code", .stop, try h.payload(",\"hook_event_name\":\"Stop\""));
@@ -284,7 +284,7 @@ test "session-end spools when nothing listens, under 50 ms" {
     const text = try h.spoolText();
     try testing.expect(std.mem.endsWith(u8, text, "\n"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, text, "\n"));
-    const entry = try std.json.parseFromSliceLeaky(hooks.SpoolEntry, h.arena(), std.mem.trimEnd(u8, text, "\n"), .{});
+    const entry = try std.json.parseFromSliceLeaky(spool.Entry, h.arena(), std.mem.trimEnd(u8, text, "\n"), .{});
     try testing.expectEqualStrings("claude-code", entry.harness);
     try testing.expectEqualStrings("session-end", entry.event);
     try testing.expectEqualStrings("sess-1", entry.session_id.?);
@@ -297,9 +297,7 @@ test "stop and session-end spool when the daemon accepts but never answers, unde
     try h.init();
     defer h.deinit();
     var stub: Stub = .{ .io = testing.io, .server = undefined, .hang = true };
-    const port = try stub.listenTcp();
-    h.config.serve.listen = try std.fmt.allocPrint(h.arena(), "127.0.0.1:{d}", .{port});
-    try stub.start();
+    try h.serveTcp(&stub);
     defer stub.stop();
 
     const stop_ms = try h.run(.codex, .stop, try h.payload(""));
@@ -319,9 +317,7 @@ test "a daemon error status spools the flush" {
     try h.init();
     defer h.deinit();
     var stub: Stub = .{ .io = testing.io, .server = undefined, .status = 503 };
-    const port = try stub.listenTcp();
-    h.config.serve.listen = try std.fmt.allocPrint(h.arena(), "127.0.0.1:{d}", .{port});
-    try stub.start();
+    try h.serveTcp(&stub);
     defer stub.stop();
     _ = try h.run(.@"claude-code", .stop, try h.payload(""));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, try h.spoolText(), "\n"));
@@ -331,10 +327,8 @@ test "prompt-submit and session-start print nothing within budget when the daemo
     var h: Harness = undefined;
     try h.init();
     defer h.deinit();
-    h.config.serve.socket = try h.path("graf.sock");
     var stub: Stub = .{ .io = testing.io, .server = undefined, .hang = true };
-    try stub.listenUnix(h.config.serve.socket);
-    try stub.start();
+    try h.serveUnix(&stub);
     defer stub.stop();
 
     const prompt_ms = try h.run(.@"claude-code", .@"prompt-submit", try h.payload(",\"prompt\":\"hello\""));
@@ -359,9 +353,7 @@ test "pi and fx are no-ops; paused, excluded, error bodies and bad stdin print n
     try h.init();
     defer h.deinit();
     var stub: Stub = .{ .io = testing.io, .server = undefined, .body = "brief" };
-    const port = try stub.listenTcp();
-    h.config.serve.listen = try std.fmt.allocPrint(h.arena(), "127.0.0.1:{d}", .{port});
-    try stub.start();
+    try h.serveTcp(&stub);
     defer stub.stop();
 
     _ = try h.run(.pi, .@"session-start", try h.payload(""));
@@ -400,7 +392,7 @@ const Collector = struct {
     seen: *std.ArrayList([]const u8),
     fail_after: ?usize = null,
 
-    fn handle(c: Collector, entry: hooks.SpoolEntry) anyerror!void {
+    fn handle(c: Collector, entry: spool.Entry) anyerror!void {
         if (c.fail_after) |n| if (c.seen.items.len >= n) return error.DaemonBusy;
         try c.seen.append(c.arena, try std.fmt.allocPrint(c.arena, "{s}/{s}/{s}", .{ entry.harness, entry.event, entry.session_id orelse "-" }));
     }
@@ -411,26 +403,26 @@ test "drainSpool replays every line, removes the spool, and re-delivers after a 
     try h.init();
     defer h.deinit();
     const state_dir = try h.path("state/graf");
-    try testing.expectEqual(@as(usize, 0), try hooks.drainSpool(h.arena(), testing.io, state_dir, Collector{ .arena = h.arena(), .seen = undefined }, Collector.handle));
+    try testing.expectEqual(@as(usize, 0), try spool.drain(h.arena(), testing.io, state_dir, Collector{ .arena = h.arena(), .seen = undefined }, Collector.handle));
 
     _ = try h.run(.@"claude-code", .stop, try h.payload(""));
     _ = try h.run(.codex, .@"session-end", try h.payload(""));
     try h.tmp.dir.writeFile(testing.io, .{ .sub_path = "extra", .data = "" });
 
     var seen: std.ArrayList([]const u8) = .empty;
-    try testing.expectError(error.DaemonBusy, hooks.drainSpool(h.arena(), testing.io, state_dir, Collector{ .arena = h.arena(), .seen = &seen, .fail_after = 1 }, Collector.handle));
+    try testing.expectError(error.DaemonBusy, spool.drain(h.arena(), testing.io, state_dir, Collector{ .arena = h.arena(), .seen = &seen, .fail_after = 1 }, Collector.handle));
     try testing.expectEqual(@as(usize, 1), seen.items.len);
     try testing.expectEqualStrings("", try h.spoolText());
 
     _ = try h.run(.@"claude-code", .@"session-end", try h.payload(""));
 
     seen.clearRetainingCapacity();
-    try testing.expectEqual(@as(usize, 3), try hooks.drainSpool(h.arena(), testing.io, state_dir, Collector{ .arena = h.arena(), .seen = &seen }, Collector.handle));
+    try testing.expectEqual(@as(usize, 3), try spool.drain(h.arena(), testing.io, state_dir, Collector{ .arena = h.arena(), .seen = &seen }, Collector.handle));
     try testing.expectEqualStrings("claude-code/stop/sess-1", seen.items[0]);
     try testing.expectEqualStrings("codex/session-end/sess-1", seen.items[1]);
     try testing.expectEqualStrings("claude-code/session-end/sess-1", seen.items[2]);
     try testing.expectEqualStrings("", try h.spoolText());
-    try testing.expectEqual(@as(usize, 0), try hooks.drainSpool(h.arena(), testing.io, state_dir, Collector{ .arena = h.arena(), .seen = &seen }, Collector.handle));
+    try testing.expectEqual(@as(usize, 0), try spool.drain(h.arena(), testing.io, state_dir, Collector{ .arena = h.arena(), .seen = &seen }, Collector.handle));
 }
 
 test "responseText accepts plain, markdown and JSON shapes" {

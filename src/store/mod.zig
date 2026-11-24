@@ -10,12 +10,6 @@ pub const Id = core.Id;
 
 pub const embedding_dims = 512;
 
-pub const Error = error{
-    LeaseLost,
-    InvalidEmbedding,
-    InvalidDatabaseUrl,
-};
-
 pub const Store = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -92,10 +86,10 @@ pub const Store = struct {
         const graph: ?[]const u8 = if (call.graph_id.eql(.nil)) null else &graph_buf;
         var fallback_buf: [16]u8 = s.default_graph.bytes;
         const fallback: ?[]const u8 = if (s.default_graph.eql(.nil)) null else &fallback_buf;
-        var ep_buf: [16]u8 = undefined;
+        var entry_buf: [16]u8 = undefined;
         const entry: ?[]const u8 = if (call.entry_id) |e| blk: {
-            ep_buf = e.bytes;
-            break :blk &ep_buf;
+            entry_buf = e.bytes;
+            break :blk &entry_buf;
         } else null;
         _ = try s.pool.exec(
             \\INSERT INTO llm_call (id, graph_id, entry_id, purpose, route, model, attempt, outcome,
@@ -201,17 +195,6 @@ pub fn normalizeAlias(arena: std.mem.Allocator, s: []const u8) ![]const u8 {
     return out.toOwnedSlice(arena);
 }
 
-pub fn vectorLiteral(arena: std.mem.Allocator, v: []const f32) ![]const u8 {
-    var out: std.Io.Writer.Allocating = .init(arena);
-    try out.writer.writeByte('[');
-    for (v, 0..) |x, i| {
-        if (i != 0) try out.writer.writeByte(',');
-        try out.writer.print("{d}", .{x});
-    }
-    try out.writer.writeByte(']');
-    return out.toOwnedSlice();
-}
-
 pub fn idFromPg(raw: []const u8) !Id {
     if (raw.len != 16) return error.InvalidId;
     return .{ .bytes = raw[0..16].* };
@@ -281,6 +264,20 @@ pub const testing = struct {
         var name_buf: [64]u8 = undefined;
         const name = try std.fmt.bufPrint(&name_buf, "test-{s}", .{Id.v7(s.io).toString(&buf)});
         return s.ensureGraph(name);
+    }
+
+    pub fn nextNotification(listener: *pg.Listener, channel: []const u8) ![]const u8 {
+        const io = std.testing.io;
+        var watchdog = try io.concurrent(stopAfterDeadline, .{ io, listener });
+        defer watchdog.cancel(io);
+        const note = listener.next() orelse return error.NoNotification;
+        try std.testing.expectEqualStrings(channel, note.channel);
+        return note.payload;
+    }
+
+    fn stopAfterDeadline(io: std.Io, listener: *pg.Listener) void {
+        io.sleep(.fromSeconds(5), .awake) catch return;
+        listener.stop() catch {};
     }
 };
 

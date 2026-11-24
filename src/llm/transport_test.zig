@@ -4,6 +4,8 @@ const transport = @import("transport.zig");
 const limiter = @import("limiter.zig");
 const testing = std.testing;
 
+const deadline_ms = 5_000;
+
 const Server = struct {
     listener: Io.net.Server,
     accepts: std.atomic.Value(u32) = .init(0),
@@ -67,7 +69,7 @@ test "real HTTP: keep-alive reuse, header capture, first-byte and stall deadline
 
     const ok_url = try std.fmt.allocPrint(arena, "http://127.0.0.1:{d}/ok", .{port});
     for (0..2) |_| {
-        const res = try t.send(io, arena, &.{ .url = ok_url, .body = "{}", .capture = &.{"x-example-cost-usd"} });
+        const res = try t.send(io, arena, &.{ .url = ok_url, .body = "{}", .total_ms = deadline_ms, .capture = &.{"x-example-cost-usd"} });
         try testing.expectEqual(@as(u16, 200), res.response.status);
         try testing.expectEqualStrings("{\"ok\":true}", res.response.body);
         try testing.expectEqualStrings("0.5", res.response.header("x-example-cost-usd").?);
@@ -76,21 +78,21 @@ test "real HTTP: keep-alive reuse, header capture, first-byte and stall deadline
 
     const slow_url = try std.fmt.allocPrint(arena, "http://127.0.0.1:{d}/slow", .{port});
     var start = limiter.nowMs(io);
-    const slow = try t.send(io, arena, &.{ .url = slow_url, .body = "{}", .bounds = .{ .first_response_ms = 150 } });
+    const slow = try t.send(io, arena, &.{ .url = slow_url, .body = "{}", .total_ms = deadline_ms, .bounds = .{ .first_response_ms = 150 } });
     try testing.expect(slow.failure.timed_out);
     try testing.expect(slow.failure.sent);
     try testing.expect(limiter.nowMs(io) - start < 2000);
 
     const stall_url = try std.fmt.allocPrint(arena, "http://127.0.0.1:{d}/stall", .{port});
     start = limiter.nowMs(io);
-    const stalled = try t.send(io, arena, &.{ .url = stall_url, .body = "{}", .bounds = .{ .stall_ms = 150 } });
+    const stalled = try t.send(io, arena, &.{ .url = stall_url, .body = "{}", .total_ms = deadline_ms, .bounds = .{ .stall_ms = 150 } });
     try testing.expect(stalled.failure.timed_out);
     try testing.expect(limiter.nowMs(io) - start < 2000);
 
     var cancel: std.atomic.Value(bool) = .init(true);
-    const cancelled = try t.send(io, arena, &.{ .url = slow_url, .body = "{}", .cancel = &cancel });
+    const cancelled = try t.send(io, arena, &.{ .url = slow_url, .body = "{}", .total_ms = deadline_ms, .cancel = &cancel });
     try testing.expect(cancelled.failure.cancelled);
 
-    const refused = try t.send(io, arena, &.{ .url = "http://127.0.0.1:1/ok", .body = "{}" });
+    const refused = try t.send(io, arena, &.{ .url = "http://127.0.0.1:1/ok", .body = "{}", .total_ms = deadline_ms });
     try testing.expect(!refused.failure.sent);
 }

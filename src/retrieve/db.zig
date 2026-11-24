@@ -21,6 +21,8 @@ pub const hit_columns =
 
 pub const hit_column_count = 23;
 
+pub const hit_from = " FROM fact f JOIN entity se ON se.id = f.subject_id LEFT JOIN entity oe ON oe.id = f.object_id";
+
 pub const Hit = struct {
     fact: core.Fact,
     subject_name: []const u8,

@@ -51,6 +51,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(exe);
+    test_step.dependOn(&exe.step);
 
     const run = b.addRunArtifact(exe);
     run.step.dependOn(b.getInstallStep());

@@ -10,51 +10,7 @@ fn fillEmbeddings(out: []f32, seed: u64) void {
     for (out) |*v| v.* = r.float(f32) * 2 - 1;
 }
 
-fn elapsedUs(io: std.Io, start: std.Io.Timestamp) i64 {
-    const now = std.Io.Timestamp.now(io, .awake);
-    return @intCast(@divTrunc(now.nanoseconds - start.nanoseconds, 1000));
-}
-
-const Variant = enum { per_row, flat_unnest, text_unnest };
-
-fn insertBatch(io: std.Io, gpa: std.mem.Allocator, conn: *pg.Conn, variant: Variant, ids: []const [16]u8, embs: []const f32) !i64 {
-    const n = ids.len;
-    const id_slices = try gpa.alloc([]const u8, n);
-    defer gpa.free(id_slices);
-    for (ids, 0..) |*id, i| id_slices[i] = id;
-
-    var text_arena = std.heap.ArenaAllocator.init(gpa);
-    defer text_arena.deinit();
-
-    const start = std.Io.Timestamp.now(io, .awake);
-    try conn.begin();
-    errdefer conn.rollback() catch {};
-    switch (variant) {
-        .per_row => for (0..n) |i| {
-            _ = try conn.exec(
-                "INSERT INTO seam_vec (id, emb) VALUES ($1, $2::float4[]::halfvec(512))",
-                .{ id_slices[i], embs[i * dims .. (i + 1) * dims] },
-            );
-        },
-        .flat_unnest => _ = try conn.exec(
-            \\INSERT INTO seam_vec (id, emb)
-            \\SELECT t.id, ($2::float4[])[(t.i - 1) * 512 + 1 : t.i * 512]::halfvec(512)
-            \\FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, i)
-        , .{ id_slices, embs }),
-        .text_unnest => {
-            const lits = try text_arena.allocator().alloc([]const u8, n);
-            for (lits, 0..) |*lit, i| lit.* = try store.vectorLiteral(text_arena.allocator(), embs[i * dims .. (i + 1) * dims]);
-            _ = try conn.exec(
-                "INSERT INTO seam_vec (id, emb) SELECT t.id, t.e::halfvec(512) FROM unnest($1::uuid[], $2::text[]) AS t(id, e)",
-                .{ id_slices, lits },
-            );
-        },
-    }
-    try conn.commit();
-    return elapsedUs(io, start);
-}
-
-test "seam: halfvec(512) batch inserts round-trip and the batching benchmark" {
+test "seam: halfvec(512) rows batch-inserted as flat float4[] slices round-trip" {
     var s = try store.testing.open();
     defer s.close();
     const io = std.testing.io;
@@ -72,47 +28,32 @@ test "seam: halfvec(512) batch inserts round-trip and the batching benchmark" {
         try std.testing.expectEqual(@as(i32, 6), try row.get(i32, 0));
     }
 
-    const sizes = [_]usize{ 40, 400 };
-    const reps = 5;
-    var results: [sizes.len][3]i64 = undefined;
-    var seed: u64 = 1;
-    for (sizes, 0..) |n, si| {
-        const ids = try gpa.alloc([16]u8, n);
-        defer gpa.free(ids);
-        const embs = try gpa.alloc(f32, n * dims);
-        defer gpa.free(embs);
-        for (std.enums.values(Variant), 0..) |variant, vi| {
-            var samples: [reps]i64 = undefined;
-            for (&samples) |*sample| {
-                _ = try conn.exec("TRUNCATE seam_vec", .{});
-                for (ids) |*id| id.* = store.Id.v7(io).bytes;
-                seed += 1;
-                fillEmbeddings(embs, seed);
-                sample.* = try insertBatch(io, gpa, conn, variant, ids, embs);
-            }
-            std.mem.sort(i64, &samples, {}, std.sort.asc(i64));
-            results[si][vi] = samples[reps / 2];
-
-            var row = (try conn.row("SELECT (SELECT count(*)::int FROM seam_vec), (SELECT emb::float4[] FROM seam_vec WHERE id = $1)", .{@as([]const u8, &ids[n - 1])})).?;
-            defer row.deinit() catch {};
-            try std.testing.expectEqual(@as(i32, @intCast(n)), try row.get(i32, 0));
-            var it = try row.get(pg.Iterator(f32), 1);
-            try std.testing.expectEqual(@as(usize, dims), it.len());
-            var k: usize = 0;
-            while (it.next()) |v| : (k += 1) {
-                try std.testing.expectApproxEqAbs(embs[(n - 1) * dims + k], v, 1e-3);
-            }
-        }
+    const n = 40;
+    var id_bytes: [n][16]u8 = undefined;
+    var ids: [n][]const u8 = undefined;
+    for (&id_bytes, &ids) |*bytes, *id| {
+        bytes.* = store.Id.v7(io).bytes;
+        id.* = bytes;
     }
-    std.debug.print("\nseam: halfvec(512) inserts into an HNSW-indexed table, median of {d} one-transaction runs\n", .{reps});
-    std.debug.print("  rows   per-row $n::float4[]::halfvec   unnest(flat float4[]) slices   unnest(text[]) literals\n", .{});
-    for (sizes, results) |n, r| {
-        std.debug.print("  {d:>4}   {d:>10.2} ms                  {d:>10.2} ms                  {d:>10.2} ms\n", .{
-            n,
-            @as(f64, @floatFromInt(r[0])) / 1000,
-            @as(f64, @floatFromInt(r[1])) / 1000,
-            @as(f64, @floatFromInt(r[2])) / 1000,
-        });
+    const embs = try gpa.alloc(f32, n * dims);
+    defer gpa.free(embs);
+    fillEmbeddings(embs, 1);
+    _ = try conn.exec(
+        \\INSERT INTO seam_vec (id, emb)
+        \\SELECT t.id, ($2::float4[])[(t.i - 1) * 512 + 1 : t.i * 512]::halfvec(512)
+        \\FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, i)
+    , .{ &ids, embs });
+
+    for ([_]usize{ 0, n - 1 }) |i| {
+        var row = (try conn.row("SELECT (SELECT count(*)::int FROM seam_vec), (SELECT emb::float4[] FROM seam_vec WHERE id = $1)", .{ids[i]})).?;
+        defer row.deinit() catch {};
+        try std.testing.expectEqual(@as(i32, n), try row.get(i32, 0));
+        var it = try row.get(pg.Iterator(f32), 1);
+        try std.testing.expectEqual(@as(usize, dims), it.len());
+        var k: usize = 0;
+        while (it.next()) |v| : (k += 1) {
+            try std.testing.expectApproxEqAbs(embs[i * dims + k], v, 1e-3);
+        }
     }
 }
 
@@ -166,7 +107,6 @@ test "seam: hnsw.iterative_scan = relaxed_order keeps a selective filter from un
         defer row.deinit() catch {};
         count.* = try row.get(i32, 0);
     }
-    std.debug.print("\nseam: filtered kNN (2% selectivity, ef_search 40, LIMIT 10): iterative_scan=off -> {d} rows, relaxed_order -> {d} rows\n", .{ counts[0], counts[1] });
     try std.testing.expect(counts[0] < 10);
     try std.testing.expectEqual(@as(i32, 10), counts[1]);
 }
@@ -209,7 +149,7 @@ test "seam: LISTEN receives a NOTIFY sent inside a committed transaction, not a 
 
     var listener = try s.pool.newListener();
     defer listener.deinit();
-    try listener.listen("graf_seam_test", .{ .timeout = 5_000 });
+    try listener.listen("graf_seam_test", .{});
 
     const conn = try s.pool.acquire();
     defer conn.release();
@@ -220,7 +160,5 @@ test "seam: LISTEN receives a NOTIFY sent inside a committed transaction, not a 
     _ = try conn.exec("SELECT pg_notify('graf_seam_test', 'hello')", .{});
     try conn.commit();
 
-    const note = listener.next() orelse return error.NoNotification;
-    try std.testing.expectEqualStrings("graf_seam_test", note.channel);
-    try std.testing.expectEqualStrings("hello", note.payload);
+    try std.testing.expectEqualStrings("hello", try store.testing.nextNotification(&listener, "graf_seam_test"));
 }

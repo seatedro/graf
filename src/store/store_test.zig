@@ -49,6 +49,14 @@ fn scalarI64(s: *Store, sql: []const u8, args: anytype) !i64 {
     return row.get(i64, 0);
 }
 
+fn claimAfterLeaseExpires(s: *Store, arena: std.mem.Allocator, g: Id, worker: []const u8) !store.Lease {
+    for (0..100) |_| {
+        if (try s.claim(arena, g, worker)) |lease| return lease;
+        try s.io.sleep(.fromMilliseconds(20), .awake);
+    }
+    return error.LeaseNeverExpired;
+}
+
 fn stage(s: *Store, lease: store.Lease, cs: *const core.ChangeSet) !void {
     try s.saveExtraction(lease, "{\"skip\":null,\"entities\":[],\"facts\":[],\"new_relations\":[]}");
     try s.saveChangeSet(lease, cs);
@@ -84,12 +92,10 @@ test "ensureGraph is idempotent and seeds the core relations once" {
     var s = try store.testing.open();
     defer s.close();
     const g = try store.testing.freshGraph(&s);
-    var buf: [36]u8 = undefined;
     var name_buf: [64]u8 = undefined;
     var row = (try s.pool.row("SELECT name FROM graph WHERE id = $1", .{@as([]const u8, &g.bytes)})).?;
     const name = try std.fmt.bufPrint(&name_buf, "{s}", .{try row.get([]const u8, 0)});
     try row.deinit();
-    _ = &buf;
     try testing.expect(g.eql(try s.ensureGraph(name)));
     const n = try scalarI64(&s, "SELECT count(*) FROM relation WHERE graph_id = $1 AND status = 'core'", .{@as([]const u8, &g.bytes)});
     try testing.expectEqual(@as(i64, core.ontology.core_relations.len), n);
@@ -123,7 +129,7 @@ test "enqueue dedupes on content, advances the cursor, numbers the source and no
 
     var listener = try s.pool.newListener();
     defer listener.deinit();
-    try listener.listen("graf_queue", .{ .timeout = 5_000 });
+    try listener.listen("graf_queue", .{});
 
     var draft = note("sess-1", "graf uses Postgres 17", 1_000);
     draft.cursor = "120";
@@ -131,8 +137,7 @@ test "enqueue dedupes on content, advances the cursor, numbers the source and no
     const first = try sink.enqueue(&draft);
     try testing.expect(first == .queued);
 
-    const n = listener.next() orelse return error.NoNotification;
-    try testing.expectEqualStrings(g.toString(&gbuf), n.payload);
+    try testing.expectEqualStrings(g.toString(&gbuf), try store.testing.nextNotification(&listener, "graf_queue"));
 
     draft.cursor = "240";
     draft.reference_time = 2_000;
@@ -192,19 +197,17 @@ test "a lost lease is reclaimed without repeating the extraction and fences the 
     defer arena.deinit();
     const a = arena.allocator();
 
-    const ep = try enqueueNew(&s, g, note("crash", "graf uses pg.zig", 1_000));
+    const entry_id = try enqueueNew(&s, g, note("crash", "graf uses pg.zig", 1_000));
     const old = (try s.claim(a, g, "old")).?;
     try testing.expect(try s.claim(a, g, "other") == null);
 
-    try s.io.sleep(.fromMilliseconds(250), .awake);
-    const retry = (try s.claim(a, g, "retry")).?;
-    try testing.expect(retry.entry_id.eql(ep));
+    const retry = try claimAfterLeaseExpires(&s, a, g, "retry");
+    try testing.expect(retry.entry_id.eql(entry_id));
     try testing.expectEqual(@as(i32, 2), retry.entry.attempts);
     try testing.expectError(error.LeaseLost, s.saveExtraction(old, "{}"));
     try s.saveExtraction(retry, "{\"facts\":[1]}");
 
-    try s.io.sleep(.fromMilliseconds(250), .awake);
-    const resumed = (try s.claim(a, g, "resumed")).?;
+    const resumed = try claimAfterLeaseExpires(&s, a, g, "resumed");
     try testing.expectEqual(core.types.EntryStatus.extracted, resumed.entry.status);
     try testing.expectEqual(@as(i32, 2), resumed.entry.attempts);
     try testing.expectEqualStrings("{\"facts\": [1]}", resumed.extraction_json.?);
@@ -214,11 +217,11 @@ test "a lost lease is reclaimed without repeating the extraction and fences the 
     try s.saveChangeSet(resumed, &.{ .base_seq = 0 });
     try testing.expectError(error.LeaseLost, s.saveChangeSet(retry, &.{ .base_seq = 0 }));
     try testing.expect(try s.commit(retry, &.{ .base_seq = 0 }, null) == .fenced);
-    try testing.expectEqualStrings("staged", try status(&s, ep));
+    try testing.expectEqualStrings("staged", try status(&s, entry_id));
     const res = try s.commit(resumed, &.{ .base_seq = 0 }, null);
     try testing.expectEqual(@as(i64, 1), res.committed.seq);
     try testing.expect(try s.commit(resumed, &.{ .base_seq = 0 }, null) == .fenced);
-    try testing.expectEqualStrings("committed", try status(&s, ep));
+    try testing.expectEqualStrings("committed", try status(&s, entry_id));
 }
 
 test "commit applies entities, aliases, facts, merges, invalidations, retractions and the logs" {
@@ -285,7 +288,7 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
 
     var commits = try s.pool.newListener();
     defer commits.deinit();
-    try commits.listen("graf_commit", .{ .timeout = 5_000 });
+    try commits.listen("graf_commit", .{});
 
     const juno = entity(&s, "Juno", .person);
     const e4 = emb(5);
@@ -295,8 +298,6 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
     const en2 = try enqueueNew(&s, g, note("commit", "entry two", t0 + day));
     const l2 = (try s.claim(a, g, "w")).?;
     try testing.expect(l2.entry_id.eql(en2));
-    var aliases_extra: []const u8 = "";
-    if (comptime @hasField(core.ChangeSet, "new_aliases")) aliases_extra = "yes";
     const cs2: core.ChangeSet = .{
         .base_seq = 1,
         .new_entities = &.{juno},
@@ -315,9 +316,8 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
     try stage(&s, l2, &cs2);
     try testing.expectEqual(@as(i64, 2), (try s.commit(l2, &cs2, null)).committed.seq);
 
-    const n = commits.next() orelse return error.NoNotification;
     const Payload = struct { graph_id: []const u8, seq: i64, project: ?[]const u8 };
-    const payload = try std.json.parseFromSliceLeaky(Payload, a, n.payload, .{});
+    const payload = try std.json.parseFromSliceLeaky(Payload, a, try store.testing.nextNotification(&commits, "graf_commit"), .{ .allocate = .alloc_always });
     var gbuf: [36]u8 = undefined;
     try testing.expectEqualStrings(g.toString(&gbuf), payload.graph_id);
     try testing.expectEqual(@as(i64, 2), payload.seq);
@@ -458,7 +458,7 @@ const DedupRebase = struct {
         const self: *DedupRebase = @ptrCast(@alignCast(ptr));
         var kept: std.ArrayList(core.ChangeSet.NewFact) = .empty;
         var restate: std.ArrayList(core.ChangeSet.Restatement) = .empty;
-        var prov: std.ArrayList(core.ChangeSet.Evidence) = .empty;
+        var evidence: std.ArrayList(core.ChangeSet.Evidence) = .empty;
         for (cs.new_facts) |nf| {
             var row = try conn.row(
                 \\SELECT f.id, f.confidence FROM fact f JOIN commit_log c ON c.graph_id = f.graph_id AND f.id = ANY(c.touched_facts)
@@ -470,12 +470,12 @@ const DedupRebase = struct {
                 const existing = try store.idFromPg(try r.get([]const u8, 0));
                 const c = try r.get(f32, 1);
                 try restate.append(self.arena, .{ .fact_id = existing, .confidence = c + (1 - c) * 0.3 });
-                try prov.append(self.arena, .{ .fact_id = existing, .kind = .restated });
+                try evidence.append(self.arena, .{ .fact_id = existing, .kind = .restated });
             } else try kept.append(self.arena, nf);
         }
         cs.new_facts = kept.items;
         cs.restatements = restate.items;
-        cs.evidence = prov.items;
+        cs.evidence = evidence.items;
     }
 };
 
@@ -488,8 +488,7 @@ test "a rebase sees the commits it missed and its rewrite is what lands" {
     const a = arena.allocator();
 
     const subject = entity(&s, "graf", .project);
-    const seed_ep = try enqueueNew(&s, g, note("seed", "seed", 500));
-    _ = seed_ep;
+    _ = try enqueueNew(&s, g, note("seed", "seed", 500));
     const ls = (try s.claim(a, g, "seed")).?;
     const seed_cs: core.ChangeSet = .{ .base_seq = 0, .new_entities = &.{subject} };
     try stage(&s, ls, &seed_cs);
@@ -537,12 +536,12 @@ test "commit rejects embeddings of the wrong width and leaves the entry staged" 
     const subject = entity(&s, "graf", .project);
     const short = [_]f32{ 0.1, 0.2 };
     const bad = newFact(&s, g, subject.id, "uses", .{ .value = "Zig" }, "graf uses Zig.", 1_000, &short);
-    const ep = try enqueueNew(&s, g, note("bad", "bad", 1_000));
+    const entry_id = try enqueueNew(&s, g, note("bad", "bad", 1_000));
     const l = (try s.claim(a, g, "w")).?;
     const cs: core.ChangeSet = .{ .base_seq = 0, .new_entities = &.{subject}, .new_facts = &.{bad} };
     try stage(&s, l, &cs);
     try testing.expectError(error.InvalidEmbedding, s.commit(l, &cs, null));
-    try testing.expectEqualStrings("staged", try status(&s, ep));
+    try testing.expectEqualStrings("staged", try status(&s, entry_id));
     try testing.expectEqual(@as(i64, 0), try scalarI64(&s, "SELECT count(*) FROM entity WHERE graph_id = $1", .{@as([]const u8, &g.bytes)}));
 }
 
@@ -569,10 +568,10 @@ test "the ledger fills a missing graph id from the entry, then from the bound gr
     defer s.close();
     const g = try store.testing.freshGraph(&s);
     const gid: []const u8 = &g.bytes;
-    const ep = try enqueueNew(&s, g, note("ledger", "ledger entry", 1_000));
+    const entry_id = try enqueueNew(&s, g, note("ledger", "ledger entry", 1_000));
 
     const ledger = s.ledger();
-    try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .entry_id = ep, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = nowMicros(s.io) });
+    try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .entry_id = entry_id, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = nowMicros(s.io) });
     try testing.expectError(error.PG, ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = nowMicros(s.io) }));
     _ = s.sink(g);
     try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = nowMicros(s.io) });

@@ -3,7 +3,7 @@ const core = @import("core");
 const tailer_mod = @import("tailer.zig");
 const watch = @import("watch.zig");
 const state = @import("state.zig");
-const hooks = @import("hooks.zig");
+const spool = @import("hooks_spool.zig");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Environ = std.process.Environ;
@@ -140,10 +140,10 @@ pub const Capture = struct {
         const sd = c.state_dir orelse return 0;
         var arena: std.heap.ArenaAllocator = .init(c.gpa);
         defer arena.deinit();
-        return hooks.drainSpool(arena.allocator(), c.io, sd, c, replayOne);
+        return spool.drain(arena.allocator(), c.io, sd, c, replayOne);
     }
 
-    fn replayOne(c: *Capture, entry: hooks.SpoolEntry) anyerror!void {
+    fn replayOne(c: *Capture, entry: spool.Entry) anyerror!void {
         const harness = std.meta.stringToEnum(core.Harness, entry.harness) orelse return;
         const path = entry.transcript_path orelse return;
         _ = try c.flush(harness, path);

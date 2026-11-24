@@ -1,7 +1,6 @@
 const std = @import("std");
 const core = @import("core");
 const store = @import("store");
-const pg = @import("pg");
 const db = @import("db.zig");
 const time = @import("time.zig");
 const mod = @import("mod.zig");
@@ -62,9 +61,8 @@ const as_of = "coalesce($3::timestamptz, now())";
 
 const facts_sql =
     \\SELECT 
-++ db.hit_columns ++
+++ db.hit_columns ++ db.hit_from ++
     \\
-    \\FROM fact f JOIN entity se ON se.id = f.subject_id LEFT JOIN entity oe ON oe.id = f.object_id
     \\WHERE f.graph_id = $1 AND (f.subject_id = $2 OR f.object_id = $2)
     \\  AND ($5::bool OR upper_inf(f.known))
     \\  AND (f.valid @> 
@@ -94,9 +92,8 @@ const neighbors_sql =
     \\)
     \\SELECT n.id, n.graph_id, n.name, n.norm, n.type, n.description, n.summary, n.deg, x.* FROM n LEFT JOIN LATERAL (
     \\  SELECT 
-++ db.hit_columns ++
+++ db.hit_columns ++ db.hit_from ++
     \\
-    \\  FROM fact f JOIN entity se ON se.id = f.subject_id LEFT JOIN entity oe ON oe.id = f.object_id
     \\  WHERE $4::int = 2 AND f.graph_id = $1 AND (f.subject_id = n.id OR f.object_id = n.id)
     \\    AND f.subject_id <> $2 AND f.object_id IS DISTINCT FROM $2
     \\    AND upper_inf(f.known) AND f.valid @> 
@@ -196,9 +193,8 @@ pub const ForgetResult = struct {
 
 const candidates_sql =
     \\SELECT 
-++ db.hit_columns ++
+++ db.hit_columns ++ db.hit_from ++
     \\
-    \\FROM fact f JOIN entity se ON se.id = f.subject_id LEFT JOIN entity oe ON oe.id = f.object_id
     \\WHERE f.graph_id = $1 AND upper_inf(f.known)
     \\  AND (($2::uuid IS NOT NULL AND f.id = $2::uuid)
     \\    OR ($3::text IS NOT NULL AND (f.tsv @@ plainto_tsquery('english', $3::text) OR f.text ILIKE '%' || $3::text || '%')))

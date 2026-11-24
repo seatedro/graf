@@ -3,17 +3,12 @@ const core = @import("core");
 
 pub const time = @import("time.zig");
 pub const fixtures = @import("fixtures.zig");
+pub const match = @import("match.zig");
 pub const score = @import("score.zig");
 pub const pgload = @import("pgload.zig");
 pub const runner = @import("runner.zig");
 pub const cli = @import("cli.zig");
 
-pub const Suite = fixtures.Suite;
-pub const GraphState = score.GraphState;
-pub const Report = score.Report;
-pub const RunOptions = runner.RunOptions;
-pub const run = runner.run;
-pub const loadGraphState = pgload.loadGraphState;
 pub const main = cli.main;
 
 pub const EvalEntry = struct {

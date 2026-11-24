@@ -205,12 +205,16 @@ pub fn estimateTokens(turn: core.Turn) usize {
 
 pub fn dupeTurn(arena: Allocator, turn: core.Turn) Allocator.Error!core.Turn {
     const calls = try arena.alloc(core.ToolCall, turn.tool_calls.len);
-    for (turn.tool_calls, calls) |src, *dst| dst.* = .{
-        .name = try arena.dupe(u8, src.name),
-        .args_preview = try arena.dupe(u8, src.args_preview),
-        .result_preview = try arena.dupe(u8, src.result_preview),
-    };
+    for (turn.tool_calls, calls) |src, *dst| dst.* = try dupeToolCall(arena, src);
     return .{ .role = turn.role, .text = try arena.dupe(u8, turn.text), .tool_calls = calls, .ts = turn.ts };
+}
+
+pub fn dupeToolCall(arena: Allocator, call: core.ToolCall) Allocator.Error!core.ToolCall {
+    return .{
+        .name = try arena.dupe(u8, call.name),
+        .args_preview = try arena.dupe(u8, call.args_preview),
+        .result_preview = try arena.dupe(u8, call.result_preview),
+    };
 }
 
 pub fn parseTimestamp(s: []const u8) ?core.Micros {

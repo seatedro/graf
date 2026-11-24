@@ -2,35 +2,12 @@ const std = @import("std");
 const core = @import("core");
 const mod = @import("mod.zig");
 const fixtures = @import("fixtures.zig");
+const match = @import("match.zig");
 const time = @import("time.zig");
 
 const Allocator = std.mem.Allocator;
 const Suite = fixtures.Suite;
 const EndKind = core.types.EndKind;
-
-pub fn normalize(arena: Allocator, s: []const u8) Allocator.Error![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    var gap = false;
-    var i: usize = 0;
-    while (i < s.len) {
-        const c = s[i];
-        if (c == '\'' or c == '`') {
-            i += 1;
-            continue;
-        }
-        if (c == 0xE2 and i + 2 < s.len and s[i + 1] == 0x80 and (s[i + 2] == 0x98 or s[i + 2] == 0x99)) {
-            i += 3;
-            continue;
-        }
-        if (std.ascii.isAlphanumeric(c) or c >= 0x80) {
-            if (gap and out.items.len > 0) try out.append(arena, ' ');
-            gap = false;
-            try out.append(arena, std.ascii.toLower(c));
-        } else gap = true;
-        i += 1;
-    }
-    return out.items;
-}
 
 pub const Entity = struct {
     key: []const u8,
@@ -139,102 +116,6 @@ pub const Report = struct {
     findings: []const []const u8,
 };
 
-const TypeClass = enum { person, group, software, data, activity, concept, other };
-
-fn typeClass(t: core.EntityType) TypeClass {
-    return switch (t) {
-        .person => .person,
-        .organization => .group,
-        .project, .repository, .code, .software, .ai_model, .environment => .software,
-        .dataset, .document => .data,
-        .decision, .task, .change, .session, .run, .problem, .event => .activity,
-        .concept => .concept,
-        .other => .other,
-    };
-}
-
-pub fn typesCompatible(a: core.EntityType, b: core.EntityType) bool {
-    const ca = typeClass(a);
-    const cb = typeClass(b);
-    return ca == cb or ca == .other or cb == .other;
-}
-
-const Canon = struct { name: []const u8, inverse: bool };
-
-const relation_equivalents = [_]struct { []const u8, []const u8, bool }{
-    .{ "owns", "owned_by", true },
-    .{ "maintained_by", "maintains", true },
-    .{ "has_part", "part_of", true },
-    .{ "contains", "part_of", true },
-    .{ "oncall_for", "has_oncall", true },
-    .{ "on_call_for", "has_oncall", true },
-    .{ "is_oncall_for", "has_oncall", true },
-    .{ "has_on_call", "has_oncall", false },
-    .{ "oncall", "has_oncall", false },
-    .{ "hosted_on", "located_at", false },
-    .{ "hosted_at", "located_at", false },
-    .{ "runs_on", "located_at", false },
-    .{ "deployed_on", "located_at", false },
-    .{ "located_in", "located_at", false },
-    .{ "lives_in", "located_at", false },
-    .{ "depends_on", "uses", false },
-    .{ "built_with", "uses", false },
-    .{ "written_in", "uses", false },
-    .{ "implemented_in", "uses", false },
-    .{ "routes_through", "uses", false },
-    .{ "routes_via", "uses", false },
-    .{ "has_feature", "supports_feature", false },
-    .{ "supports", "supports_feature", false },
-    .{ "missing_feature", "lacks_feature", false },
-    .{ "lacks", "lacks_feature", false },
-    .{ "decided_against", "rejected", false },
-    .{ "compared_with", "related_to", false },
-    .{ "compared_to", "related_to", false },
-    .{ "compared_against", "related_to", false },
-    .{ "scheduled_on", "scheduled_for", false },
-    .{ "scheduled_at", "scheduled_for", false },
-};
-
-pub fn canonicalRelation(arena: Allocator, relation: []const u8) Allocator.Error!Canon {
-    const norm = try normalize(arena, relation);
-    const name = try arena.dupe(u8, norm);
-    std.mem.replaceScalar(u8, name, ' ', '_');
-    for (relation_equivalents) |e| {
-        if (std.mem.eql(u8, e[0], name)) return .{ .name = e[1], .inverse = e[2] };
-    }
-    return .{ .name = name, .inverse = false };
-}
-
-pub fn valueMatch(arena: Allocator, gold: []const u8, got: []const u8) Allocator.Error!u8 {
-    const a = try normalize(arena, gold);
-    const b = try normalize(arena, got);
-    if (a.len == 0 or b.len == 0) return 0;
-    if (std.mem.eql(u8, a, b)) return 2;
-    if (time.parseLooseDate(gold)) |ta| if (time.parseLooseDate(got)) |tb| if (time.withinOneDay(ta, tb)) return 2;
-    const short, const long = if (a.len <= b.len) .{ a, b } else .{ b, a };
-    var it = std.mem.tokenizeScalar(u8, short, ' ');
-    while (it.next()) |tok| {
-        var found = false;
-        var lit = std.mem.tokenizeScalar(u8, long, ' ');
-        while (lit.next()) |other| found = found or std.mem.eql(u8, tok, other);
-        if (!found) return 0;
-    }
-    return 1;
-}
-
-fn containsWord(haystack: []const u8, word: []const u8) bool {
-    if (word.len == 0) return false;
-    var start: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, start, word)) |at| {
-        const before_ok = at == 0 or !std.ascii.isAlphanumeric(haystack[at - 1]);
-        const end = at + word.len;
-        const after_ok = end == haystack.len or !std.ascii.isAlphanumeric(haystack[end]);
-        if (before_ok and after_ok) return true;
-        start = at + 1;
-    }
-    return false;
-}
-
 fn ratio(num: u32, den: u32) f64 {
     if (den == 0) return 0;
     return @as(f64, @floatFromInt(num)) / @as(f64, @floatFromInt(den));
@@ -293,8 +174,8 @@ const Scorer = struct {
         const gold_names = try a.alloc([]const []const u8, golds.len);
         for (golds, 0..) |g, i| {
             const names = try a.alloc([]const u8, g.aliases.len + 1);
-            names[0] = try normalize(a, g.name);
-            for (g.aliases, 1..) |alias, j| names[j] = try normalize(a, alias);
+            names[0] = try match.normalize(a, g.name);
+            for (g.aliases, 1..) |alias, j| names[j] = try match.normalize(a, alias);
             gold_names[i] = names;
         }
         sc.gold_names = gold_names;
@@ -304,8 +185,8 @@ const Scorer = struct {
         for (ents, 0..) |e, i| {
             try sc.entity_index.put(a, e.key, i);
             const names = try a.alloc([]const u8, e.aliases.len + 1);
-            names[0] = try normalize(a, e.name);
-            for (e.aliases, 1..) |alias, j| names[j] = try normalize(a, alias);
+            names[0] = try match.normalize(a, e.name);
+            for (e.aliases, 1..) |alias, j| names[j] = try match.normalize(a, alias);
             entity_names[i] = names;
         }
         sc.entity_names = entity_names;
@@ -355,10 +236,10 @@ const Scorer = struct {
     fn typedLabel(sc: *Scorer, i: usize, t: core.EntityType) ?usize {
         for (sc.entity_names[i]) |n| {
             for (sc.suite.entities(), 0..) |g, gi| {
-                if (typesCompatible(t, g.type) and std.mem.eql(u8, sc.gold_names[gi][0], n)) return gi;
+                if (match.typesCompatible(t, g.type) and std.mem.eql(u8, sc.gold_names[gi][0], n)) return gi;
             }
             for (sc.suite.entities(), 0..) |g, gi| {
-                if (!typesCompatible(t, g.type)) continue;
+                if (!match.typesCompatible(t, g.type)) continue;
                 for (sc.gold_names[gi][1..]) |alias| if (std.mem.eql(u8, alias, n)) return gi;
             }
         }
@@ -438,7 +319,7 @@ const Scorer = struct {
                 continue;
             }
             const target = found.first.?;
-            const mention = try normalize(sc.arena, m.mention);
+            const mention = try match.normalize(sc.arena, m.mention);
             var ok = true;
             for (sc.state.entities, 0..) |e, i| {
                 if (!contains(sc.entity_names[i], mention)) continue;
@@ -491,8 +372,8 @@ const Scorer = struct {
 
     fn matchStrength(sc: *Scorer, d: Fact, gi: usize) !u8 {
         const g = sc.suite.facts[gi].fact;
-        const cp = try canonicalRelation(sc.arena, d.relation);
-        const gp = try canonicalRelation(sc.arena, g.relation);
+        const cp = try match.canonicalRelation(sc.arena, d.relation);
+        const gp = try match.canonicalRelation(sc.arena, g.relation);
         if (!std.mem.eql(u8, cp.name, gp.name)) return 0;
         var subject = d.subject;
         var object = d.object;
@@ -506,23 +387,23 @@ const Scorer = struct {
         }
         if (sc.entityLabel(subject) != sc.suite.entityIndex(g.subject)) return 0;
         if (g.qualifier) |q| {
-            if (!std.mem.eql(u8, try normalize(sc.arena, q), try normalize(sc.arena, d.qualifier))) return 0;
+            if (!std.mem.eql(u8, try match.normalize(sc.arena, q), try match.normalize(sc.arena, d.qualifier))) return 0;
         }
         if (g.object) |go| {
             const want = sc.suite.entityIndex(go) orelse return 0;
             switch (object) {
                 .entity => |k| return if (sc.entityLabel(k) == want) 2 else 0,
                 .value => |v| {
-                    const nv = try normalize(sc.arena, v);
+                    const nv = try match.normalize(sc.arena, v);
                     return if (contains(sc.gold_names[want], nv)) 1 else 0;
                 },
             }
         }
         const gv = g.object_value orelse return 0;
         switch (object) {
-            .value => |v| return valueMatch(sc.arena, gv, v),
+            .value => |v| return match.valueMatch(sc.arena, gv, v),
             .entity => |k| {
-                for (sc.objectNames(k)) |n| if (try valueMatch(sc.arena, gv, n) > 0) return 1;
+                for (sc.objectNames(k)) |n| if (try match.valueMatch(sc.arena, gv, n) > 0) return 1;
                 return 0;
             },
         }
@@ -555,16 +436,16 @@ const Scorer = struct {
     }
 
     fn patternHit(sc: *Scorer, d: Fact) !?usize {
-        const cp = try canonicalRelation(sc.arena, d.relation);
+        const cp = try match.canonicalRelation(sc.arena, d.relation);
         if (cp.inverse) return null;
         for (sc.patterns, 0..) |p, pi| {
-            const pp = try canonicalRelation(sc.arena, p.relation);
+            const pp = try match.canonicalRelation(sc.arena, p.relation);
             if (!std.mem.eql(u8, cp.name, pp.name)) continue;
             if (sc.entityLabel(d.subject) != p.subject) continue;
             const hit = switch (d.object) {
-                .value => |v| try valueMatch(sc.arena, p.object, v) > 0,
+                .value => |v| try match.valueMatch(sc.arena, p.object, v) > 0,
                 .entity => |k| blk: {
-                    for (sc.objectNames(k)) |n| if (try valueMatch(sc.arena, p.object, n) > 0) break :blk true;
+                    for (sc.objectNames(k)) |n| if (try match.valueMatch(sc.arena, p.object, n) > 0) break :blk true;
                     break :blk false;
                 },
             };
@@ -825,7 +706,7 @@ const Scorer = struct {
             }
             for (q.must_exclude_substrings) |word| {
                 for (top) |h| {
-                    if (!containsWord(sc.hitText(h), word)) continue;
+                    if (!match.containsWord(sc.hitText(h), word)) continue;
                     violations += 1;
                     try sc.note("retrieval: {s} returned text containing '{s}'", .{ q.id, word });
                     break;
@@ -1047,42 +928,6 @@ fn expectGate(report: Report, metric: []const u8, want: mod.Gate.Status) !void {
     return error.UnknownMetric;
 }
 
-test "normalizer folds punctuation, case, and apostrophes" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    try testing.expectEqualStrings("pg zig", try normalize(arena, "pg.zig"));
-    try testing.expectEqualStrings("pg zig", try normalize(arena, "  PG-zig "));
-    try testing.expectEqualStrings("pg zig", try normalize(arena, "pg_zig"));
-    try testing.expectEqualStrings("karlseguins driver", try normalize(arena, "karlseguin's  driver"));
-    try testing.expectEqualStrings("karlseguins driver", try normalize(arena, "karlseguin\u{2019}s driver"));
-    try testing.expectEqualStrings("brackwater buoy", try normalize(arena, "brackwater-buoy"));
-    try testing.expectEqualStrings("brackwater", try normalize(arena, "Brackwater"));
-    try testing.expectEqualStrings("brackwater harbor ops", try normalize(arena, "brackwater/harbor-ops"));
-    try testing.expectEqualStrings("surge net 2 0 lite", try normalize(arena, "surge-net-2.0-lite"));
-    try testing.expectEqualStrings("", try normalize(arena, " -- "));
-}
-
-test "relations and values match through the equivalence rules" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const owns = try canonicalRelation(arena, "Owns");
-    try testing.expectEqualStrings("owned_by", owns.name);
-    try testing.expect(owns.inverse);
-    try testing.expectEqualStrings("has_setting", (try canonicalRelation(arena, "has-setting")).name);
-    try testing.expectEqual(@as(u8, 2), try valueMatch(arena, "COPY", "copy"));
-    try testing.expectEqual(@as(u8, 1), try valueMatch(arena, "COPY", "COPY support"));
-    try testing.expectEqual(@as(u8, 2), try valueMatch(arena, "2026-12-03", "December 3, 2026"));
-    try testing.expectEqual(@as(u8, 0), try valueMatch(arena, "pipelining", "COPY"));
-    try testing.expect(containsWord("Quayline uses Go.", "Go"));
-    try testing.expect(!containsWord("Google", "Go"));
-    try testing.expect(typesCompatible(.software, .software));
-    try testing.expect(!typesCompatible(.organization, .software));
-    try testing.expect(!typesCompatible(.dataset, .software));
-    try testing.expect(typesCompatible(.other, .person));
-}
-
 test "the gold state passes every gate" {
     const f = try Fixture.init();
     defer f.deinit();
@@ -1250,7 +1095,7 @@ test "a valid_from three days off fails temporal grounding" {
     const f = try Fixture.init();
     defer f.deinit();
     const juno = f.fact("f_mooring_oncall_juno");
-    juno.valid.lower = juno.valid.lower.? + 3 * time.us_per_day;
+    juno.valid.lower = juno.valid.lower.? + 3 * std.time.us_per_day;
     const report = try f.score();
     try testing.expectEqual(@as(u32, 6), report.detail.temporal_correct);
     try expectGate(report, "temporal_accuracy", .fail);

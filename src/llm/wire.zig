@@ -304,10 +304,7 @@ pub fn decodeEmbeddings(arena: std.mem.Allocator, body: []const u8, n_inputs: us
 
     var out: DecodedEmbeddings = .{ .vectors = vectors };
     if (obj(root.get("usage"))) |u| out.usage.input_tokens = int(u, "prompt_tokens");
-    var tmp: Decoded = .{ .text = "" };
-    readBodyCost(root, &tmp);
-    out.body_cost = tmp.body_cost;
-    out.body_cost_status = tmp.body_cost_status;
+    readBodyCost(root, &out);
     return out;
 }
 
@@ -319,7 +316,7 @@ pub fn errorMessage(arena: std.mem.Allocator, body: []const u8) []const u8 {
     return body;
 }
 
-fn readBodyCost(root: std.json.ObjectMap, out: anytype) void {
+pub fn readBodyCost(root: std.json.ObjectMap, out: anytype) void {
     const u = obj(root.get("usage")) orelse return;
     out.body_cost = if (u.get("cost")) |c| number(c) else null;
     if (str(u.get("cost_status"))) |s| out.body_cost_status = std.meta.stringToEnum(CostStatus, s);

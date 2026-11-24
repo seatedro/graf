@@ -1,6 +1,5 @@
 const std = @import("std");
 const core = @import("core");
-const time = @import("time.zig");
 
 pub const rrf_k = 60.0;
 pub const weight_vec = 1.0;
@@ -62,7 +61,7 @@ pub fn confidenceFactor(confidence: f32) f64 {
 
 pub fn ageDays(as_of: core.Micros, since: ?core.Micros) f64 {
     const s = since orelse return 365.0;
-    return @as(f64, @floatFromInt(as_of - s)) / @as(f64, @floatFromInt(time.us_per_day));
+    return @as(f64, @floatFromInt(as_of - s)) / std.time.us_per_day;
 }
 
 pub fn cosine(a: []const f32, b: []const f32) f64 {

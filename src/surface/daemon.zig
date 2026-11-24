@@ -5,7 +5,6 @@ const llm = @import("llm");
 const ingest = @import("ingest");
 const capture = @import("capture");
 const retrieve = @import("retrieve");
-const api = @import("api.zig");
 const http = @import("http.zig");
 const service = @import("service.zig");
 const Allocator = std.mem.Allocator;
@@ -118,7 +117,7 @@ pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: 
     };
     if (replayed > 0) log.info("replayed {d} spooled hook flushes", .{replayed});
 
-    var svc: service.Service = .{ .gpa = gpa, .io = io, .engine = &rt.engine, .sink = sink, .flusher = flusher(&cap), .remember_harness = .api };
+    var svc: service.Service = .{ .gpa = gpa, .io = io, .engine = &rt.engine, .sink = sink, .flusher = flusher(&cap) };
     defer svc.deinit();
 
     if (opts.socket_path) |p| if (std.fs.path.dirname(p)) |dir| Io.Dir.cwd().createDirPath(io, dir) catch {};

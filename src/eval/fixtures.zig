@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const time = @import("time.zig");
+const match = @import("match.zig");
 const EvalEntry = @import("mod.zig").EvalEntry;
 
 pub const TimeBasis = enum { explicit, relative, reference };
@@ -119,11 +120,6 @@ pub const Suite = struct {
         const g = s.gold(entry_id) orelse return false;
         return g.skip;
     }
-
-    pub fn query(s: *const Suite, id: []const u8) ?RetrievalQuery {
-        for (s.expected.retrieval_queries) |q| if (std.mem.eql(u8, q.id, id)) return q;
-        return null;
-    }
 };
 
 pub fn parseEntries(arena: std.mem.Allocator, jsonl: []const u8) ![]const EvalEntry {
@@ -168,15 +164,14 @@ pub const Pattern = struct {
 };
 
 pub fn parsePattern(arena: std.mem.Allocator, suite: *const Suite, text: []const u8) !?Pattern {
-    const normalize = @import("score.zig").normalize;
-    const norm = try normalize(arena, text);
+    const norm = try match.normalize(arena, text);
     var best: ?struct { entity: usize, len: usize } = null;
     for (suite.entities(), 0..) |e, i| {
         var names: std.ArrayList([]const u8) = .empty;
         try names.append(arena, e.name);
         try names.appendSlice(arena, e.aliases);
         for (names.items) |name| {
-            const n = try normalize(arena, name);
+            const n = try match.normalize(arena, name);
             if (n.len == 0 or n.len >= norm.len) continue;
             if (!std.mem.startsWith(u8, norm, n) or norm[n.len] != ' ') continue;
             if (best == null or n.len > best.?.len) best = .{ .entity = i, .len = n.len };

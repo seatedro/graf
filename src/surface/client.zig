@@ -12,11 +12,6 @@ pub const Target = union(enum) {
     tcp: []const u8,
 };
 
-pub const Response = struct {
-    status: u16,
-    body: []const u8,
-};
-
 pub const Client = struct {
     io: Io,
     target: Target,
@@ -26,7 +21,7 @@ pub const Client = struct {
         return .{ .io = io, .target = target, .token = token };
     }
 
-    pub fn request(c: *const Client, arena: Allocator, method: std.http.Method, path: []const u8, body: ?[]const u8) !Response {
+    pub fn request(c: *const Client, arena: Allocator, method: std.http.Method, path: []const u8, body: ?[]const u8) !api.Reply {
         const stream = try c.connect();
         defer stream.close(c.io);
 
@@ -84,8 +79,7 @@ pub const Client = struct {
     fn handle(ptr: *anyopaque, arena: Allocator, req: api.Request) anyerror!api.Reply {
         const c: *Client = @ptrCast(@alignCast(ptr));
         const call = try route(arena, req);
-        const response = try c.request(arena, call.method, call.path, call.body);
-        return .{ .status = response.status, .body = response.body };
+        return c.request(arena, call.method, call.path, call.body);
     }
 
     fn connect(c: *const Client) !net.Stream {
@@ -161,10 +155,6 @@ pub const EnsureOptions = struct {
     args: []const []const u8 = &.{},
     spawn: Spawn = spawnDetached,
 };
-
-pub fn ensureDaemon(arena: Allocator, io: Io, env: *const std.process.Environ.Map, client: *const Client, exe_path: []const u8) !void {
-    return ensureDaemonWith(arena, io, env, client, exe_path, .{});
-}
 
 pub fn ensureDaemonWith(
     arena: Allocator,
