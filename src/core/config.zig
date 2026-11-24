@@ -5,6 +5,8 @@ const Environ = std.process.Environ;
 
 pub const Route = enum { @"openai-responses", @"anthropic-messages", @"openai-chat" };
 
+pub const DecisionWire = enum { generic, stateful };
+
 pub const Config = struct {
     graph: []const u8 = "default",
     database: Database = .{},
@@ -50,6 +52,8 @@ pub const Config = struct {
         api_key: []const u8 = "",
         path: []const u8 = "",
         model: []const u8 = "",
+        wire: DecisionWire = .generic,
+        cost_header: []const u8 = "",
         dup_threshold: f64 = 0.70,
         contradict_threshold: f64 = 0.80,
         rerank_timeout_ms: u32 = 400,
@@ -110,6 +114,7 @@ pub const env_vars = [_]struct { []const u8, []const u8, []const u8 }{
     .{ "GRAF_SERVE_TOKEN", "serve", "token" },
     .{ "GRAF_UPSTREAM_URL", "edge", "upstream" },
     .{ "GRAF_UPSTREAM_TOKEN", "edge", "token" },
+    .{ "GRAF_DECISION_MODEL", "decision", "model" },
     .{ "GRAF_EVAL_JUDGE_MODEL", "eval", "judge_model" },
     .{ "GRAF_EVAL_JUDGE_ROUTE", "eval", "judge_route" },
     .{ "GRAF_EVAL_JUDGE_BASE_URL", "eval", "judge_base_url" },
@@ -223,6 +228,7 @@ fn resolveInheritance(cfg: *Config) void {
     if (cfg.embed.base_url.len == 0) cfg.embed.base_url = cfg.llm.base_url;
     if (cfg.embed.api_key.len == 0) cfg.embed.api_key = cfg.llm.api_key;
     if (cfg.embed.cost_header.len == 0) cfg.embed.cost_header = cfg.llm.cost_header;
+    if (cfg.decision.cost_header.len == 0) cfg.decision.cost_header = cfg.llm.cost_header;
 }
 
 pub fn writeMasked(cfg: *const Config, w: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -428,4 +434,23 @@ test "hub and edge settings come from the file and the environment" {
     try writeMasked(&cfg, &out.writer);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "secret") == null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "[edge]") != null);
+}
+
+test "decision wire format and cost header inheritance" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    var diag: toml.Diagnostic = .{};
+    const cfg = try parse(arena_state.allocator(),
+        \\[llm]
+        \\cost_header = "x-cost-usd"
+        \\[decision]
+        \\base_url = "https://decide.example.test"
+        \\wire = "stateful"
+        \\
+    , &diag);
+    try std.testing.expectEqual(DecisionWire.stateful, cfg.decision.wire);
+    try std.testing.expectEqualStrings("x-cost-usd", cfg.decision.cost_header);
+    const defaults = try parse(arena_state.allocator(), "", &diag);
+    try std.testing.expectEqual(DecisionWire.generic, defaults.decision.wire);
+    try std.testing.expectError(error.InvalidConfig, parse(arena_state.allocator(), "[decision]\nwire = \"other\"\n", &diag));
 }

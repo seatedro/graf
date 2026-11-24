@@ -216,3 +216,45 @@ test "a missing model configuration hands the entry back untouched and surfaces 
     try testing.expectEqual(core.types.EntryStatus.queued, h.backend.row(entry).status);
     try testing.expectEqual(@as(i32, 0), h.backend.row(entry).attempts);
 }
+
+test "the decision model resolves with the entry as shared state, and a failing backend falls back to the structured call" {
+    var h = try Harness.init();
+    defer h.deinit();
+    h.model.decision_enabled = true;
+    _ = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
+    _ = try h.backend.add("session-b", at("2026-11-20T18:00:00Z"), null, turns("Heads up: Juno took over on call for Relay starting today at 17:00 UTC."));
+    try h.model.push(.{ .json = relay_hollis });
+    try testing.expectEqual(ingest.Outcome.committed, try h.step());
+    try testing.expectEqual(@as(usize, 0), h.model.decisions.items.len);
+
+    h.model.decision_answers = &.{.{ .choice = &.{ 0.02, 0.1, 0.85, 0.03 } }};
+    try h.model.push(.{ .json = relay_juno });
+    try testing.expectEqual(ingest.Outcome.committed, try h.step());
+    try testing.expectEqual(@as(u32, 0), h.model.count(.resolve));
+    try testing.expectEqual(@as(usize, 1), h.model.decisions.items.len);
+    const sent = h.model.decisions.items[0];
+    try testing.expectEqual(core.types.LlmPurpose.resolve, sent.purpose);
+    try testing.expectEqual(@as(usize, 1), sent.state.len);
+    try testing.expectEqualStrings("entry", sent.state[0].name);
+    try testing.expect(std.mem.indexOf(u8, sent.state[0].text, "Juno took over on call") != null);
+    try testing.expectEqual(@as(usize, 1), sent.questions.len);
+    try testing.expect(std.mem.indexOf(u8, sent.questions[0].choice.prompt, "Juno took over") == null);
+    var retracted: usize = 0;
+    for (h.backend.facts.items) |f| if (f.fact.end_kind == .retracted) {
+        retracted += 1;
+    };
+    try testing.expectEqual(@as(usize, 1), retracted);
+
+    var g = try Harness.init();
+    defer g.deinit();
+    g.model.decision_enabled = true;
+    _ = try g.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
+    _ = try g.backend.add("session-b", at("2026-11-20T18:00:00Z"), null, turns("Heads up: Juno took over on call for Relay starting today at 17:00 UTC."));
+    try g.model.push(.{ .json = relay_hollis });
+    try testing.expectEqual(ingest.Outcome.committed, try g.step());
+    try g.model.push(.{ .json = relay_juno });
+    try g.model.push(.{ .json = "{\"entity_links\":[],\"fact_verdicts\":[{\"fact_index\":0,\"duplicate_of\":null,\"contradicts\":[{\"fact\":\"F1\",\"kind\":\"changed\",\"at\":null}]}]}" });
+    try testing.expectEqual(ingest.Outcome.committed, try g.step());
+    try testing.expectEqual(@as(usize, 1), g.model.decisions.items.len);
+    try testing.expectEqual(@as(u32, 1), g.model.count(.resolve));
+}

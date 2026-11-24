@@ -1,0 +1,4 @@
+HTTP/1.1 200 OK
+content-type: application/json
+
+{"model":"decider-2.1","answers":{"q0":{"type":"noul","noul":0.12},"q1":{"type":"choice","choice":"none","confidence":0.7,"probabilities":{"E1":0.2,"E2":0.05,"none":0.75}}},"usage":{"input_tokens":1000,"output_tokens":50}}

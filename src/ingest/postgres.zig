@@ -43,8 +43,8 @@ pub const ClientModel = struct {
         return m.client.embed(arena, req) catch |err| return m.capture(&slot, err);
     }
 
-    pub fn decide(m: *ClientModel, arena: Allocator, purpose: core.types.LlmPurpose, questions: []const llm.Question) ![]const llm.Answer {
-        return m.client.decide(arena, purpose, questions);
+    pub fn decide(m: *ClientModel, arena: Allocator, req: llm.DecisionRequest) ![]const llm.Answer {
+        return m.client.decide(arena, req);
     }
 
     pub fn decisionEnabled(m: *ClientModel) bool {

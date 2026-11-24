@@ -536,12 +536,56 @@ test "decision-model probabilities become a verdict" {
     };
     const p = try resolve.plan(arena, checked, prefetch);
     const q = try resolve.decisionQuestions(arena, p, checked, prefetch);
-    try testing.expectEqual(@as(usize, 3), q.questions.len);
-    const v = try resolve.verdictFromProbabilities(arena, p, q.questions, &.{ 0.1, 0.92, 0.85 }, .{});
-    try testing.expect(v.duplicates[0] == null);
-    try testing.expectEqual(@as(usize, 1), v.contradictions[0].len);
-    try testing.expectEqual(ingest.ConflictKind.was_wrong, v.contradictions[0][0].kind);
-    const v2 = try resolve.verdictFromProbabilities(arena, p, q.questions, &.{ 0.9, 0.95, 0.1 }, .{});
-    try testing.expect(v2.duplicates[0].?.eql(old));
-    try testing.expectEqual(@as(usize, 0), v2.contradictions[0].len);
+    try testing.expectEqual(@as(usize, 1), q.questions.len);
+    try testing.expectEqual(resolve.relation_options.len, q.asks[0].choice.options.len);
+    try testing.expect(std.mem.indexOf(u8, q.asks[0].choice.prompt, "Lantern uses Go.") != null);
+
+    const corrected = try resolve.verdictFromAnswers(arena, p, q.questions, &.{.{ .choice = &.{ 0.05, 0.1, 0.8, 0.05 } }}, .{});
+    try testing.expect(corrected.duplicates[0] == null);
+    try testing.expectEqual(@as(usize, 1), corrected.contradictions[0].len);
+    try testing.expectEqual(ingest.ConflictKind.was_wrong, corrected.contradictions[0][0].kind);
+
+    const changed = try resolve.verdictFromAnswers(arena, p, q.questions, &.{.{ .choice = &.{ 0.1, 0.45, 0.4, 0.05 } }}, .{});
+    try testing.expectEqual(ingest.ConflictKind.changed, changed.contradictions[0][0].kind);
+
+    const same = try resolve.verdictFromAnswers(arena, p, q.questions, &.{.{ .choice = &.{ 0.9, 0.03, 0.02, 0.05 } }}, .{});
+    try testing.expect(same.duplicates[0].?.eql(old));
+    try testing.expectEqual(@as(usize, 0), same.contradictions[0].len);
+
+    const unsure = try resolve.verdictFromAnswers(arena, p, q.questions, &.{.{ .choice = &.{ 0.3, 0.3, 0.1, 0.3 } }}, .{});
+    try testing.expect(unsure.duplicates[0] == null);
+    try testing.expectEqual(@as(usize, 0), unsure.contradictions[0].len);
+}
+
+test "a gray-band entity links to the candidate the decision model picks with enough probability" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const driver = id(20);
+    const unrelated = id(21);
+    const raw: ingest.ExtractResult = .{ .skip = null, .entities = &.{ent("n1", "the zig driver", .software)}, .facts = &.{}, .new_relations = &.{} };
+    const checked = try extract.check(arena, raw, "the zig driver needs a separate branch per Zig release", at("2026-11-20T16:30:00Z"));
+    const prefetch: resolve.Prefetch = .{ .entities = &.{
+        .{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .software, .cosine = 0.84 },
+        .{ .item = 0, .id = unrelated, .name = "zig", .norm = "zig", .type = .software, .cosine = 0.60 },
+    } };
+    const p = try resolve.plan(arena, checked, prefetch);
+    const q = try resolve.decisionQuestions(arena, p, checked, prefetch);
+    try testing.expectEqual(@as(usize, 1), q.questions.len);
+    const options = q.asks[0].choice.options;
+    try testing.expectEqual(q.questions[0].targets.len + 1, options.len);
+    try testing.expectEqualStrings("none", options[options.len - 1].name);
+
+    const probs = try arena.alloc(f64, options.len);
+    @memset(probs, 0);
+    probs[0] = 0.85;
+    probs[options.len - 1] = 0.15;
+    const linked = try resolve.verdictFromAnswers(arena, p, q.questions, &.{.{ .choice = probs }}, .{});
+    try testing.expect(linked.links[0].?.eql(q.questions[0].targets[0]));
+
+    @memset(probs, 0);
+    probs[0] = 0.4;
+    probs[options.len - 1] = 0.6;
+    const apart = try resolve.verdictFromAnswers(arena, p, q.questions, &.{.{ .choice = probs }}, .{});
+    try testing.expect(apart.links[0] == null);
 }

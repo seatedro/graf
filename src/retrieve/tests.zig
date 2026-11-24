@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const store = @import("store");
+const llm = @import("llm");
 const mod = @import("mod.zig");
 const render = @import("render.zig");
 
@@ -460,4 +461,76 @@ test "recall merges the warmed cache and never repeats a fact" {
     const other = try f.engine.recall(arena, "s2", "is pg-zig able to do COPY", "graf");
     try std.testing.expect(std.mem.indexOf(u8, other, "pg.zig supports COPY") != null);
     try std.testing.expectEqualStrings("", try f.engine.recall(arena, "s3", "zzzz qqqq", "graf"));
+}
+
+const StatefulDecider = struct {
+    favorite: []const u8,
+    delay_ms: i64 = 0,
+    queries: std.ArrayList([]const u8) = .empty,
+
+    fn transport(d: *StatefulDecider) llm.Transport {
+        return .{ .ptr = d, .vtable = &.{ .send = send } };
+    }
+
+    fn send(ptr: *anyopaque, io: std.Io, arena: std.mem.Allocator, req: *const llm.transport.Request) std.mem.Allocator.Error!llm.transport.Result {
+        const d: *StatefulDecider = @ptrCast(@alignCast(ptr));
+        if (d.delay_ms > 0) io.sleep(.fromMilliseconds(d.delay_ms), .awake) catch
+            return .{ .failure = .{ .err = error.Canceled, .sent = true, .cancelled = true } };
+        const body = std.json.parseFromSliceLeaky(std.json.Value, arena, req.body, .{}) catch
+            return .{ .failure = .{ .err = error.BadRequest, .sent = true } };
+        try d.queries.append(std.testing.allocator, try std.testing.allocator.dupe(u8, body.object.get("state").?.object.get("query").?.string));
+        var out: std.Io.Writer.Allocating = .init(arena);
+        const w = &out.writer;
+        w.writeAll("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"answers\":{") catch return error.OutOfMemory;
+        var it = body.object.get("questions").?.object.iterator();
+        var first = true;
+        while (it.next()) |q| {
+            const text = q.value_ptr.object.get("instructions").?.string;
+            const p: f64 = if (std.mem.indexOf(u8, text, d.favorite) != null) 0.99 else 0.05;
+            w.print("{s}\"{s}\":{{\"type\":\"noul\",\"noul\":{d}}}", .{ if (first) "" else ",", q.key_ptr.*, p }) catch return error.OutOfMemory;
+            first = false;
+        }
+        w.writeAll("},\"usage\":{\"input_tokens\":120,\"output_tokens\":4}}") catch return error.OutOfMemory;
+        return .{ .response = llm.transport.parseCapture(arena, out.written(), req.capture) catch return .{ .failure = .{ .err = error.BadCapture, .sent = true } } };
+    }
+
+    fn deinit(d: *StatefulDecider) void {
+        for (d.queries.items) |q| std.testing.allocator.free(q);
+        d.queries.deinit(std.testing.allocator);
+    }
+};
+
+test "search reranks through a stateful decision endpoint and falls back when it is slow" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    const arena = f.arena.allocator();
+    const q = "what does graf use for storage";
+    f.config.decision = .{ .base_url = "https://decide.example.test", .path = "/v1/decide", .model = "decider-2", .wire = .stateful, .rerank_timeout_ms = 2_000 };
+
+    var decider: StatefulDecider = .{ .favorite = "beta" };
+    defer decider.deinit();
+    var client = llm.Client.init(std.testing.allocator, std.testing.io, &f.config, null);
+    defer client.deinit();
+    client.transport = decider.transport();
+    var backend: mod.LlmBackend = .{ .client = &client };
+    f.engine.reranker = backend.reranker();
+
+    const fast = try f.engine.search(arena, .{ .query = q, .project = "graf" });
+    try std.testing.expect(fast.reranked);
+    try std.testing.expect(fast.hits[0].fact.id.eql(f.seed.f_graf_status));
+    try std.testing.expectEqual(@as(usize, 1), decider.queries.items.len);
+    try std.testing.expectEqualStrings(q, decider.queries.items[0]);
+
+    f.config.decision.rerank_timeout_ms = 100;
+    decider.delay_ms = 3_000;
+    const start = std.Io.Timestamp.now(std.testing.io, .awake);
+    const slow = try f.engine.search(arena, .{ .query = q, .project = "graf" });
+    const elapsed_ms = @divFloor(start.durationTo(std.Io.Timestamp.now(std.testing.io, .awake)).nanoseconds, std.time.ns_per_ms);
+    try std.testing.expect(!slow.reranked);
+    try std.testing.expect(elapsed_ms < 1_500);
+    f.engine.reranker = null;
+    const plain = try f.engine.search(arena, .{ .query = q, .project = "graf" });
+    try std.testing.expectEqual(plain.hits.len, slow.hits.len);
+    for (plain.hits, slow.hits) |a, b| try std.testing.expect(a.fact.id.eql(b.fact.id));
 }

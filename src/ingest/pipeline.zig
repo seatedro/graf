@@ -123,7 +123,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             var verdict = try resolve.Verdict.none(arena, p);
             var extra_warnings: std.ArrayList([]const u8) = .empty;
             if (p.needsResolution()) {
-                switch (try d.resolutionCall(arena, lease, checked, prefetched, p, &extra_warnings)) {
+                switch (try d.resolutionCall(arena, lease, body_text, checked, prefetched, p, &extra_warnings)) {
                     .verdict => |v| verdict = v,
                     .outcome => |o| return o,
                 }
@@ -199,6 +199,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             d: *Self,
             arena: Allocator,
             lease: store.Lease,
+            body_text: []const u8,
             checked: extract.Checked,
             prefetched: resolve.Prefetch,
             p: resolve.Plan,
@@ -206,18 +207,21 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
         ) !ResolutionOutcome {
             if (d.model.decisionEnabled()) decision: {
                 const q = try resolve.decisionQuestions(arena, p, checked, prefetched);
-                var questions: std.ArrayList(llm.Question) = .empty;
-                for (q.prompts) |text| try questions.append(arena, .{ .yes_no = text });
-                const answers = d.model.decide(arena, .resolve, questions.items) catch {
+                if (q.asks.len == 0) break :decision;
+                const answers = d.model.decide(arena, .{
+                    .purpose = .resolve,
+                    .entry_id = lease.entry.id,
+                    .state = &.{.{ .name = "entry", .text = body_text }},
+                    .questions = q.asks,
+                }) catch {
                     try warnings.append(arena, "decision backend failed; used the structured resolution call");
                     break :decision;
                 };
-                var probs: std.ArrayList(f64) = .empty;
-                for (answers) |a| try probs.append(arena, switch (a) {
-                    .yes_no => |v| v,
-                    .choice => |c| if (c.len > 0) c[0] else 0,
-                });
-                return .{ .verdict = try resolve.verdictFromProbabilities(arena, p, q.questions, probs.items, .{
+                if (answers.len != q.questions.len) {
+                    try warnings.append(arena, "decision backend answered the wrong number of questions; used the structured resolution call");
+                    break :decision;
+                }
+                return .{ .verdict = try resolve.verdictFromAnswers(arena, p, q.questions, answers, .{
                     .duplicate = d.config.decision.dup_threshold,
                     .contradiction = d.config.decision.contradict_threshold,
                 }) };

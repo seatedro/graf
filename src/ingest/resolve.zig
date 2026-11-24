@@ -4,6 +4,7 @@ const ingest = @import("mod.zig");
 const rules = @import("rules.zig");
 const extract = @import("extract.zig");
 const time = @import("time.zig");
+const llm = @import("llm");
 
 const Allocator = std.mem.Allocator;
 const Id = core.Id;
@@ -432,64 +433,91 @@ pub fn interpret(arena: Allocator, p: Plan, checked: extract.Checked, r: ingest.
 }
 
 pub const Question = struct {
-    kind: enum { same_entity, duplicate, contradicts, was_wrong },
+    kind: enum { entity_link, fact_relation },
     item: usize,
-    target: Id,
+    targets: []const Id,
 };
 
-pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, prefetch: Prefetch) Allocator.Error!struct { questions: []const Question, prompts: []const []const u8 } {
+pub const Decisions = struct {
+    questions: []const Question,
+    asks: []const llm.Question,
+};
+
+pub const relation_options = [_]llm.decision.Option{
+    .{ .name = "same", .description = "the new statement says the same thing as the existing fact" },
+    .{ .name = "changed", .description = "the existing fact was true until now or until a stated time and has since stopped holding: a handoff, rotation, switch, upgrade, removal, or new release" },
+    .{ .name = "corrected", .description = "the entry says the existing fact was a mistake that was never true, for example 'that's wrong', 'I misspoke', or 'we never used it'; a switch or a change of plan is not a correction" },
+    .{ .name = "compatible", .description = "both can be true at once: the new statement adds detail or is about something else" },
+};
+
+const entity_none: llm.decision.Option = .{ .name = "none", .description = "none of the above: a different real-world entity" };
+
+pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, prefetch: Prefetch) Allocator.Error!Decisions {
     var qs: std.ArrayList(Question) = .empty;
-    var prompts: std.ArrayList([]const u8) = .empty;
+    var asks: std.ArrayList(llm.Question) = .empty;
     for (p.entities, 0..) |entry, i| {
         if (entry.decision != .ask) continue;
         const e = checked.result.entities[i];
+        var targets: std.ArrayList(Id) = .empty;
+        var options: std.ArrayList(llm.decision.Option) = .empty;
         for (entry.gray) |g| {
             const c = findEntity(prefetch, g) orelse continue;
-            try qs.append(arena, .{ .kind = .same_entity, .item = i, .target = g });
-            try prompts.append(arena, try std.fmt.allocPrint(arena, "\"{s}\" ({t}: {s}) and the existing \"{s}\" ({t}) are the same real-world entity.", .{ e.name, e.type, e.description, c.name, c.type }));
+            try targets.append(arena, g);
+            try options.append(arena, .{
+                .name = try std.fmt.allocPrint(arena, "E{d}", .{targets.items.len}),
+                .description = try std.fmt.allocPrint(arena, "the existing \"{s}\" ({t})", .{ c.name, c.type }),
+            });
         }
+        if (targets.items.len == 0) continue;
+        try options.append(arena, entity_none);
+        try qs.append(arena, .{ .kind = .entity_link, .item = i, .targets = targets.items });
+        try asks.append(arena, .{ .choice = .{
+            .prompt = try std.fmt.allocPrint(arena, "Which existing entity is the new entity \"{s}\" ({t}: {s})? Same name is not enough: a company and its product, a tool and a dataset, or two people who share a first name are different entities. A project and its repository are the same entity.", .{ e.name, e.type, e.description }),
+            .options = options.items,
+        } });
     }
     for (p.facts, 0..) |fp, j| {
         const f = checked.result.facts[j];
         for (fp.candidates) |cid| {
             const c = findFact(prefetch, cid) orelse continue;
-            try qs.append(arena, .{ .kind = .duplicate, .item = j, .target = cid });
-            try prompts.append(arena, try std.fmt.allocPrint(arena, "The new statement \"{s}\" restates the existing fact \"{s}\".", .{ f.text, c.text }));
-            try qs.append(arena, .{ .kind = .contradicts, .item = j, .target = cid });
-            try prompts.append(arena, try std.fmt.allocPrint(arena, "The new statement \"{s}\" means the existing fact \"{s}\" no longer holds or never held.", .{ f.text, c.text }));
-            try qs.append(arena, .{ .kind = .was_wrong, .item = j, .target = cid });
-            try prompts.append(arena, try std.fmt.allocPrint(arena, "The new statement \"{s}\" says the existing fact \"{s}\" was never true (a correction), rather than that it changed.", .{ f.text, c.text }));
+            try qs.append(arena, .{ .kind = .fact_relation, .item = j, .targets = try arena.dupe(Id, &.{cid}) });
+            try asks.append(arena, .{ .choice = .{
+                .prompt = try std.fmt.allocPrint(arena, "How does the new statement \"{s}\" relate to the existing fact \"{s}\"?", .{ f.text, c.text }),
+                .options = &relation_options,
+            } });
         }
     }
-    return .{ .questions = qs.items, .prompts = prompts.items };
+    return .{ .questions = qs.items, .asks = asks.items };
 }
 
-pub fn verdictFromProbabilities(arena: Allocator, p: Plan, questions: []const Question, probs: []const f64, th: Thresholds) Allocator.Error!Verdict {
+pub fn verdictFromAnswers(arena: Allocator, p: Plan, questions: []const Question, answers: []const llm.Answer, th: Thresholds) Allocator.Error!Verdict {
     const v = try Verdict.none(arena, p);
-    const link_best = try arena.alloc(f64, p.entities.len);
-    @memset(link_best, th.duplicate);
     const dup_best = try arena.alloc(f64, p.facts.len);
     @memset(dup_best, th.duplicate);
     const lists = try arena.alloc(std.ArrayList(Verdict.Contradiction), p.facts.len);
     for (lists) |*l| l.* = .empty;
 
-    for (questions, 0..) |q, k| {
-        if (k >= probs.len) break;
-        const pr = probs[k];
+    for (questions, answers) |q, a| {
+        const probs = switch (a) {
+            .choice => |c| c,
+            .yes_no => continue,
+        };
         switch (q.kind) {
-            .same_entity => if (pr >= link_best[q.item]) {
-                link_best[q.item] = pr;
-                v.links[q.item] = q.target;
+            .entity_link => {
+                if (probs.len != q.targets.len + 1) continue;
+                const best = std.mem.indexOfMax(f64, probs[0..q.targets.len]);
+                if (probs[best] >= th.duplicate) v.links[q.item] = q.targets[best];
             },
-            .duplicate => if (pr >= dup_best[q.item]) {
-                dup_best[q.item] = pr;
-                v.duplicates[q.item] = q.target;
+            .fact_relation => {
+                if (probs.len != relation_options.len) continue;
+                const same, const changed, const corrected = .{ probs[0], probs[1], probs[2] };
+                if (same >= dup_best[q.item]) {
+                    dup_best[q.item] = same;
+                    v.duplicates[q.item] = q.targets[0];
+                }
+                if (changed + corrected >= th.contradiction)
+                    try lists[q.item].append(arena, .{ .fact = q.targets[0], .kind = if (corrected > changed) .was_wrong else .changed, .at = null });
             },
-            .contradicts => if (pr >= th.contradiction) {
-                const wrong = k + 1 < probs.len and k + 1 < questions.len and questions[k + 1].kind == .was_wrong and probs[k + 1] >= 0.5;
-                try lists[q.item].append(arena, .{ .fact = q.target, .kind = if (wrong) .was_wrong else .changed, .at = null });
-            },
-            .was_wrong => {},
         }
     }
     for (lists, 0..) |l, j| {
