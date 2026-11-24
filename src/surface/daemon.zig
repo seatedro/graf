@@ -116,6 +116,8 @@ pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: 
         break :blk 0;
     };
     if (replayed > 0) log.info("replayed {d} spooled hook flushes", .{replayed});
+    var capy_source: ?capture.capy.Source = if (config.capyEnabled()) try capture.capy.Source.init(gpa, io, env, config, sink, .{}) else null;
+    defer if (capy_source) |*c| c.deinit();
 
     var svc: service.Service = .{ .gpa = gpa, .io = io, .engine = &rt.engine, .sink = sink, .flusher = flusher(&cap) };
     defer svc.deinit();
@@ -141,6 +143,7 @@ pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: 
     try background.concurrent(io, runWorkers, .{ &pipeline, &stop });
     try background.concurrent(io, refreshBriefsOnCommit, .{&rt});
     try background.concurrent(io, capture.Capture.run, .{&cap});
+    if (capy_source) |*c| try background.concurrent(io, capture.capy.Source.run, .{c});
 
     log.info("graf serve: graph {s} on {s}{s}{s}", .{ config.graph, config.serve.listen, if (opts.socket_path != null) " and " else "", opts.socket_path orelse "" });
     try server.run();
