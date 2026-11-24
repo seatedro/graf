@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const store = @import("store");
+const eval = @import("eval");
 
 pub const version = "0.0.0-dev";
 
@@ -105,6 +106,11 @@ pub fn run(init: std.process.Init) !u8 {
             const report = try s.migrate();
             try out.print("database ready: applied {d} of {d} migrations\n", .{ report.applied, report.total });
             return 0;
+        },
+        .eval => {
+            const rest = try arena.alloc([]const u8, args.len - i - 1);
+            for (rest, args[i + 1 ..]) |*dst, src| dst.* = src;
+            return eval.main(arena, io, cfg, init.environ_map, rest, out, err);
         },
         else => {
             try err.print("graf {s}: not implemented yet\n", .{@tagName(command)});
