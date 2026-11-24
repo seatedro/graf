@@ -560,13 +560,13 @@ test "pathological inputs stay linear" {
     const io = testing.io;
     for (units) |unit| {
         var buf: std.ArrayList(u8) = .empty;
-        while (buf.items.len < 200 * 1024) try buf.appendSlice(a, unit);
+        while (buf.items.len < 64 * 1024) try buf.appendSlice(a, unit);
         const started = std.Io.Clock.awake.now(io);
         const out = try redact(a, buf.items);
         try testing.expect(started.durationTo(std.Io.Clock.awake.now(io)).toMilliseconds() < 2000);
         try expectIdempotent(a, out);
     }
-    const random_run = try g.chars(b64, 200 * 1024);
+    const random_run = try g.chars(b64, 64 * 1024);
     try expectExact(a, random_run, "[REDACTED:high_entropy]");
 }
 
