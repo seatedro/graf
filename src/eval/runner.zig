@@ -87,7 +87,7 @@ fn drive(io: std.Io, s: *store.Store, pipeline: *ingest.Pipeline, graph_id: core
             continue;
         };
         _ = pipeline.process(scratch.allocator(), lease) catch |err| {
-            if (err == error.NotImplemented) return .unavailable;
+            if (err == error.NotImplemented or err == error.ModelNotConfigured) return .unavailable;
             try notes.add("ingest: an attempt during {s} failed: {s}", .{ eval_id, @errorName(err) });
         };
     }

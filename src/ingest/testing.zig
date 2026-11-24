@@ -15,6 +15,7 @@ pub const FakeModel = struct {
     pub const Reply = union(enum) {
         json: []const u8,
         fail: pipeline.Disposition,
+        raise: anyerror,
     };
 
     pub const dims = 64;
@@ -68,6 +69,10 @@ pub const FakeModel = struct {
             .fail => |disposition| {
                 m.last = .{ .disposition = disposition };
                 return error.ProviderFailed;
+            },
+            .raise => |err| {
+                m.last = null;
+                return err;
             },
         }
     }

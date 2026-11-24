@@ -218,3 +218,13 @@ test "an unusable resolution answer falls back to the deterministic rules" {
     };
     try testing.expectEqual(@as(usize, 1), ended);
 }
+
+test "a missing model configuration hands the entry back untouched and surfaces the error" {
+    var h = try Harness.init();
+    defer h.deinit();
+    const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay."));
+    try h.model.push(.{ .raise = error.ModelNotConfigured });
+    try testing.expectError(error.ModelNotConfigured, h.step());
+    try testing.expectEqual(core.types.EntryStatus.queued, h.backend.row(entry).status);
+    try testing.expectEqual(@as(i32, 0), h.backend.row(entry).attempts);
+}

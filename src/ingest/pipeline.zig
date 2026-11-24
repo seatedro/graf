@@ -303,6 +303,10 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
         const Stage = enum { extraction, after_extraction };
 
         fn providerFailure(d: *Self, arena: Allocator, lease: store.Lease, err: anyerror, stage: Stage) !ingest.Outcome {
+            if (err == error.ModelNotConfigured) {
+                try d.backend.finish(lease, .{ .requeue = .{ .delay_ms = 0, .count_attempt = false, .reason = "no model is configured" } });
+                return err;
+            }
             const f = d.failureOf(err) orelse return err;
             switch (f.disposition) {
                 .split => {
