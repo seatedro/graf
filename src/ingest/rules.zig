@@ -82,9 +82,14 @@ pub fn hardBlocked(a: EntityType, b: EntityType) bool {
     return (a == .person and isGroup(b)) or (b == .person and isGroup(a));
 }
 
+fn isCodebase(t: EntityType) bool {
+    return t == .project or t == .repository;
+}
+
 pub fn compatible(a: EntityType, b: EntityType) bool {
     if (a == b) return true;
     if (isSoftware(a) and isSoftware(b)) return true;
+    if (isCodebase(a) and isCodebase(b)) return true;
     if ((a == .other and b != .person) or (b == .other and a != .person)) return true;
     return false;
 }
@@ -128,6 +133,10 @@ pub const Key = struct {
 pub fn sameCanonicalKey(a: Key, b: Key) bool {
     return a.subject.eql(b.subject) and std.mem.eql(u8, a.relation, b.relation) and
         std.mem.eql(u8, a.qualifier, b.qualifier) and a.object.eql(b.object);
+}
+
+pub fn sameFact(a: Key, b: Key) bool {
+    return sameCanonicalKey(a, b) and rangesOverlap(a.valid, b.valid);
 }
 
 pub fn rangesOverlap(a: core.Range, b: core.Range) bool {
@@ -391,6 +400,8 @@ test "entity type guards" {
     try testing.expect(hardBlocked(.project, .person));
     try testing.expect(!hardBlocked(.code, .dataset));
     try testing.expect(compatible(.software, .code));
+    try testing.expect(compatible(.project, .repository));
+    try testing.expect(!compatible(.repository, .organization));
     try testing.expect(!compatible(.code, .dataset));
     try testing.expect(!compatible(.organization, .code));
     try testing.expect(compatible(.other, .software));

@@ -15,17 +15,22 @@ const extraction_rules =
     \\- Extract only knowledge that stays useful later: decisions, choices and rejections with their reasons, settings, versions, ownership, on-call and status, capabilities, preferences, architecture, causes and fixes.
     \\- Set "skip" to a short reason, with no entities or facts, when the entry holds nothing durable: test or lint output, routine command chatter, hypotheticals, brainstorming that commits to nothing, greetings.
     \\- Entities get local refs n1, n2, ... Use the most canonical name as "name" and list other spellings in "aliases". Reuse one ref for every mention of the same thing.
-    \\- Entity type "code" is a module, file or service inside a repository the user works in; "software" is a product, library, tool or service they use. A commit is not an entity: record it on the "change" it belongs to. Bugs, failure modes and open questions are "problem".
+    \\- Entity type "code" is a module, file or service inside a repository the user works in; "software" is a product, library, tool or service they use, and programming languages, databases and frameworks are "software" too. A commit is not an entity: record it on the "change" it belongs to. Bugs, failure modes and open questions are "problem".
+    \\- Keep one entity per real thing: a service and its API, or a project and its repository, are the same entity unless the entry treats them as separate things. Relate the named things directly; do not invent an entity for a request, a check or a comparison just to hang facts on it.
     \\- Every fact has a subject ref, a relation, and exactly one of "object" (an entity ref) or "value" (a literal). The other is null.
     \\- Reuse a listed relation whenever one fits. Use "related_to" only as a last resort. If none fits, invent a snake_case relation and describe it in "new_relations".
-    \\- has_setting needs a "qualifier" naming the setting, for example "extraction_model". Other relations use a null qualifier.
+    \\- Use "uses" for what a subject is built with or relies on, also when the entry phrases it as a pick or a plan ("we'll use X", "we picked X"), and put the stated reason in "rationale". Keep "chose" for a decision that is not about using the object, and "rejected" for something decided against. Where something runs or is hosted is "located_at"; a URL or endpoint is a has_setting value with a qualifier such as "api_url".
+    \\- has_setting needs a "qualifier" naming the setting, for example "extraction_model". Other relations use a null qualifier. When a setting's value is a model, library or host, make it an entity and use it as the object. Features in supports_feature and lacks_feature are values.
     \\- "text" is one self-contained sentence that names the subject and object explicitly. "rationale" holds the stated why behind a decision, or null.
     \\- "quote" is a verbatim excerpt of at most 200 characters from the entry that supports the fact.
     \\- Time: "valid_from" and "valid_to" are RFC 3339. Resolve relative phrases ("today at 17:00", "last Tuesday") against the reference time and set time_basis "relative". Use time_basis "explicit" for stated dates. Otherwise leave both null and set time_basis "reference". Use "-infinity" for valid_from only when the fact has held for as long as anyone knows.
+    \\- valid_from is when the fact began to hold, not a date that appears in its value: "the launch is now set for March 9" says when the launch happens, so its valid_from follows the rules above while the value is the date.
     \\- Set valid_to only when the entry states that the fact ended or will end.
-    \\- When a speaker corrects themselves or someone else in this entry, extract only the corrected statement. Never extract a claim the entry refutes.
+    \\- A state the entry mentions only as earlier history ("before Dana took over", "we used to") is not current: give it its stated period, or leave it out when the entry gives none.
+    \\- When a speaker corrects themselves or someone else in this entry, extract only the corrected statement. Never extract a claim the entry refutes, and do not add a separate fact that negates it.
+    \\- Skip one-off requests and instructions that will not matter after the session, such as who to ping or what to try next.
     \\- author is "user" for what the user states, "agent" for unconfirmed assistant claims, "tool" for observed tool output.
-    \\- scope is "global" for personal preferences and facts that hold across projects, else "project".
+    \\- scope is "global" for a person's standing preferences and conventions that apply across all their projects. Everything else is "project", including facts about tools and libraries.
     \\- Never put credentials, tokens, keys or redaction markers into any field.
     \\- The recent context lists what earlier entries from the same source established. Use it to resolve references like "it" or "switch it"; do not re-extract it.
     \\
@@ -36,7 +41,7 @@ const examples =
     \\Entry:
     \\[user] We picked SQLite for the brackwater cache because it needs no server. Dana owns the cache now.
     \\Output:
-    \\{"skip":null,"entities":[{"ref":"n1","name":"brackwater cache","type":"code","aliases":[],"description":"Cache service in the brackwater project."},{"ref":"n2","name":"SQLite","type":"software","aliases":[],"description":"Embedded SQL database."},{"ref":"n3","name":"Dana","type":"person","aliases":[],"description":"Engineer."}],"facts":[{"subject":"n1","relation":"chose","qualifier":null,"object":"n2","value":null,"text":"The brackwater cache chose SQLite.","rationale":"It needs no server.","valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"user","quote":"We picked SQLite for the brackwater cache because it needs no server."},{"subject":"n1","relation":"owned_by","qualifier":null,"object":"n3","value":null,"text":"The brackwater cache is owned by Dana.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"user","quote":"Dana owns the cache now."}],"new_relations":[]}
+    \\{"skip":null,"entities":[{"ref":"n1","name":"brackwater cache","type":"code","aliases":[],"description":"Cache service in the brackwater project."},{"ref":"n2","name":"SQLite","type":"software","aliases":[],"description":"Embedded SQL database."},{"ref":"n3","name":"Dana","type":"person","aliases":[],"description":"Engineer."}],"facts":[{"subject":"n1","relation":"uses","qualifier":null,"object":"n2","value":null,"text":"The brackwater cache uses SQLite.","rationale":"It needs no server.","valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"user","quote":"We picked SQLite for the brackwater cache because it needs no server."},{"subject":"n1","relation":"owned_by","qualifier":null,"object":"n3","value":null,"text":"The brackwater cache is owned by Dana.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"user","quote":"Dana owns the cache now."}],"new_relations":[]}
     \\
     \\Example 2
     \\Reference time: 2026-03-04T10:00:00Z (Wednesday, UTC)
@@ -139,7 +144,7 @@ fn writeExtractionUser(w: *Writer, entry: EntryView, context: []const PriorEntry
 pub const resolution_system =
     \\You reconcile newly extracted knowledge with what a knowledge graph already holds. Output one JSON object that matches the schema.
     \\
-    \\Entities: for each new entity listed with candidates, set "existing" to the label (E1, E2, ...) of the candidate that is the same real-world thing, or null when none is. Same name is not enough: a company and its product, a tool and a dataset, or two people who share a first name are different entities. List every such entity in "entity_links".
+    \\Entities: for each new entity listed with candidates, set "existing" to the label (E1, E2, ...) of the candidate that is the same real-world thing, or null when none is. Same name is not enough: a company and its product, a tool and a dataset, or two people who share a first name are different entities. A project and its repository are the same entity. List every such entity in "entity_links".
     \\
     \\Facts: for each new fact listed with candidates, give one entry in "fact_verdicts" with its index:
     \\- "duplicate_of": the label (F1, F2, ...) of an existing fact that already says the same thing, else null.

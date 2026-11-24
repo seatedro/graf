@@ -938,7 +938,7 @@ test "the gold state passes every gate" {
     try testing.expectEqual(@as(f64, 1), report.metrics.entity_f1.?);
     try testing.expectEqual(@as(f64, 1), report.metrics.fact_precision.?);
     try testing.expectEqual(@as(f64, 1), report.metrics.fact_recall.?);
-    try testing.expectEqual(@as(u32, 30), report.detail.gold_fact_items);
+    try testing.expectEqual(@as(u32, 34), report.detail.gold_fact_items);
     try testing.expectEqual(@as(u32, 7), report.detail.temporal_items);
     try testing.expectEqual(@as(u32, 7), report.detail.merge_pairs);
     try testing.expectEqual(@as(u32, 13), report.detail.retrieval_expected);

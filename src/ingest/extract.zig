@@ -160,19 +160,22 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
         }
 
         const from_explicit = if (f.valid_from) |s| trimmed(s).len > 0 else false;
+        var upper = time.parseBound(f.valid_to) catch {
+            invalid += 1;
+            try w.add("dropped fact {d}: valid_to is not RFC 3339", .{i});
+            continue;
+        };
+        const ended_already = if (upper) |u| u <= reference_time else false;
         const lower: ?core.Micros = if (from_explicit)
             time.parseBound(f.valid_from) catch {
                 invalid += 1;
                 try w.add("dropped fact {d}: valid_from is not RFC 3339", .{i});
                 continue;
             }
+        else if (ended_already)
+            null
         else
             reference_time;
-        var upper = time.parseBound(f.valid_to) catch {
-            invalid += 1;
-            try w.add("dropped fact {d}: valid_to is not RFC 3339", .{i});
-            continue;
-        };
         if (upper) |u| if (lower) |l| if (u <= l) {
             try w.add("fact {d}: valid_to is not after valid_from; treating it as open", .{i});
             upper = null;
@@ -425,6 +428,29 @@ test "dated statements about different periods do not self-correct" {
     const c = try check(arena, raw, body, ref_time);
     try testing.expectEqual(@as(usize, 2), c.result.facts.len);
     try testing.expectEqual(try core.time.parseRfc3339("2026-11-17"), c.meta[0].valid.upper.?);
+}
+
+test "a stated end with no start is unbounded below and does not supersede the new holder" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var takes_over = fct("n1", "has_oncall", "n2", null, "Juno took over at 17:00");
+    takes_over.valid_from = "2026-11-20T17:00:00Z";
+    var rotated = fct("n1", "has_oncall", "n3", null, "Hollis rotated off");
+    rotated.valid_to = "2026-11-20T17:00:00Z";
+    var leaving = fct("n1", "owned_by", "n3", null, "Hollis owns it until Friday");
+    leaving.valid_to = "2026-11-27T00:00:00Z";
+    const raw: ExtractResult = .{
+        .skip = null,
+        .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Juno", .person), ent("n3", "Hollis", .person) },
+        .facts = &.{ takes_over, rotated, leaving },
+        .new_relations = &.{},
+    };
+    const c = try check(arena, raw, "Juno took over at 17:00. Hollis rotated off. Hollis owns it until Friday", try core.time.parseRfc3339("2026-11-20T18:00:00Z"));
+    try testing.expectEqual(@as(usize, 3), c.result.facts.len);
+    try testing.expect(c.meta[1].valid.lower == null);
+    try testing.expectEqual(try core.time.parseRfc3339("2026-11-20T17:00:00Z"), c.meta[1].valid.upper.?);
+    try testing.expectEqual(try core.time.parseRfc3339("2026-11-20T18:00:00Z"), c.meta[2].valid.lower.?);
 }
 
 test "bad dates drop the fact; an unknown start is unbounded" {

@@ -678,8 +678,8 @@ pub fn build(
 
         var restated: ?usize = null;
         for (olds.items, 0..) |o, k| {
-            if (o.ended) continue;
-            if (rules.sameCanonicalKey(key, o.key)) {
+            if (o.ended and o.fact.end_kind != .changed) continue;
+            if (rules.sameFact(key, o.key)) {
                 restated = k;
                 break;
             }
@@ -699,11 +699,21 @@ pub fn build(
                 try restatements.append(arena, .{ .fact_id = target.id, .confidence = rules.restate(target.confidence) });
                 try evidence.append(arena, .{ .fact_id = target.id, .kind = .restated, .quote = f.quote });
             }
+            const old = &olds.items[k];
+            if (valid.upper) |end| if (!old.ended and old.fact.valid.upper == null) {
+                if (blast.admit()) {
+                    old.fact.valid.upper = end;
+                    old.fact.end_kind = .changed;
+                    old.key.valid = old.fact.valid;
+                    old.ended = true;
+                    try invalidations.append(arena, .{ .fact_id = old.fact.id, .valid_upper = end, .ended_by = null });
+                } else try warnings.append(arena, try std.fmt.allocPrint(arena, "skipped ending fact {f}: more than {d} endings in one entry", .{ old.fact.id, rules.max_invalidations }));
+            };
             continue;
         }
 
         var dup_new = false;
-        for (new_keys.items) |nk| if (rules.sameCanonicalKey(key, nk)) {
+        for (new_keys.items) |nk| if (rules.sameFact(key, nk)) {
             dup_new = true;
         };
         if (dup_new) {
@@ -743,6 +753,7 @@ pub fn build(
                 .bounded_new => nf = trial_new,
                 .ended_old => if (blast.admit()) {
                     o.fact = trial;
+                    o.key.valid = trial.valid;
                     o.ended = true;
                     try invalidations.append(arena, .{ .fact_id = trial.id, .valid_upper = trial.valid.upper.?, .ended_by = nf.id });
                     try evidence.append(arena, .{ .fact_id = trial.id, .kind = .contradicted, .quote = f.quote });
