@@ -40,7 +40,7 @@ pub fn run(arena: Allocator, io: Io, env: *const Environ.Map, config: *const cor
 
     const payload = std.json.parseFromSliceLeaky(Payload, arena, stdin_json, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch return;
     const state_dir = try state.dir(arena, env);
-    if (state_dir) |d| if (state.isPaused(io, d)) return;
+    if (state_dir) |d| if (try state.isPaused(io, d)) return;
 
     const proj = if (payload.cwd) |cwd| try project.derive(arena, io, cwd) else null;
     if (try project.isExcluded(arena, io, config, .{

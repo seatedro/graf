@@ -15,10 +15,13 @@ pub fn dir(arena: Allocator, env: *const Environ.Map) Allocator.Error!?[]const u
     return null;
 }
 
-pub fn isPaused(io: std.Io, state_dir: []const u8) bool {
+pub fn isPaused(io: std.Io, state_dir: []const u8) std.Io.Cancelable!bool {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const path = std.fmt.bufPrint(&buf, "{s}/{s}", .{ state_dir, paused_file }) catch return false;
-    Dir.cwd().access(io, path, .{}) catch return false;
+    Dir.cwd().access(io, path, .{}) catch |err| return switch (err) {
+        error.Canceled => error.Canceled,
+        else => false,
+    };
     return true;
 }
 
@@ -135,12 +138,12 @@ test "pause flag round trip and capture epoch persists" {
     const root = try tmp.dir.realPathFileAlloc(io, ".", arena);
     const state_dir = try std.fs.path.join(arena, &.{ root, "nested", "graf" });
 
-    try std.testing.expect(!isPaused(io, state_dir));
+    try std.testing.expect(!try isPaused(io, state_dir));
     try setPaused(io, state_dir, true);
-    try std.testing.expect(isPaused(io, state_dir));
+    try std.testing.expect(try isPaused(io, state_dir));
     try setPaused(io, state_dir, true);
     try setPaused(io, state_dir, false);
-    try std.testing.expect(!isPaused(io, state_dir));
+    try std.testing.expect(!try isPaused(io, state_dir));
     try setPaused(io, state_dir, false);
 
     const other = try std.fs.path.join(arena, &.{ root, "fresh", "graf" });
