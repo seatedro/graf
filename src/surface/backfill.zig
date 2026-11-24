@@ -259,7 +259,10 @@ const Push = struct {
                 },
             };
 
-            if (reply.status == 429 or reply.status >= 500) continue;
+            if (reply.status == 429 or reply.status >= 500) {
+                log.warn("the hub answered {d} to a backfill entry: {s}", .{ reply.status, reply.body[0..@min(reply.body.len, 512)] });
+                continue;
+            }
             if (reply.status < 200 or reply.status >= 300) {
                 log.err("the hub rejected a backfill entry with {d}: {s}", .{ reply.status, reply.body });
                 return error.HubRejectedEntry;

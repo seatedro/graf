@@ -2,8 +2,10 @@ const std = @import("std");
 const core = @import("core");
 const store = @import("store");
 const capture = @import("capture");
+const retrieve = @import("retrieve");
 const api = @import("api.zig");
 const http = @import("http.zig");
+const service = @import("service.zig");
 const backfill = @import("backfill.zig");
 const Upstream = @import("upstream.zig").Upstream;
 
@@ -196,6 +198,52 @@ test "edge backfill pushes redacted history to the hub oldest first and dry-runs
 
     const spool = try std.fs.path.join(a, &.{ h.base, "state", "graf", "edge", "spool.jsonl" });
     try testing.expectError(error.FileNotFound, Io.Dir.cwd().access(io, spool, .{}));
+}
+
+test "a NUL byte in a transcript reaches Postgres through hub and edge backfill" {
+    var s = try store.testing.open();
+    defer s.close();
+    const io = testing.io;
+
+    var h = try Home.init();
+    defer h.deinit();
+    const config: core.Config = .{};
+    const a = h.arena.allocator();
+
+    try testdata.write(io, h.tmp.dir, "home/.claude/projects/p/nul.jsonl", &.{.{ t0 + 4 * day, "Dump\x00ed the \x00bytes." }});
+    const raw = try h.tmp.dir.readFileAlloc(io, "home/.claude/projects/p/nul.jsonl", a, .unlimited);
+    try testing.expect(std.mem.indexOf(u8, raw, "\\u0000") != null);
+
+    const hub_graph = try store.testing.freshGraph(&s);
+    const hub = try backfill.run(testing.allocator, io, &h.env, &config, Home.plan(false), .{ .hub = .{ .store = &s, .graph_id = hub_graph } });
+    try testing.expectEqual(@as(u64, 4), hub.stats.queued);
+    try testing.expectEqual(@as(i64, 1), try count(&s, hub_graph, "SELECT count(*) FROM entry WHERE graph_id = $1 AND position('Dumped the bytes.' IN body::text) > 0"));
+
+    const edge_graph = try store.testing.freshGraph(&s);
+    var engine = retrieve.Engine.init(testing.allocator, io, &s, &config, edge_graph, .{});
+    defer engine.deinit();
+    var svc: service.Service = .{ .gpa = testing.allocator, .io = io, .engine = &engine, .sink = s.sink(edge_graph) };
+    defer svc.deinit();
+
+    var server = http.Server.init(testing.allocator, io, svc.handler(), .{ .listen = "127.0.0.1:0", .token = "hub-token" });
+    try server.start();
+    var running = try io.concurrent(http.Server.run, .{&server});
+    defer {
+        server.stop();
+        running.await(io) catch {};
+        server.deinit();
+    }
+
+    var up = try Upstream.init(testing.allocator, io, try std.fmt.allocPrint(a, "http://127.0.0.1:{d}", .{server.boundPort()}), "hub-token", 2000);
+    defer up.deinit();
+
+    const pushed = try backfill.run(testing.allocator, io, &h.env, &config, Home.plan(false), .{ .edge = &up });
+    try testing.expectEqual(@as(u64, 4), pushed.stats.queued);
+    try testing.expectEqual(@as(i64, 4), try count(&s, edge_graph, "SELECT count(*) FROM entry WHERE graph_id = $1"));
+    try testing.expectEqual(@as(i64, 1), try count(&s, edge_graph, "SELECT count(*) FROM entry WHERE graph_id = $1 AND position('Dumped the bytes.' IN body::text) > 0"));
+
+    const again = try backfill.run(testing.allocator, io, &h.env, &config, Home.plan(false), .{ .edge = &up });
+    try testing.expectEqual(@as(u64, 4), again.stats.duplicates);
 }
 
 test "plans parse harness lists, ages and limits" {

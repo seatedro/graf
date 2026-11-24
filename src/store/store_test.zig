@@ -120,6 +120,52 @@ test "enqueue redacts the entry before hashing and storing it" {
     try testing.expect(try s.enqueue(g, &redacted) == .duplicate);
 }
 
+test "enqueue strips NUL bytes so Postgres accepts the entry, and dedupes it" {
+    var s = try store.testing.open();
+    defer s.close();
+    const g = try store.testing.freshGraph(&s);
+
+    const turns = [_]core.Turn{
+        .{ .role = .user, .text = "print the\x00 bytes" },
+        .{ .role = .assistant, .text = "ok\x00", .tool_calls = &.{.{ .name = "Bash\x00", .args_preview = "{\"cmd\":\"printf '\x00'\"}", .result_preview = "a\x00b\x00c" }} },
+    };
+    const raw: core.EntryDraft = .{
+        .source = .{ .harness = .pi, .external_id = "sess\x00-nul", .project = "example.test/\x00graf", .agent = "pi\x00", .model = "m\x00" },
+        .kind = .turns,
+        .project = "example.test/\x00graf",
+        .author = .mixed,
+        .body = .{ .turns = &turns },
+        .reference_time = 1_000,
+        .cursor = "{\"line\":\x003}",
+    };
+
+    const id = try enqueueNew(&s, g, raw);
+    const gid: []const u8 = &g.bytes;
+
+    var row = (try s.pool.row(
+        \\SELECT e.body::text, e.project, s.external_id, s.agent, s.cursor
+        \\FROM entry e JOIN source s ON s.id = e.source_id WHERE e.id = $1
+    , .{@as([]const u8, &id.bytes)})).?;
+    defer row.deinit() catch {};
+
+    const body = try row.get([]const u8, 0);
+    try testing.expect(std.mem.indexOf(u8, body, "a\x00b") == null);
+    try testing.expect(std.mem.indexOf(u8, body, "abc") != null);
+    try testing.expect(std.mem.indexOf(u8, body, "print the bytes") != null);
+    try testing.expectEqualStrings("example.test/graf", (try row.get(?[]const u8, 1)).?);
+    try testing.expectEqualStrings("sess-nul", try row.get([]const u8, 2));
+    try testing.expectEqualStrings("pi", (try row.get(?[]const u8, 3)).?);
+    try testing.expectEqualStrings("{\"line\":3}", (try row.get(?[]const u8, 4)).?);
+
+    try testing.expect(try s.enqueue(g, &raw) == .duplicate);
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const clean = try core.redactDraft(arena.allocator(), raw);
+    try testing.expect(try s.enqueue(g, &clean) == .duplicate);
+    try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM entry WHERE graph_id = $1", .{gid}));
+}
+
 test "enqueue dedupes on content, advances the cursor, numbers the source and notifies" {
     var s = try store.testing.open();
     defer s.close();
