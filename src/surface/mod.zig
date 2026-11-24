@@ -7,6 +7,8 @@ pub const mcp = @import("mcp.zig");
 pub const http = @import("http.zig");
 pub const client = @import("client.zig");
 pub const daemon = @import("daemon.zig");
+pub const upstream = @import("upstream.zig");
+pub const edge = @import("edge.zig");
 
 test {
     std.testing.refAllDecls(@This());

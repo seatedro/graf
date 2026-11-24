@@ -53,11 +53,20 @@ workers = 4
 
 [serve]
 listen = "127.0.0.1:7420"
+# Bearer token required on /mcp and /v1/* over TCP (GRAF_SERVE_TOKEN). Unix socket requests skip it.
 token = ""
 
 [capture]
 exclude_projects = []
 exclude_paths = []
+
+[edge]
+# A hub URL turns `graf serve` into an edge: no database and no model calls, captured entries
+# are spooled locally and pushed to the hub, and reads go to the hub (GRAF_UPSTREAM_URL).
+upstream = ""
+# The hub's serve.token (GRAF_UPSTREAM_TOKEN).
+token = ""
+timeout_ms = 10000
 
 [eval]
 # Model that judges unlabeled facts in `graf eval`; pick a different family than llm.model.

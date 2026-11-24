@@ -7,6 +7,8 @@ const capture = @import("capture");
 const retrieve = @import("retrieve");
 const http = @import("http.zig");
 const service = @import("service.zig");
+const edge = @import("edge.zig");
+const Upstream = @import("upstream.zig").Upstream;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
@@ -103,7 +105,26 @@ pub const Options = struct {
     socket_path: ?[]const u8,
 };
 
+pub fn checkExposure(config: *const core.Config) !void {
+    if (config.serve.listen.len == 0 or config.serve.token.len > 0) return;
+    const address = try std.Io.net.IpAddress.parseLiteral(config.serve.listen);
+    const loopback = switch (address) {
+        .ip4 => |a| a.bytes[0] == 127,
+        .ip6 => |a| std.mem.eql(u8, &a.bytes, &std.Io.net.Ip6Address.loopback(0).bytes),
+    };
+    if (!loopback) return error.TokenRequired;
+}
+
+fn replayHookSpool(cap: *capture.Capture) void {
+    const replayed = cap.replaySpool() catch |err| {
+        log.warn("replaying spooled hook flushes failed: {s}", .{@errorName(err)});
+        return;
+    };
+    if (replayed > 0) log.info("replayed {d} spooled hook flushes", .{replayed});
+}
+
 pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: *const core.Config, opts: Options) !void {
+    try checkExposure(config);
     var rt: Runtime = undefined;
     try rt.open(gpa, io, env, config, .{ .pool_size = @intCast(@max(8, config.ingest.workers + 4)), .start_postgres = true });
     defer rt.close();
@@ -111,11 +132,7 @@ pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: 
     const sink = rt.store.sink(rt.graph_id);
     var cap = try capture.Capture.init(gpa, io, env, config, sink, .{});
     defer cap.deinit();
-    const replayed = cap.replaySpool() catch |err| blk: {
-        log.warn("replaying spooled hook flushes failed: {s}", .{@errorName(err)});
-        break :blk 0;
-    };
-    if (replayed > 0) log.info("replayed {d} spooled hook flushes", .{replayed});
+    replayHookSpool(&cap);
 
     var svc: service.Service = .{ .gpa = gpa, .io = io, .engine = &rt.engine, .sink = sink, .flusher = flusher(&cap) };
     defer svc.deinit();
@@ -143,5 +160,47 @@ pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: 
     try background.concurrent(io, capture.Capture.run, .{&cap});
 
     log.info("graf serve: graph {s} on {s}{s}{s}", .{ config.graph, config.serve.listen, if (opts.socket_path != null) " and " else "", opts.socket_path orelse "" });
+    try server.run();
+}
+
+fn announceUpstream(up: *Upstream) Io.Cancelable!void {
+    if (try up.health()) {
+        log.info("hub {s} is reachable", .{up.base});
+    } else log.warn("hub {s} is not reachable yet; captured entries stay spooled until it is", .{up.base});
+}
+
+pub fn runEdge(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: *const core.Config, opts: Options) !void {
+    try checkExposure(config);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const state_dir = try capture.state.dir(arena, env) orelse return error.NoStateDir;
+
+    var up = try Upstream.init(gpa, io, config.edge.upstream, config.edge.token, config.edge.timeout_ms);
+    defer up.deinit();
+    var spool = try edge.Spool.open(gpa, io, try edge.spoolDir(arena, state_dir), .{});
+    defer spool.close();
+    var cap = try capture.Capture.init(gpa, io, env, config, spool.sink(), .{});
+    defer cap.deinit();
+    replayHookSpool(&cap);
+
+    var proxy: edge.Edge = .{ .upstream = &up, .spool = &spool, .flusher = flusher(&cap) };
+    if (opts.socket_path) |p| if (std.fs.path.dirname(p)) |dir| Io.Dir.cwd().createDirPath(io, dir) catch {};
+    var server: http.Server = .init(gpa, io, proxy.handler(), .{
+        .listen = config.serve.listen,
+        .socket_path = opts.socket_path,
+        .token = config.serve.token,
+        .version = opts.version,
+    });
+    try server.start();
+    defer server.deinit();
+
+    var background: Io.Group = .init;
+    defer background.cancel(io);
+    try background.concurrent(io, capture.Capture.run, .{&cap});
+    try background.concurrent(io, edge.Spool.run, .{ &spool, &up });
+    try background.concurrent(io, announceUpstream, .{&up});
+
+    log.info("graf serve --edge: pushing to {s}; local {s}{s}{s}", .{ up.base, config.serve.listen, if (opts.socket_path != null) " and " else "", opts.socket_path orelse "" });
     try server.run();
 }

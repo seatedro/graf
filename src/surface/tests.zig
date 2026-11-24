@@ -242,3 +242,110 @@ test "default project fills requests that omit one" {
     _ = try h.handle(arena, .{ .op = .forget, .body = "{\"query\":\"q\"}" });
     try fake.expectLast(.forget, "{\"query\":\"q\"}", null);
 }
+
+fn rawExchange(arena: std.mem.Allocator, port: u16, bytes: []const u8) ![]const u8 {
+    const io = testing.io;
+    var address: Io.net.IpAddress = .{ .ip4 = .loopback(port) };
+    const stream = try address.connect(io, .{ .mode = .stream });
+    defer stream.close(io);
+    var send_buffer: [1024]u8 = undefined;
+    var writer = stream.writer(io, &send_buffer);
+    try writer.interface.writeAll(bytes);
+    try writer.interface.flush();
+    var recv_buffer: [4096]u8 = undefined;
+    var reader = stream.reader(io, &recv_buffer);
+    return reader.interface.allocRemaining(arena, .limited(1 << 20));
+}
+
+test "streamable HTTP /mcp serves the four tools from the graph behind the bearer token" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = testing.io;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const socket = try std.fs.path.join(arena, &.{ try tmp.dir.realPathFileAlloc(io, ".", arena), "graf.sock" });
+    var server: http.Server = .init(testing.allocator, io, f.svc.handler(), .{ .listen = "127.0.0.1:0", .socket_path = socket, .token = "hub-token", .version = "test" });
+    try server.start();
+    defer server.deinit();
+    var running = try io.concurrent(http.Server.run, .{&server});
+    defer {
+        server.stop();
+        running.await(io) catch {};
+    }
+    const port = server.boundPort();
+    const tcp_target = try std.fmt.allocPrint(arena, "127.0.0.1:{d}", .{port});
+    const c = client.Client.init(io, .{ .tcp = tcp_target }, "hub-token");
+
+    var r = try c.request(arena, .POST, "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"remote\",\"version\":\"1\"}}}");
+    try testing.expectEqual(@as(u16, 200), r.status);
+    const init_reply = try std.json.parseFromSliceLeaky(std.json.Value, arena, r.body, .{});
+    const init_result = init_reply.object.get("result").?.object;
+    try testing.expectEqualStrings("2025-06-18", init_result.get("protocolVersion").?.string);
+    try testing.expectEqualStrings(mcp.instructions, init_result.get("instructions").?.string);
+
+    r = try c.request(arena, .POST, "/mcp", "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
+    try testing.expectEqual(@as(u16, 202), r.status);
+    try testing.expectEqualStrings("", r.body);
+
+    r = try c.request(arena, .POST, "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}");
+    const listed = try std.json.parseFromSliceLeaky(std.json.Value, arena, r.body, .{});
+    const tools = listed.object.get("result").?.object.get("tools").?.array.items;
+    try testing.expectEqual(mcp.tool_names.len, tools.len);
+    for (tools, mcp.tool_names) |tool, name| try testing.expectEqualStrings(name, tool.object.get("name").?.string);
+
+    const reads = [_][]const u8{
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_search\",\"arguments\":{\"query\":\"pg.zig COPY support\",\"project\":\"graf\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_entity\",\"arguments\":{\"name_or_id\":\"pg-zig\",\"include_history\":true}}}",
+    };
+    for (reads) |call| {
+        r = try c.request(arena, .POST, "/mcp", call);
+        try testing.expectEqual(@as(u16, 200), r.status);
+        try testing.expectEqualStrings((try mcp.handleMessage(arena, f.svc.handler(), "test", call)).?, r.body);
+    }
+    try testing.expect(std.mem.indexOf(u8, (try toolText(arena, r.body)).text, "## pg.zig (software)") != null);
+
+    r = try c.request(arena, .POST, "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_remember\",\"arguments\":{\"text\":\"alice prefers dark mode\",\"scope\":\"global\",\"wait\":false}}}");
+    const remember = try toolText(arena, r.body);
+    try testing.expect(!remember.is_error);
+    try testing.expect(std.mem.startsWith(u8, remember.text, "Queued as entry "));
+    try testing.expectEqual(@as(usize, 1), f.sink.drafts.items.len);
+
+    r = try c.request(arena, .POST, "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_forget\",\"arguments\":{\"query\":\"tabs over spaces\"}}}");
+    const forgot = try toolText(arena, r.body);
+    try testing.expect(!forgot.is_error);
+    try testing.expect(std.mem.indexOf(u8, forgot.text, "alice prefers tabs over spaces") != null);
+
+    r = try c.request(arena, .POST, "/mcp", "[{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"},{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"},{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/list\"}]");
+    const batch = try std.json.parseFromSliceLeaky(std.json.Value, arena, r.body, .{});
+    try testing.expectEqual(@as(usize, 2), batch.array.items.len);
+    try testing.expectEqual(@as(i64, 8), batch.array.items[1].object.get("id").?.integer);
+
+    const anonymous = client.Client.init(io, .{ .tcp = tcp_target }, "");
+    const wrong = client.Client.init(io, .{ .tcp = tcp_target }, "not-the-token");
+    const drafts = f.sink.drafts.items.len;
+    try testing.expectEqual(@as(u16, 401), (try anonymous.request(arena, .POST, "/mcp", reads[0])).status);
+    try testing.expectEqual(@as(u16, 401), (try wrong.request(arena, .POST, "/mcp", reads[0])).status);
+    try testing.expectEqual(@as(u16, 401), (try anonymous.request(arena, .POST, "/v1/remember", "{\"text\":\"x\",\"wait\":false}")).status);
+    try testing.expectEqual(drafts, f.sink.drafts.items.len);
+    try testing.expectEqual(@as(u16, 200), (try anonymous.request(arena, .GET, "/v1/health", null)).status);
+    const local = client.Client.init(io, .{ .unix = socket }, "");
+    try testing.expectEqual(@as(u16, 200), (try local.request(arena, .POST, "/mcp", reads[0])).status);
+
+    const challenge = try rawExchange(arena, port, "POST /mcp HTTP/1.1\r\nhost: x\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}");
+    try testing.expect(std.mem.startsWith(u8, challenge, "HTTP/1.1 401 "));
+    try testing.expect(std.mem.indexOf(u8, challenge, "www-authenticate: Bearer") != null);
+    for ([_][]const u8{ "GET", "DELETE" }) |method| {
+        const reply = try rawExchange(arena, port, try std.fmt.allocPrint(arena, "{s} /mcp HTTP/1.1\r\nhost: x\r\naccept: text/event-stream\r\nauthorization: Bearer hub-token\r\nconnection: close\r\n\r\n", .{method}));
+        try testing.expect(std.mem.startsWith(u8, reply, "HTTP/1.1 405 "));
+        try testing.expect(std.mem.indexOf(u8, reply, "allow: POST") != null);
+    }
+    const stale = try rawExchange(arena, port, "POST /mcp HTTP/1.1\r\nhost: x\r\nauthorization: Bearer hub-token\r\nmcp-protocol-version: 1999-01-01\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}");
+    try testing.expect(std.mem.startsWith(u8, stale, "HTTP/1.1 400 "));
+    const same_host = try rawExchange(arena, port, "POST /mcp HTTP/1.1\r\nhost: hub.example.ts.net\r\norigin: https://hub.example.ts.net\r\nauthorization: Bearer hub-token\r\nmcp-protocol-version: 2025-06-18\r\ncontent-length: 40\r\nconnection: close\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"ping\"}");
+    try testing.expect(std.mem.startsWith(u8, same_host, "HTTP/1.1 200 "));
+}

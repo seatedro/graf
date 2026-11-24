@@ -91,6 +91,33 @@ pub fn handleMessage(arena: Allocator, handler: api.Handler, version: []const u8
     };
 }
 
+pub fn supportsVersion(version: []const u8) bool {
+    for (protocol_versions) |known| if (std.mem.eql(u8, known, version)) return true;
+    return false;
+}
+
+pub fn handlePost(arena: Allocator, handler: api.Handler, version: []const u8, body: []const u8) !?[]const u8 {
+    const trimmed = std.mem.trim(u8, body, " \t\r\n");
+    if (trimmed.len == 0 or trimmed[0] != '[') return handleMessage(arena, handler, version, body);
+    const parsed = std.json.parseFromSliceLeaky(Value, arena, trimmed, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return try errorResponse(arena, .null, parse_error, "Parse error"),
+    };
+    if (parsed.array.items.len == 0) return try errorResponse(arena, .null, invalid_request, "Invalid request: empty batch");
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var replies: usize = 0;
+    for (parsed.array.items) |message| {
+        const raw = try std.json.Stringify.valueAlloc(arena, message, .{});
+        const reply = try handleMessage(arena, handler, version, raw) orelse continue;
+        try out.writer.writeByte(if (replies == 0) '[' else ',');
+        try out.writer.writeAll(reply);
+        replies += 1;
+    }
+    if (replies == 0) return null;
+    try out.writer.writeByte(']');
+    return out.written();
+}
+
 pub fn serveStdio(gpa: Allocator, handler: api.Handler, version: []const u8, in: *std.Io.Reader, out: *std.Io.Writer) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();

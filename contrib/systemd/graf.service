@@ -1,0 +1,14 @@
+[Unit]
+Description=graf knowledge graph daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/graf/env
+ExecStart=%h/.local/bin/graf serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
