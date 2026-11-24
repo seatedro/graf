@@ -94,7 +94,7 @@ pub const Client = struct {
     limiter: Limiter,
     http: transport.Http,
     transport: ?Transport = null,
-    rates: []const Rate = &.{},
+    rates: []const []const u8,
     policy: recovery.Policy = .{},
     shutdown: std.atomic.Value(bool) = .init(false),
     last_failure: ?Failure = null,
@@ -106,6 +106,7 @@ pub const Client = struct {
             .config = config,
             .ledger = ledger,
             .limiter = .init(.fromConfig(config), ledger),
+            .rates = config.llm.rates,
             .http = .init(allocator, io),
         };
     }
@@ -446,7 +447,7 @@ pub const Client = struct {
                         last_retry_after = retryAfter(res, io);
                         last_message = wire.errorMessage(arena, res.body);
                         row.error_class = @tagName(class);
-                        row.cost_usd, row.cost_status = costPair(cost.resolve(header(res, call.cost_header), null, null, .{}, call.model, c.rates));
+                        row.cost_usd, row.cost_status = costPair(cost.resolve(header(res, call.cost_header), null, null, .{}, call.model, null, c.rates));
                         c.record(&row);
                         action = recovery.step(&state, .{ .failed = .{ .class = class, .retry_after_ms = last_retry_after } }, now);
                         continue;
@@ -463,9 +464,9 @@ pub const Client = struct {
                         row.output_tokens = @intCast(@min(o.usage.output_tokens, std.math.maxInt(i32)));
                         row.cache_read_tokens = @intCast(@min(o.usage.cache_read_tokens, std.math.maxInt(i32)));
                         row.cache_write_tokens = @intCast(@min(o.usage.cache_write_tokens, std.math.maxInt(i32)));
-                        resolved = cost.resolve(header(res, call.cost_header), o.body_cost, o.body_cost_status, o.usage, o.model orelse call.model, c.rates);
+                        resolved = cost.resolve(header(res, call.cost_header), o.body_cost, o.body_cost_status, o.usage, call.model, o.model, c.rates);
                     } else {
-                        resolved = cost.resolve(header(res, call.cost_header), null, null, .{}, call.model, c.rates);
+                        resolved = cost.resolve(header(res, call.cost_header), null, null, .{}, call.model, null, c.rates);
                     }
                     row.cost_usd, row.cost_status = costPair(resolved);
                     switch (decoded) {
