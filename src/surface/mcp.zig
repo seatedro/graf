@@ -1,5 +1,3 @@
-//! MCP server over stdio (`graf mcp`). Exposes exactly four tools.
-
 const std = @import("std");
 const core = @import("core");
 

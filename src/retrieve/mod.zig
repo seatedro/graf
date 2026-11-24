@@ -1,8 +1,3 @@
-//! Retrieval: hybrid search (HNSW + tsvector + alias/1-hop in one
-//! SQL round trip, fused with RRF), optional decision-model rerank with a
-//! deterministic fallback, MMR, the token-budgeted renderer, `memory_entity`, the
-//! session-start brief, and background-warmed per-prompt recall.
-
 const std = @import("std");
 const core = @import("core");
 const store = @import("store");
@@ -10,7 +5,6 @@ const llm = @import("llm");
 
 pub const SearchParams = struct {
     query: []const u8,
-    /// Caller's project; "*" searches every project; null means global facts only.
     project: ?[]const u8 = null,
     as_of: ?core.Micros = null,
     known_at: ?core.Micros = null,
@@ -39,7 +33,6 @@ pub const Hit = struct {
 pub const SearchResult = struct {
     hits: []const Hit,
     entities: []const core.Entity,
-    /// Whether the decision-model rerank ran (false means deterministic fallback).
     reranked: bool,
 };
 
@@ -63,7 +56,6 @@ pub const Engine = struct {
         return core.NotImplemented;
     }
 
-    /// Session-start brief for a project, at most 800 tokens, no model calls.
     pub fn brief(e: *Engine, arena: std.mem.Allocator, project: ?[]const u8) ![]const u8 {
         _ = e;
         _ = arena;
@@ -72,7 +64,6 @@ pub const Engine = struct {
     }
 };
 
-/// Renders results as compact Markdown within `max_tokens`.
 pub fn render(result: *const SearchResult, params: SearchParams, out: *std.Io.Writer) !void {
     _ = result;
     _ = params;

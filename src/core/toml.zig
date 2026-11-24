@@ -1,8 +1,3 @@
-//! A small TOML subset, enough for graf's config file, decoded straight into a Zig
-//! struct by reflection. Supported: comments, `[table]` and `[a.b]` headers, bare,
-//! quoted and dotted keys, basic and literal strings, integers, floats, booleans,
-//! and (multi-line) arrays. Unknown keys are errors so typos never pass silently.
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -13,8 +8,6 @@ pub const Diagnostic = struct {
 
 pub const Error = error{ InvalidConfig, OutOfMemory };
 
-/// Parses `src` and assigns every key into `out`, leaving unspecified fields untouched.
-/// All strings in `out` are allocated in `arena`.
 pub fn parseInto(comptime T: type, arena: Allocator, src: []const u8, out: *T, diag: *Diagnostic) Error!void {
     var p: Parser = .{ .src = src, .arena = arena, .diag = diag };
     var table: std.ArrayList([]const u8) = .empty;
@@ -84,7 +77,6 @@ const Parser = struct {
         }
     }
 
-    /// Skips whitespace, newlines and comments.
     fn skipBlank(p: *Parser) void {
         while (!p.eof()) {
             switch (p.peek()) {

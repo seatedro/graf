@@ -1,14 +1,7 @@
-//! Domain types shared across modules. Field names and enum tags match the Postgres
-//! schema in `src/store/migrations/0001_init.sql` and serialize with std.json, so a
-//! `ChangeSet` round-trips through `episode.change_set` unchanged.
-
 const std = @import("std");
 
-/// Microseconds since the Unix epoch, UTC. Same resolution as Postgres timestamptz.
 pub const Micros = i64;
 
-/// A half-open time range `[lower, upper)`. `null` bounds are unbounded
-/// (`-infinity` / `+infinity`), matching `tstzrange`.
 pub const Range = struct {
     lower: ?Micros = null,
     upper: ?Micros = null,
@@ -24,7 +17,6 @@ pub const Range = struct {
     }
 };
 
-/// Time-ordered UUIDv7, generated in Zig.
 pub const Id = struct {
     bytes: [16]u8,
 
@@ -113,7 +105,6 @@ pub const ToolCall = struct {
     result_preview: []const u8 = "",
 };
 
-/// One normalized, redacted conversational turn.
 pub const Turn = struct {
     role: Role,
     text: []const u8,
@@ -121,10 +112,8 @@ pub const Turn = struct {
     ts: ?Micros = null,
 };
 
-/// Identifies the stream an episode came from; maps to the `source` table.
 pub const SourceKey = struct {
     harness: Harness,
-    /// Session id, thread id, or canonical transcript path.
     external_id: []const u8,
     project: ?[]const u8 = null,
     agent: ?[]const u8 = null,
@@ -137,13 +126,11 @@ pub const FactAssertedBy = enum { user, agent, tool };
 
 pub const EpisodeStatus = enum { queued, extracting, extracted, staged, committing, committed, skipped, split, dead };
 
-/// The `episode.body` jsonb: either normalized turns or free text.
 pub const EpisodeBody = struct {
     turns: []const Turn = &.{},
     text: ?[]const u8 = null,
 };
 
-/// What capture and the explicit-write APIs hand to an `EpisodeSink`.
 pub const EpisodeDraft = struct {
     source: ?SourceKey = null,
     seq_in_source: i32 = 0,
@@ -152,7 +139,6 @@ pub const EpisodeDraft = struct {
     asserted_by: AssertedBy,
     body: EpisodeBody,
     reference_time: Micros,
-    /// New `source.cursor` to persist in the same transaction as the insert.
     cursor: ?[]const u8 = null,
 };
 
@@ -175,7 +161,6 @@ pub const Episode = struct {
     cost_usd: f64 = 0,
 };
 
-/// Core entity types. Types guard merges; they are not property schemas.
 pub const EntityType = enum {
     person,
     organization,
@@ -218,7 +203,6 @@ pub const FactObject = union(enum) {
     value: []const u8,
 };
 
-/// A bi-temporal fact edge.
 pub const Fact = struct {
     id: Id,
     graph_id: Id,
@@ -230,9 +214,7 @@ pub const Fact = struct {
     rationale: ?[]const u8 = null,
     project: ?[]const u8 = null,
     scope: Scope,
-    /// World time.
     valid: Range,
-    /// System time.
     sys: Range,
     end_kind: ?EndKind = null,
     ended_by: ?Id = null,
@@ -250,10 +232,7 @@ pub const Predicate = struct {
     mapped_to: ?[]const u8 = null,
 };
 
-/// The staged, deterministic mutation plan for one episode.
-/// Persisted to `episode.change_set` before the fenced commit.
 pub const ChangeSet = struct {
-    /// `commit_log.seq` snapshot taken at prefetch; the committer rebases past it.
     base_seq: i64,
     new_entities: []const NewEntity = &.{},
     merges: []const Merge = &.{},
@@ -285,11 +264,8 @@ pub const ChangeSet = struct {
 
     pub const Reaffirmation = struct { fact_id: Id, confidence: f32 };
 
-    /// Closes `valid` (end_kind = changed). `target` may be an existing fact or a new one
-    /// (a historical fact that predates current state gets its own upper bound).
     pub const Invalidation = struct { fact_id: Id, valid_upper: Micros, ended_by: ?Id };
 
-    /// Closes `sys` at commit time (end_kind = retracted or forgotten).
     pub const Retraction = struct { fact_id: Id, end_kind: EndKind, ended_by: ?Id };
 
     pub const Provenance = struct { fact_id: Id, role: ProvenanceRole, quote: ?[]const u8 = null };
@@ -298,13 +274,11 @@ pub const ChangeSet = struct {
 pub const LlmPurpose = enum { extract, resolve, repair, rerank, summarize, embed_episode, embed_batch, embed_query };
 pub const CostStatus = enum { priced, estimated, missing };
 
-/// One outbound model call attempt; maps to the `llm_call` ledger table.
 pub const LlmCall = struct {
     id: Id,
     graph_id: Id,
     episode_id: ?Id = null,
     purpose: LlmPurpose,
-    /// Wire route, e.g. "openai-responses" or "embeddings".
     route: []const u8,
     model: []const u8,
     attempt: i32,
@@ -321,21 +295,17 @@ pub const LlmCall = struct {
     started_at: Micros,
 };
 
-/// Where capture (and the explicit-write APIs) deliver episodes. Implemented by
-/// `store`; capture depends only on this interface so it is testable without Postgres.
 pub const EpisodeSink = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
     pub const Outcome = union(enum) {
         queued: Id,
-        /// Same content hash already exists in the graph; the cursor still advances.
         duplicate,
     };
 
     pub const VTable = struct {
         enqueue: *const fn (ptr: *anyopaque, draft: *const EpisodeDraft) anyerror!Outcome,
-        /// Last persisted cursor for a source, or null if the source is new.
         loadCursor: *const fn (ptr: *anyopaque, arena: std.mem.Allocator, source: *const SourceKey) anyerror!?[]const u8,
     };
 
@@ -348,14 +318,12 @@ pub const EpisodeSink = struct {
     }
 };
 
-/// Cost ledger the LLM client writes to. Implemented by `store`.
 pub const LlmLedger = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
     pub const VTable = struct {
         record: *const fn (ptr: *anyopaque, call: *const LlmCall) anyerror!void,
-        /// Sum of `cost_usd` for calls started at or after `since`.
         spentSince: *const fn (ptr: *anyopaque, since: Micros) anyerror!f64,
     };
 

@@ -1,9 +1,5 @@
--- graf schema v1. Migrations are append-only: never edit a released
--- migration, add a new numbered file instead (see AGENTS.md).
-
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
--- GiST over (uuid, tstzrange) for the bi-temporal indexes needs btree_gist.
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 CREATE TABLE graph (
@@ -194,16 +190,13 @@ CREATE TABLE llm_call (
   started_at         timestamptz NOT NULL DEFAULT now()
 );
 
--- Vector (Q1)
 CREATE INDEX fact_emb_hnsw ON fact USING hnsw (emb halfvec_cosine_ops) WITH (m = 16, ef_construction = 128);
 CREATE INDEX entity_name_emb_hnsw ON entity USING hnsw (name_emb halfvec_cosine_ops) WITH (m = 16, ef_construction = 128);
 
--- Lexical and fuzzy (Q2)
 CREATE INDEX fact_tsv_gin ON fact USING gin (tsv);
 CREATE INDEX entity_tsv_gin ON entity USING gin (tsv);
 CREATE INDEX entity_alias_norm_trgm ON entity_alias USING gin (norm gin_trgm_ops);
 
--- Graph neighborhood and cardinality checks over active facts (Q4, F3)
 CREATE INDEX fact_active_subject ON fact (graph_id, subject_id)
   WHERE upper_inf(sys) AND upper_inf(valid);
 CREATE INDEX fact_active_object ON fact (graph_id, object_id)
@@ -211,14 +204,11 @@ CREATE INDEX fact_active_object ON fact (graph_id, object_id)
 CREATE INDEX fact_active_key ON fact (graph_id, subject_id, predicate, qualifier)
   WHERE upper_inf(sys) AND upper_inf(valid);
 
--- Bi-temporal point-in-time and range overlap (Q6)
 CREATE INDEX fact_valid_gist ON fact USING gist (graph_id, valid);
 CREATE INDEX fact_sys_gist ON fact USING gist (graph_id, sys);
 
--- Queue claiming (Q8)
 CREATE INDEX episode_queue ON episode (graph_id, not_before, reference_time)
   WHERE status IN ('queued', 'extracted', 'staged');
 CREATE INDEX episode_source_seq ON episode (source_id, seq_in_source);
 
--- Spend-cap aggregation
 CREATE INDEX llm_call_started ON llm_call (graph_id, started_at);
