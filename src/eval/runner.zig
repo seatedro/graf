@@ -151,7 +151,9 @@ pub fn run(arena: Allocator, io: std.Io, config: *const core.Config, opts: RunOp
         .{};
 
     if (ingesting and enqueued) {
-        var engine: retrieve.Engine = .{ .store = &s, .client = &client, .config = config, .graph_id = graph_id };
+        var backend: retrieve.LlmBackend = .{ .client = &client };
+        var engine: retrieve.Engine = .init(arena, io, &s, config, graph_id, .{ .embedder = backend.embedder(), .reranker = backend.reranker() });
+        defer engine.deinit();
         state.retrieval = try runQueries(arena, &engine, &suite, &notes);
     } else try notes.add("retrieval: skipped because ingestion did not run", .{});
 
