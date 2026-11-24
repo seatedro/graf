@@ -32,7 +32,7 @@ pub const Store = struct {
         return core.NotImplemented;
     }
 
-    pub fn enqueue(s: *Store, graph_id: core.Id, draft: *const core.EpisodeDraft) !core.EpisodeSink.Outcome {
+    pub fn enqueue(s: *Store, graph_id: core.Id, draft: *const core.EntryDraft) !core.EntrySink.Outcome {
         _ = s;
         _ = graph_id;
         _ = draft;
@@ -69,7 +69,7 @@ pub const Store = struct {
         return core.NotImplemented;
     }
 
-    pub fn sink(s: *Store, graph_id: core.Id) core.EpisodeSink {
+    pub fn sink(s: *Store, graph_id: core.Id) core.EntrySink {
         _ = s;
         _ = graph_id;
         @panic("Store.sink is not implemented yet");
@@ -82,10 +82,10 @@ pub const Store = struct {
 };
 
 pub const Lease = struct {
-    episode_id: core.Id,
+    entry_id: core.Id,
     graph_id: core.Id,
     token: i64,
-    episode: core.Episode,
+    entry: core.Entry,
     extraction_json: ?[]const u8 = null,
 };
 

@@ -4,7 +4,7 @@ const store = @import("store");
 const ingest = @import("ingest");
 const retrieve = @import("retrieve");
 
-pub const EvalEpisode = struct {
+pub const EvalEntry = struct {
     id: []const u8,
     seq: u32,
     harness: core.Harness,
@@ -13,8 +13,8 @@ pub const EvalEpisode = struct {
     agent: ?[]const u8 = null,
     model: ?[]const u8 = null,
     reference_time: []const u8,
-    kind: core.types.EpisodeKind,
-    asserted_by: core.types.AssertedBy,
+    kind: core.types.EntryKind,
+    author: core.types.Author,
     turns: []const core.Turn = &.{},
 };
 
@@ -28,8 +28,8 @@ pub const gates = struct {
     pub const temporal_accuracy_min = 0.90;
     pub const secret_leaks_max = 0;
     pub const retrieval_recall_at_5_min = 0.85;
-    pub const calls_per_episode_max = 2.00;
-    pub const cost_per_episode_max_usd = 0.02;
+    pub const calls_per_entry_max = 2.00;
+    pub const cost_per_entry_max_usd = 0.02;
     pub const crash_resume_pass_rate_min = 1.0;
 };
 
@@ -43,8 +43,8 @@ pub const Metrics = struct {
     temporal_accuracy: f64 = 0,
     secret_leaks: u32 = 0,
     retrieval_recall_at_5: f64 = 0,
-    calls_per_episode: f64 = 0,
-    cost_per_episode_usd: f64 = 0,
+    calls_per_entry: f64 = 0,
+    cost_per_entry_usd: f64 = 0,
     crash_resume_pass_rate: f64 = 0,
 
     pub fn passes(m: Metrics) bool {
@@ -57,8 +57,8 @@ pub const Metrics = struct {
             m.temporal_accuracy >= gates.temporal_accuracy_min and
             m.secret_leaks <= gates.secret_leaks_max and
             m.retrieval_recall_at_5 >= gates.retrieval_recall_at_5_min and
-            m.calls_per_episode <= gates.calls_per_episode_max and
-            m.cost_per_episode_usd <= gates.cost_per_episode_max_usd and
+            m.calls_per_entry <= gates.calls_per_entry_max and
+            m.cost_per_entry_usd <= gates.cost_per_entry_max_usd and
             m.crash_resume_pass_rate >= gates.crash_resume_pass_rate_min;
     }
 };

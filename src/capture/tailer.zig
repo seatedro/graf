@@ -24,7 +24,7 @@ pub const Stats = struct {
     excluded_files: usize = 0,
     lines: u64 = 0,
     malformed_lines: u64 = 0,
-    episodes: u64 = 0,
+    entries: u64 = 0,
     duplicates: u64 = 0,
     dropped_turns: u64 = 0,
     enqueue_errors: u64 = 0,
@@ -46,7 +46,7 @@ const TailFile = struct {
     window: std.heap.ArenaAllocator,
     parser: dialect.Parser,
     segmenter: segment.Segmenter,
-    outbox: std.ArrayList(core.EpisodeDraft) = .empty,
+    outbox: std.ArrayList(core.EntryDraft) = .empty,
     loaded: bool = false,
     excluded: ?bool = null,
     project: ?[]const u8 = null,
@@ -69,7 +69,7 @@ pub const Tailer = struct {
     io: Io,
     harness: core.Harness,
     root: []const u8,
-    sink: core.EpisodeSink,
+    sink: core.EntrySink,
     config: *const core.Config,
     options: Options,
     paused: bool = false,
@@ -79,7 +79,7 @@ pub const Tailer = struct {
     buf: []u8 = &.{},
     recent: std.ArrayList([]const u8) = .empty,
 
-    pub fn init(gpa: Allocator, io: Io, harness: core.Harness, root: []const u8, sink: core.EpisodeSink, config: *const core.Config, options: Options) Tailer {
+    pub fn init(gpa: Allocator, io: Io, harness: core.Harness, root: []const u8, sink: core.EntrySink, config: *const core.Config, options: Options) Tailer {
         return .{
             .gpa = gpa,
             .io = io,
@@ -428,7 +428,7 @@ pub const Tailer = struct {
                 .seq_in_source = f.seq,
                 .kind = .turns,
                 .project = f.project,
-                .asserted_by = segment.assertedBy(turns),
+                .author = segment.authorOf(turns),
                 .body = .{ .turns = turns },
                 .reference_time = turns[0].ts orelse now,
                 .cursor = try c.encode(arena),
@@ -456,7 +456,7 @@ pub const Tailer = struct {
                 return;
             };
             switch (outcome) {
-                .queued => t.stats.episodes += 1,
+                .queued => t.stats.entries += 1,
                 .duplicate => t.stats.duplicates += 1,
             }
             sent += 1;
@@ -492,7 +492,7 @@ const testing = std.testing;
 
 pub const FakeSink = struct {
     arena: std.heap.ArenaAllocator,
-    episodes: std.ArrayList(Recorded) = .empty,
+    entries: std.ArrayList(Recorded) = .empty,
     cursors: std.StringHashMapUnmanaged([]const u8) = .empty,
     hashes: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     failing: bool = false,
@@ -501,7 +501,7 @@ pub const FakeSink = struct {
         body: []const u8,
         seq: i32,
         project: ?[]const u8,
-        asserted_by: core.types.AssertedBy,
+        author: core.types.Author,
         reference_time: core.Micros,
         cursor: []const u8,
         turns: usize,
@@ -515,11 +515,11 @@ pub const FakeSink = struct {
         s.arena.deinit();
     }
 
-    pub fn episodeSink(s: *FakeSink) core.EpisodeSink {
+    pub fn entrySink(s: *FakeSink) core.EntrySink {
         return .{ .ptr = s, .vtable = &.{ .enqueue = enqueue, .loadCursor = loadCursor } };
     }
 
-    fn enqueue(ptr: *anyopaque, draft: *const core.EpisodeDraft) anyerror!core.EpisodeSink.Outcome {
+    fn enqueue(ptr: *anyopaque, draft: *const core.EntryDraft) anyerror!core.EntrySink.Outcome {
         const s: *FakeSink = @ptrCast(@alignCast(ptr));
         if (s.failing) return error.SinkUnavailable;
         const a = s.arena.allocator();
@@ -528,11 +528,11 @@ pub const FakeSink = struct {
         const hash = try segment.contentHash(a, draft.body);
         const seen = try s.hashes.getOrPut(a, hash);
         if (seen.found_existing) return .duplicate;
-        try s.episodes.append(a, .{
+        try s.entries.append(a, .{
             .body = try segment.canonicalBody(a, draft.body),
             .seq = draft.seq_in_source,
             .project = if (draft.project) |p| try a.dupe(u8, p) else null,
-            .asserted_by = draft.asserted_by,
+            .author = draft.author,
             .reference_time = draft.reference_time,
             .cursor = try a.dupe(u8, draft.cursor.?),
             .turns = draft.body.turns.len,
@@ -597,7 +597,7 @@ const Harness = struct {
     }
 
     fn tailer(h: *Harness, sink: *FakeSink, options: Options) Tailer {
-        return .init(testing.allocator, testing.io, .@"claude-code", h.root, sink.episodeSink(), &h.config, options);
+        return .init(testing.allocator, testing.io, .@"claude-code", h.root, sink.entrySink(), &h.config, options);
     }
 };
 
@@ -610,21 +610,21 @@ test "tails a transcript, seals on idle, and resumes from the stored cursor" {
     try h.write(fixtureLines(0, 8));
     var t = h.tailer(&sink, .{});
     try t.scan(t0 + 30 * sec);
-    try testing.expectEqual(@as(usize, 0), sink.episodes.items.len);
+    try testing.expectEqual(@as(usize, 0), sink.entries.items.len);
     try t.tick(t0 + 3 * std.time.us_per_min);
-    try testing.expectEqual(@as(usize, 1), sink.episodes.items.len);
-    try testing.expectEqual(@as(usize, 3), sink.episodes.items[0].turns);
-    try testing.expectEqual(core.types.AssertedBy.mixed, sink.episodes.items[0].asserted_by);
-    try testing.expectEqual(t0, sink.episodes.items[0].reference_time);
-    try testing.expectEqual(@as(i32, 1), sink.episodes.items[0].seq);
-    try testing.expect(std.mem.indexOf(u8, sink.episodes.items[0].body, "HIDDEN-THOUGHT") == null);
+    try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
+    try testing.expectEqual(@as(usize, 3), sink.entries.items[0].turns);
+    try testing.expectEqual(core.types.Author.mixed, sink.entries.items[0].author);
+    try testing.expectEqual(t0, sink.entries.items[0].reference_time);
+    try testing.expectEqual(@as(i32, 1), sink.entries.items[0].seq);
+    try testing.expect(std.mem.indexOf(u8, sink.entries.items[0].body, "HIDDEN-THOUGHT") == null);
 
     try h.append(fixtureLines(8, 100));
     try t.scan(t0 + 150 * sec);
     try t.tick(t0 + 10 * std.time.us_per_min);
-    try testing.expectEqual(@as(usize, 2), sink.episodes.items.len);
-    try testing.expectEqual(@as(usize, 2), sink.episodes.items[1].turns);
-    try testing.expectEqual(@as(i32, 2), sink.episodes.items[1].seq);
+    try testing.expectEqual(@as(usize, 2), sink.entries.items.len);
+    try testing.expectEqual(@as(usize, 2), sink.entries.items[1].turns);
+    try testing.expectEqual(@as(i32, 2), sink.entries.items[1].seq);
     try testing.expectEqual(@as(u64, 1), t.stats.malformed_lines);
     t.deinit();
 
@@ -632,18 +632,18 @@ test "tails a transcript, seals on idle, and resumes from the stored cursor" {
     defer restarted.deinit();
     try restarted.scan(t0 + 11 * std.time.us_per_min);
     try restarted.tick(t0 + 20 * std.time.us_per_min);
-    try testing.expectEqual(@as(usize, 2), sink.episodes.items.len);
+    try testing.expectEqual(@as(usize, 2), sink.entries.items.len);
     try testing.expectEqual(@as(u64, 0), restarted.stats.lines);
 
     try h.append("{\"type\":\"user\",\"cwd\":\"/home/dev/acme/widget\",\"message\":{\"role\":\"user\",\"content\":\"One more thing: the staging database is on port 5433.\"},\"timestamp\":\"2026-11-20T17:30:00.000Z\"}\n");
     try restarted.scan(t0 + 30 * std.time.us_per_min);
     try restarted.tick(t0 + 40 * std.time.us_per_min);
-    try testing.expectEqual(@as(usize, 3), sink.episodes.items.len);
-    try testing.expectEqual(@as(i32, 3), sink.episodes.items[2].seq);
-    try testing.expectEqual(core.types.AssertedBy.user, sink.episodes.items[2].asserted_by);
+    try testing.expectEqual(@as(usize, 3), sink.entries.items.len);
+    try testing.expectEqual(@as(i32, 3), sink.entries.items[2].seq);
+    try testing.expectEqual(core.types.Author.user, sink.entries.items[2].author);
 }
 
-test "a crash before sealing re-reads the open window and yields the same episodes" {
+test "a crash before sealing re-reads the open window and yields the same entries" {
     var h: Harness = try .init();
     defer h.deinit();
     try h.write(claude_fixture);
@@ -663,7 +663,7 @@ test "a crash before sealing re-reads the open window and yields the same episod
         var t = h.tailer(&crashy, .{});
         defer t.deinit();
         try t.scan(t0 + 3 * std.time.us_per_min);
-        try testing.expectEqual(@as(usize, 0), crashy.episodes.items.len);
+        try testing.expectEqual(@as(usize, 0), crashy.entries.items.len);
     }
     {
         var t = h.tailer(&crashy, .{});
@@ -671,8 +671,8 @@ test "a crash before sealing re-reads the open window and yields the same episod
         try t.scan(t0 + 3 * std.time.us_per_min);
         try t.tick(t0 + 10 * std.time.us_per_min);
     }
-    try testing.expectEqual(straight.episodes.items.len, crashy.episodes.items.len);
-    for (straight.episodes.items, crashy.episodes.items) |a, b| try testing.expectEqualStrings(a.body, b.body);
+    try testing.expectEqual(straight.entries.items.len, crashy.entries.items.len);
+    for (straight.entries.items, crashy.entries.items) |a, b| try testing.expectEqualStrings(a.body, b.body);
 }
 
 test "losing every cursor makes a full re-tail a no-op" {
@@ -687,14 +687,14 @@ test "losing every cursor makes a full re-tail a no-op" {
         try t.scan(t0 + 3 * std.time.us_per_min);
         try t.tick(t0 + 10 * std.time.us_per_min);
     }
-    const before = sink.episodes.items.len;
+    const before = sink.entries.items.len;
     try testing.expect(before > 0);
     sink.cursors = .empty;
     var t = h.tailer(&sink, .{});
     defer t.deinit();
     try t.scan(t0 + 3 * std.time.us_per_min);
     try t.tick(t0 + 10 * std.time.us_per_min);
-    try testing.expectEqual(before, sink.episodes.items.len);
+    try testing.expectEqual(before, sink.entries.items.len);
     try testing.expectEqual(@as(u64, before), t.stats.duplicates);
 }
 
@@ -725,23 +725,23 @@ test "truncation and rotation restart the file from the top" {
     defer t.deinit();
     try t.scan(t0 + 3 * std.time.us_per_min);
     try t.tick(t0 + 10 * std.time.us_per_min);
-    const first = sink.episodes.items.len;
+    const first = sink.entries.items.len;
 
     const fresh = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Truncated and started over.\"},\"timestamp\":\"2026-11-20T18:00:00.000Z\"}\n";
     try h.write(fresh);
     try t.scan(t0 + 61 * std.time.us_per_min);
     try t.tick(t0 + 70 * std.time.us_per_min);
-    try testing.expectEqual(first + 1, sink.episodes.items.len);
+    try testing.expectEqual(first + 1, sink.entries.items.len);
     try testing.expectEqual(@as(u64, 1), t.stats.resets);
-    try testing.expect(std.mem.indexOf(u8, sink.episodes.items[first].body, "Truncated and started over.") != null);
+    try testing.expect(std.mem.indexOf(u8, sink.entries.items[first].body, "Truncated and started over.") != null);
 
     try h.tmp.dir.rename("proj/session.jsonl", h.tmp.dir, "proj/session.jsonl.1", testing.io);
     try h.write("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"A rotated file with a much longer first line than before.\"},\"timestamp\":\"2026-11-20T19:00:00.000Z\"}\n");
     try t.scan(t0 + 121 * std.time.us_per_min);
     try t.tick(t0 + 130 * std.time.us_per_min);
-    try testing.expectEqual(first + 2, sink.episodes.items.len);
+    try testing.expectEqual(first + 2, sink.entries.items.len);
     try testing.expectEqual(@as(u64, 2), t.stats.resets);
-    try testing.expectEqual(@as(i32, @intCast(first + 2)), sink.episodes.items[first + 1].seq);
+    try testing.expectEqual(@as(i32, @intCast(first + 2)), sink.entries.items[first + 1].seq);
 }
 
 test "a cursor from a replaced file is not trusted" {
@@ -766,9 +766,9 @@ test "a cursor from a replaced file is not trusted" {
     try t.scan(t0 + 16 * std.time.us_per_hour);
     try t.tick(t0 + 17 * std.time.us_per_hour);
     try testing.expectEqual(@as(u64, 1), t.stats.resets);
-    try testing.expect(std.mem.indexOf(u8, sink.episodes.items[sink.episodes.items.len - 1].body, "replacement line 39") != null);
-    try testing.expect(std.mem.indexOf(u8, sink.episodes.items[sink.episodes.items.len - 1].body, "replacement line 0\"") != null or
-        std.mem.indexOf(u8, sink.episodes.items[sink.episodes.items.len - 2].body, "replacement line 0\"") != null);
+    try testing.expect(std.mem.indexOf(u8, sink.entries.items[sink.entries.items.len - 1].body, "replacement line 39") != null);
+    try testing.expect(std.mem.indexOf(u8, sink.entries.items[sink.entries.items.len - 1].body, "replacement line 0\"") != null or
+        std.mem.indexOf(u8, sink.entries.items[sink.entries.items.len - 2].body, "replacement line 0\"") != null);
 }
 
 test "turns before the capture epoch and while paused are dropped" {
@@ -781,19 +781,19 @@ test "turns before the capture epoch and while paused are dropped" {
     defer t.deinit();
     try t.scan(t0 + 3 * std.time.us_per_min);
     try t.tick(t0 + 10 * std.time.us_per_min);
-    try testing.expectEqual(@as(usize, 1), sink.episodes.items.len);
-    try testing.expectEqual(@as(usize, 1), sink.episodes.items[0].turns);
+    try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
+    try testing.expectEqual(@as(usize, 1), sink.entries.items[0].turns);
     try testing.expectEqual(@as(u64, 4), t.stats.dropped_turns);
 
     t.paused = true;
     try h.append("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"private while paused\"},\"timestamp\":\"2026-11-20T17:20:00.000Z\"}\n");
     try t.scan(t0 + 21 * std.time.us_per_min);
     try t.tick(t0 + 30 * std.time.us_per_min);
-    try testing.expectEqual(@as(usize, 1), sink.episodes.items.len);
+    try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
     try testing.expectEqual(@as(u64, 5), t.stats.dropped_turns);
 }
 
-test "a failing sink keeps sealed episodes until it recovers" {
+test "a failing sink keeps sealed entries until it recovers" {
     var h: Harness = try .init();
     defer h.deinit();
     var sink: FakeSink = .init(testing.allocator);
@@ -804,11 +804,11 @@ test "a failing sink keeps sealed episodes until it recovers" {
     defer t.deinit();
     try t.scan(t0 + 3 * std.time.us_per_min);
     try t.tick(t0 + 10 * std.time.us_per_min);
-    try testing.expectEqual(@as(usize, 0), sink.episodes.items.len);
+    try testing.expectEqual(@as(usize, 0), sink.entries.items.len);
     try testing.expect(t.stats.enqueue_errors > 0);
     sink.failing = false;
     try t.tick(t0 + 11 * std.time.us_per_min);
-    try testing.expectEqual(@as(usize, 1), sink.episodes.items.len);
+    try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
 }
 
 test "a hook flush seals a complete exchange without waiting for idle" {
@@ -820,8 +820,8 @@ test "a hook flush seals a complete exchange without waiting for idle" {
     var t = h.tailer(&sink, .{});
     defer t.deinit();
     try testing.expect(try t.flush(h.path, t0 + 26 * sec));
-    try testing.expectEqual(@as(usize, 1), sink.episodes.items.len);
-    try testing.expectEqual(@as(usize, 4), sink.episodes.items[0].turns);
+    try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
+    try testing.expectEqual(@as(usize, 4), sink.entries.items[0].turns);
     try testing.expect(!try t.flush("/elsewhere/x.jsonl", t0));
 }
 
@@ -845,6 +845,6 @@ test "files untouched since the capture epoch are skipped until they grow" {
     try t.scan(since + std.time.us_per_hour);
     try t.tick(since + 2 * std.time.us_per_hour);
     try testing.expectEqual(@as(u64, 1), t.stats.lines);
-    try testing.expectEqual(@as(usize, 1), sink.episodes.items.len);
-    try testing.expect(std.mem.indexOf(u8, sink.episodes.items[0].body, "Resumed a day later.") != null);
+    try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
+    try testing.expect(std.mem.indexOf(u8, sink.entries.items[0].body, "Resumed a day later.") != null);
 }

@@ -20,8 +20,6 @@ pub fn build(b: *std.Build) void {
     const pg = b.dependency("pg", .{ .target = target, .optimize = optimize }).module("pg");
     registry.put(b.allocator, "pg", pg) catch @panic("OOM");
 
-    const test_db = b.graph.environ_map.get("GRAF_TEST_DATABASE_URL");
-
     const test_step = b.step("test", "Run every module's unit and integration tests");
     for (modules) |m| {
         const mod = b.createModule(.{
@@ -38,10 +36,7 @@ pub fn build(b: *std.Build) void {
 
         const tests = b.addTest(.{ .name = m.name, .root_module = mod, .filters = filters });
         const run_tests = b.addRunArtifact(tests);
-        if (test_db) |url| {
-            run_tests.setEnvironmentVariable("GRAF_TEST_DATABASE_URL", url);
-            run_tests.has_side_effects = true;
-        }
+        run_tests.has_side_effects = true;
         test_step.dependOn(&run_tests.step);
         b.step(b.fmt("test-{s}", .{m.name}), b.fmt("Run the {s} module's tests", .{m.name})).dependOn(&run_tests.step);
     }

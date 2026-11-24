@@ -85,7 +85,7 @@ pub const Segmenter = struct {
     }
 };
 
-pub fn assertedBy(turns: []const core.Turn) core.types.AssertedBy {
+pub fn authorOf(turns: []const core.Turn) core.types.Author {
     var user = false;
     var agent = false;
     var tool = false;
@@ -107,11 +107,11 @@ pub fn turnsOf(arena: Allocator, window: Window) Allocator.Error![]const core.Tu
     return turns;
 }
 
-pub fn canonicalBody(arena: Allocator, body: core.EpisodeBody) Allocator.Error![]const u8 {
+pub fn canonicalBody(arena: Allocator, body: core.EntryBody) Allocator.Error![]const u8 {
     return std.json.Stringify.valueAlloc(arena, body, .{});
 }
 
-pub fn contentHash(arena: Allocator, body: core.EpisodeBody) Allocator.Error![32]u8 {
+pub fn contentHash(arena: Allocator, body: core.EntryBody) Allocator.Error![32]u8 {
     var out: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(try canonicalBody(arena, body), &out, .{});
     return out;
@@ -181,6 +181,6 @@ test "canonical body is stable" {
     const a = try contentHash(arena, .{ .turns = &turns });
     const b = try contentHash(arena, .{ .turns = try arena.dupe(core.Turn, &turns) });
     try testing.expectEqualSlices(u8, &a, &b);
-    try testing.expectEqual(core.types.AssertedBy.mixed, assertedBy(&turns));
-    try testing.expectEqual(core.types.AssertedBy.agent, assertedBy(turns[1..]));
+    try testing.expectEqual(core.types.Author.mixed, authorOf(&turns));
+    try testing.expectEqual(core.types.Author.agent, authorOf(turns[1..]));
 }

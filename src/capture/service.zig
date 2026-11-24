@@ -39,7 +39,7 @@ pub const Capture = struct {
     last_scan: ?core.Micros = null,
     options: Options,
 
-    pub fn init(gpa: Allocator, io: Io, env: *const Environ.Map, config: *const core.Config, sink: core.EpisodeSink, options: Options) !Capture {
+    pub fn init(gpa: Allocator, io: Io, env: *const Environ.Map, config: *const core.Config, sink: core.EntrySink, options: Options) !Capture {
         var arena: std.heap.ArenaAllocator = .init(gpa);
         errdefer arena.deinit();
         const a = arena.allocator();
@@ -168,7 +168,7 @@ test "capture tails every configured root and answers hook flushes" {
     var env = Environ.Map.init(testing.allocator);
     defer env.deinit();
     const config: core.Config = .{};
-    var c: Capture = try .init(testing.allocator, io, &env, &config, sink.episodeSink(), .{ .roots = &roots, .backfill = true });
+    var c: Capture = try .init(testing.allocator, io, &env, &config, sink.entrySink(), .{ .roots = &roots, .backfill = true });
     defer c.deinit();
 
     const t0: core.Micros = 1_795_194_000_000_000;
@@ -182,7 +182,7 @@ test "capture tails every configured root and answers hook flushes" {
     try c.step(t0 + 26 * 60 * minute);
     const s = c.stats();
     try testing.expectEqual(@as(usize, 2), s.files);
-    try testing.expectEqual(@as(usize, 2), sink.episodes.items.len);
+    try testing.expectEqual(@as(usize, 2), sink.entries.items.len);
 
     const transcript = try std.fs.path.join(arena, &.{ base, "claude", "proj", "s.jsonl" });
     try tmp.dir.writeFile(io, .{ .sub_path = "claude/proj/s.jsonl", .data = "" });
