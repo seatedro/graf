@@ -445,8 +445,8 @@ pub const Decisions = struct {
 
 pub const relation_options = [_]llm.decision.Option{
     .{ .name = "same", .description = "the new statement says the same thing as the existing fact" },
-    .{ .name = "changed", .description = "the existing fact held, but the world changed (a handoff, a switch, an upgrade), so it no longer holds" },
-    .{ .name = "corrected", .description = "the existing fact was never true: the new statement corrects a mistake or a misstatement" },
+    .{ .name = "changed", .description = "the existing fact was true until now or until a stated time and has since stopped holding: a handoff, rotation, switch, upgrade, removal, or new release" },
+    .{ .name = "corrected", .description = "the entry says the existing fact was a mistake that was never true, for example 'that's wrong', 'I misspoke', or 'we never used it'; a switch or a change of plan is not a correction" },
     .{ .name = "compatible", .description = "both can be true at once: the new statement adds detail or is about something else" },
 };
 

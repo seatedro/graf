@@ -234,6 +234,7 @@ test "the decision model resolves with the entry as shared state, and a failing 
     try testing.expectEqual(@as(usize, 1), h.model.decisions.items.len);
     const sent = h.model.decisions.items[0];
     try testing.expectEqual(core.types.LlmPurpose.resolve, sent.purpose);
+    try testing.expectEqual(@as(usize, 1), sent.state.len);
     try testing.expectEqualStrings("entry", sent.state[0].name);
     try testing.expect(std.mem.indexOf(u8, sent.state[0].text, "Juno took over on call") != null);
     try testing.expectEqual(@as(usize, 1), sent.questions.len);

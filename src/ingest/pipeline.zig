@@ -7,7 +7,6 @@ const extract = @import("extract.zig");
 const resolve = @import("resolve.zig");
 const prompt = @import("prompt.zig");
 const schema = @import("schema.zig");
-const time = @import("time.zig");
 
 const Allocator = std.mem.Allocator;
 const Id = core.Id;
@@ -209,14 +208,10 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             if (d.model.decisionEnabled()) decision: {
                 const q = try resolve.decisionQuestions(arena, p, checked, prefetched);
                 if (q.asks.len == 0) break :decision;
-                var buf: [20]u8 = undefined;
                 const answers = d.model.decide(arena, .{
                     .purpose = .resolve,
                     .entry_id = lease.entry.id,
-                    .state = &.{
-                        .{ .name = "entry", .text = body_text },
-                        .{ .name = "reference_time", .text = time.format(lease.entry.reference_time, &buf) },
-                    },
+                    .state = &.{.{ .name = "entry", .text = body_text }},
                     .questions = q.asks,
                 }) catch {
                     try warnings.append(arena, "decision backend failed; used the structured resolution call");
