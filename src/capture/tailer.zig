@@ -77,6 +77,7 @@ pub const Tailer = struct {
     files: std.StringHashMapUnmanaged(*TailFile) = .empty,
     scratch: std.heap.ArenaAllocator,
     buf: []u8 = &.{},
+    recent: std.ArrayList([]const u8) = .empty,
 
     pub fn init(gpa: Allocator, io: Io, harness: core.Harness, root: []const u8, sink: core.EpisodeSink, config: *const core.Config, options: Options) Tailer {
         return .{
@@ -95,6 +96,7 @@ pub const Tailer = struct {
         var it = t.files.valueIterator();
         while (it.next()) |f| t.destroyFile(f.*);
         t.files.deinit(t.gpa);
+        t.recent.deinit(t.gpa);
         t.scratch.deinit();
         t.gpa.free(t.buf);
         t.* = undefined;
@@ -151,6 +153,7 @@ pub const Tailer = struct {
         }
         f.seen_size = st.size;
         f.seen_mtime = st.mtime.nanoseconds;
+        if (f.read_off < st.size) try t.recent.append(t.gpa, f.path);
         try t.readNew(f, file, st.size, now);
         t.compact(f);
     }
@@ -227,6 +230,10 @@ pub const Tailer = struct {
 
     fn forget(t: *Tailer, path: []const u8) void {
         const kv = t.files.fetchRemove(path) orelse return;
+        var i: usize = 0;
+        while (i < t.recent.items.len) {
+            if (t.recent.items[i].ptr == kv.value.path.ptr) _ = t.recent.swapRemove(i) else i += 1;
+        }
         if (kv.value.excluded == true) t.stats.excluded_files -= 1;
         t.stats.files -= 1;
         t.destroyFile(kv.value);
