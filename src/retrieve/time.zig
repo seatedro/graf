@@ -9,8 +9,6 @@ pub fn now(io: std.Io) core.Micros {
 
 pub const ParseError = error{InvalidTimestamp};
 
-/// Accepts `YYYY-MM-DD`, optionally followed by `THH:MM[:SS[.fraction]]` and `Z` or `±HH:MM`.
-/// A missing offset means UTC.
 pub fn parseIso(s: []const u8) ParseError!core.Micros {
     if (s.len < 10 or s[4] != '-' or s[7] != '-') return error.InvalidTimestamp;
     const year = try int(s[0..4]);
@@ -62,7 +60,6 @@ pub fn parseIso(s: []const u8) ParseError!core.Micros {
     return t - signed * 60 * std.time.us_per_s;
 }
 
-/// `YYYY-MM-DD` in UTC.
 pub fn formatDate(t: core.Micros, buf: *[10]u8) []const u8 {
     const days = @divFloor(t, us_per_day);
     const c = civilFromDays(days);

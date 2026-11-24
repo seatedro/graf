@@ -25,8 +25,6 @@ pub const FlushRequest = struct {
     cwd: ?[]const u8 = null,
 };
 
-/// The four memory operations plus the daemon endpoints, over one retrieval engine and
-/// one entry sink. Every front end calls it through `handler()`.
 pub const Service = struct {
     gpa: Allocator,
     io: Io,
@@ -321,7 +319,6 @@ pub const Service = struct {
     }
 };
 
-/// Fills `project` into requests that omit it, for front ends that know the caller's project.
 pub const DefaultProject = struct {
     inner: api.Handler,
     project: []const u8,

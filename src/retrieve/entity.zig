@@ -19,7 +19,6 @@ pub const Neighbor = struct {
 
 pub const EntityResult = struct {
     entity: Profile,
-    /// Other live entities that share the looked-up name, e.g. a tool and a concept.
     alternatives: []const core.Entity = &.{},
     facts: []const Hit = &.{},
     neighbors: []const Neighbor = &.{},
@@ -192,7 +191,6 @@ pub const ForgetTarget = struct {
 
 pub const ForgetResult = struct {
     forgotten: []const Hit = &.{},
-    /// Set when a query matched several facts: nothing was forgotten.
     candidates: []const Hit = &.{},
 };
 

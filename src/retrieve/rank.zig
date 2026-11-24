@@ -87,9 +87,6 @@ pub const Candidate = struct {
     score: f64 = 0,
 };
 
-/// Fills `score`: `0.65 * p + 0.35 * rrf / max_rrf` when the reranker scored a candidate,
-/// `0.35 * rrf / max_rrf` for unscored candidates after a rerank, plain `rrf` otherwise;
-/// each times the scope, recency and confidence factors.
 pub fn score(cands: []Candidate, reranked: bool) void {
     var max_rrf: f64 = 0;
     for (cands) |c| max_rrf = @max(max_rrf, c.rrf);
@@ -102,8 +99,6 @@ pub fn score(cands: []Candidate, reranked: bool) void {
     }
 }
 
-/// Greedy maximal marginal relevance over `cands` (scores already filled). Returns
-/// candidate indices in selection order, all of them.
 pub fn mmr(arena: std.mem.Allocator, cands: []const Candidate) ![]u32 {
     const n = cands.len;
     const order = try arena.alloc(u32, n);
@@ -135,7 +130,6 @@ pub fn mmr(arena: std.mem.Allocator, cands: []const Candidate) ![]u32 {
     return order;
 }
 
-/// Index permutation of `cands` by descending rrf, ties by input order.
 pub fn byRrf(arena: std.mem.Allocator, cands: []const Candidate) ![]u32 {
     const idx = try arena.alloc(u32, cands.len);
     for (idx, 0..) |*v, i| v.* = @intCast(i);

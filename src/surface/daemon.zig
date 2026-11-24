@@ -15,8 +15,6 @@ const log = std.log.scoped(.serve);
 
 pub const tail_interval_ms = 30_000;
 
-/// The store, model client and retrieval engine for one graph, shared by `graf serve`
-/// and the one-shot CLI commands.
 pub const Runtime = struct {
     store: store.Store,
     graph_id: core.Id,
@@ -124,8 +122,6 @@ pub const Options = struct {
     socket_path: ?[]const u8,
 };
 
-/// `graf serve`: HTTP on `serve.listen` and the Unix socket, ingestion workers, transcript
-/// tailers and the brief cache, in one process. Runs until cancelled.
 pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: *const core.Config, opts: Options) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();

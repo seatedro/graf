@@ -12,7 +12,6 @@ pub fn upperBound(comptime col: []const u8) []const u8 {
     return "CASE WHEN upper_inf(" ++ col ++ ") OR NOT isfinite(upper(" ++ col ++ ")) THEN NULL ELSE upper(" ++ col ++ ") END";
 }
 
-/// Fact columns read by `readHit`, over `fact f`, `entity se` (subject) and `entity oe` (object, left joined).
 pub const hit_columns =
     "f.id, f.graph_id, f.subject_id, f.relation, f.qualifier, f.object_id, f.object_value, f.text, f.rationale, f.project, f.scope, " ++
     lowerBound("f.valid") ++ ", " ++ upperBound("f.valid") ++ ", " ++ lowerBound("f.known") ++ ", " ++ upperBound("f.known") ++ ", " ++

@@ -129,8 +129,6 @@ fn query(conn: anytype, arena: std.mem.Allocator, sql: []const u8, args: anytype
     return out.items;
 }
 
-/// Deterministic brief: standing preferences, active project facts with entity summaries,
-/// then decisions and changes from the last 14 days. Empty when there is nothing to say.
 pub fn build(e: *mod.Engine, arena: std.mem.Allocator, project: ?[]const u8) ![]const u8 {
     var summaries: std.AutoHashMapUnmanaged(core.Id, []const u8) = .empty;
     var prefs: []Hit = &.{};

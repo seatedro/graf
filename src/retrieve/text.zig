@@ -1,6 +1,5 @@
 const std = @import("std");
 
-// Mirrors the alias normalizer ingestion stores entity_alias.norm with; swap to core's copy once it lands.
 pub fn norm(arena: std.mem.Allocator, s: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = try .initCapacity(arena, s.len);
     var gap = false;

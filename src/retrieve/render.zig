@@ -9,7 +9,6 @@ pub fn estimateTokens(bytes: usize) u32 {
     return @intFromFloat(@ceil(@as(f64, @floatFromInt(bytes)) / 3.8));
 }
 
-/// Tracks a byte total against a token budget that keeps a 10% safety margin.
 pub const Budget = struct {
     max_tokens: u32,
     bytes: usize = 0,
@@ -74,8 +73,6 @@ fn findEntity(entities: []const core.Entity, id: core.Id) ?*const core.Entity {
     return null;
 }
 
-/// Packs `result` greedily into `params.max_tokens` as compact Markdown, facts grouped by
-/// subject entity in rank order.
 pub fn render(result: *const mod.SearchResult, params: mod.SearchParams, out: *Writer) !void {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();

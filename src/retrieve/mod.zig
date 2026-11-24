@@ -68,7 +68,6 @@ pub const Embedder = struct {
     }
 };
 
-/// Scores each candidate's probability of being relevant to the query, in input order.
 pub const Reranker = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
@@ -82,7 +81,6 @@ pub const Reranker = struct {
     }
 };
 
-/// Query embeddings and reranking through the model client.
 pub const LlmBackend = struct {
     client: *llm.Client,
 
@@ -144,13 +142,10 @@ pub const Engine = struct {
         e.* = undefined;
     }
 
-    /// Hybrid search: query embedding, one SQL round trip over the vector, lexical and
-    /// entity-neighborhood arms, RRF, optional rerank with a deterministic fallback, MMR.
     pub fn search(e: *Engine, arena: std.mem.Allocator, params: SearchParams) !SearchResult {
         return search_.run(e, arena, params, .{});
     }
 
-    /// Postgres-only search (lexical and alias arms, no model calls).
     pub fn searchInstant(e: *Engine, arena: std.mem.Allocator, params: SearchParams) !SearchResult {
         return search_.run(e, arena, params, .{ .embed = false, .rerank = false });
     }
@@ -159,19 +154,14 @@ pub const Engine = struct {
         return entity_.lookup(e, arena, params);
     }
 
-    /// Ends a fact's system time (`end_kind = forgotten`), or lists candidates when a query
-    /// matches more than one fact.
     pub fn forget(e: *Engine, arena: std.mem.Allocator, target: entity_.ForgetTarget) !ForgetResult {
         return entity_.forget(e, arena, target);
     }
 
-    /// Session-start brief for a project, at most 800 tokens, no model calls. Served from
-    /// memory, then from `project_brief`, building it on a miss.
     pub fn brief(e: *Engine, arena: std.mem.Allocator, project: ?[]const u8) ![]const u8 {
         return brief_.get(e, arena, project);
     }
 
-    /// Rebuilds every brief this process has served. Call on `NOTIFY graf_commit`.
     pub fn refreshBriefs(e: *Engine) !void {
         return brief_.refreshAll(e);
     }
@@ -180,18 +170,14 @@ pub const Engine = struct {
         return brief_.build(e, arena, project);
     }
 
-    /// Facts an entry stated, restated and ended once it committed; null for an unknown entry.
     pub fn entryOutcome(e: *Engine, arena: std.mem.Allocator, entry_id: core.Id) !?EntryOutcome {
         return outcome_.get(e, arena, entry_id);
     }
 
-    /// Full search for the session's current topic, cached for `recall`.
     pub fn warm(e: *Engine, session_id: []const u8, prompt: []const u8, project: ?[]const u8) !void {
         return recall_.warm(e, session_id, prompt, project);
     }
 
-    /// Instant recall for a prompt: Postgres-only lexical and alias hits merged with the
-    /// warmed cache, minus facts already shown in the session, at most 400 tokens.
     pub fn recall(e: *Engine, arena: std.mem.Allocator, session_id: []const u8, prompt: []const u8, project: ?[]const u8) ![]const u8 {
         return recall_.recall(e, arena, session_id, prompt, project);
     }
