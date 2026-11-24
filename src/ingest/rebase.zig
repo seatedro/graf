@@ -150,20 +150,20 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
         }
     }.f;
 
-    var reaffirmations: std.ArrayList(ChangeSet.Reaffirmation) = .empty;
-    for (cs.reaffirmations) |r| {
+    var restatements: std.ArrayList(ChangeSet.Restatement) = .empty;
+    for (cs.restatements) |r| {
         if (ended(touched, r.fact_id)) {
-            try warnings.append(arena, "rebase: dropped a reaffirmation of a fact that ended concurrently");
+            try warnings.append(arena, "rebase: dropped a restatement of a fact that ended concurrently");
             continue;
         }
-        try reaffirmations.append(arena, r);
+        try restatements.append(arena, r);
     }
     var invalidations: std.ArrayList(ChangeSet.Invalidation) = .empty;
     for (cs.invalidations) |inv| if (!ended(touched, inv.fact_id)) try invalidations.append(arena, inv);
     var retractions: std.ArrayList(ChangeSet.Retraction) = .empty;
     for (cs.retractions) |r| if (!ended(touched, r.fact_id)) try retractions.append(arena, r);
-    var provenance: std.ArrayList(ChangeSet.Provenance) = .empty;
-    for (cs.provenance) |p| if (!ended(touched, p.fact_id)) try provenance.append(arena, p);
+    var evidence: std.ArrayList(ChangeSet.Evidence) = .empty;
+    for (cs.evidence) |p| if (!ended(touched, p.fact_id)) try evidence.append(arena, p);
 
     var blast: rules.BlastRadius = .{ .used = invalidations.items.len + retractions.items.len };
     var new_facts: std.ArrayList(ChangeSet.NewFact) = .empty;
@@ -179,7 +179,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
         }
         const key: rules.Key = .{
             .subject = nf.fact.subject_id,
-            .predicate = nf.fact.predicate,
+            .relation = nf.fact.relation,
             .qualifier = nf.fact.qualifier,
             .object = switch (nf.fact.object) {
                 .entity => |o| .{ .entity = o },
@@ -187,7 +187,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
             },
             .valid = nf.fact.valid,
         };
-        const rule = rules.ruleFor(nf.fact.predicate, null);
+        const rule = rules.ruleFor(nf.fact.relation, null);
 
         var restated: ?resolve.CandidateFact = null;
         for (touched.facts, 0..) |t, i| {
@@ -199,15 +199,15 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
         }
         if (restated) |old| {
             var quote: ?[]const u8 = null;
-            var kept: std.ArrayList(ChangeSet.Provenance) = .empty;
-            for (provenance.items) |p| {
+            var kept: std.ArrayList(ChangeSet.Evidence) = .empty;
+            for (evidence.items) |p| {
                 if (p.fact_id.eql(nf.fact.id)) {
-                    if (p.role == .asserted) quote = p.quote;
+                    if (p.kind == .stated) quote = p.quote;
                     continue;
                 }
                 try kept.append(arena, p);
             }
-            provenance = kept;
+            evidence = kept;
             for (invalidations.items) |*inv| if (inv.ended_by) |e| if (e.eql(nf.fact.id)) {
                 inv.ended_by = old.id;
             };
@@ -215,12 +215,12 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
                 r.ended_by = old.id;
             };
             var already = false;
-            for (reaffirmations.items) |r| if (r.fact_id.eql(old.id)) {
+            for (restatements.items) |r| if (r.fact_id.eql(old.id)) {
                 already = true;
             };
             if (!already) {
-                try reaffirmations.append(arena, .{ .fact_id = old.id, .confidence = rules.reaffirm(old.confidence) });
-                try provenance.append(arena, .{ .fact_id = old.id, .role = .reaffirmed, .quote = quote });
+                try restatements.append(arena, .{ .fact_id = old.id, .confidence = rules.restate(old.confidence) });
+                try evidence.append(arena, .{ .fact_id = old.id, .kind = .restated, .quote = quote });
             }
             continue;
         }
@@ -236,24 +236,24 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
                 .ended_old => if (blast.admit()) {
                     active[i] = false;
                     try invalidations.append(arena, .{ .fact_id = old.id, .valid_upper = old.valid.upper.?, .ended_by = nf.fact.id });
-                    try provenance.append(arena, .{ .fact_id = old.id, .role = .contradicted });
+                    try evidence.append(arena, .{ .fact_id = old.id, .kind = .contradicted });
                 },
                 .retracted_old => if (blast.admit()) {
                     active[i] = false;
                     try retractions.append(arena, .{ .fact_id = old.id, .end_kind = .retracted, .ended_by = nf.fact.id });
-                    try provenance.append(arena, .{ .fact_id = old.id, .role = .retracted });
+                    try evidence.append(arena, .{ .fact_id = old.id, .kind = .retracted });
                 },
             }
         }
         try new_facts.append(arena, nf);
     }
-    if (blast.dropped > 0) try warnings.append(arena, try std.fmt.allocPrint(arena, "rebase: skipped {d} endings over the per-episode cap", .{blast.dropped}));
+    if (blast.dropped > 0) try warnings.append(arena, try std.fmt.allocPrint(arena, "rebase: skipped {d} endings over the per-entry cap", .{blast.dropped}));
 
     cs.new_facts = new_facts.items;
-    cs.reaffirmations = reaffirmations.items;
+    cs.restatements = restatements.items;
     cs.invalidations = invalidations.items;
     cs.retractions = retractions.items;
-    cs.provenance = provenance.items;
+    cs.evidence = evidence.items;
     cs.warnings = warnings.items;
     return .{ .possible_duplicates = dups.items };
 }
@@ -261,7 +261,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
 fn factKey(arena: Allocator, c: resolve.CandidateFact) !rules.Key {
     return .{
         .subject = c.subject_id,
-        .predicate = c.predicate,
+        .relation = c.relation,
         .qualifier = c.qualifier,
         .object = if (c.object_id) |o| .{ .entity = o } else .{ .value = try core.text.norm(arena, c.object_value orelse "") },
         .valid = .{ .lower = c.valid_lower, .upper = c.valid_upper },
@@ -273,14 +273,14 @@ fn oldFact(c: resolve.CandidateFact, graph_id: Id) core.Fact {
         .id = c.id,
         .graph_id = graph_id,
         .subject_id = c.subject_id,
-        .predicate = c.predicate,
+        .relation = c.relation,
         .qualifier = c.qualifier,
         .object = if (c.object_id) |o| .{ .entity = o } else .{ .value = c.object_value orelse "" },
         .text = c.text,
         .scope = .project,
         .valid = .{ .lower = c.valid_lower, .upper = c.valid_upper },
-        .sys = .{},
-        .asserted_by = .agent,
+        .known = .{},
+        .author = .agent,
         .confidence = c.confidence,
     };
 }
@@ -291,7 +291,7 @@ fn testId(n: u8) Id {
     return Id.fromParts(@as(u48, n) << 8, @splat(n));
 }
 
-test "rebase folds a concurrently created entity and reaffirms a concurrently committed fact" {
+test "rebase folds a concurrently created entity and restates a concurrently committed fact" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -302,36 +302,36 @@ test "rebase folds a concurrently created entity and reaffirms a concurrently co
     const their_fact = testId(11);
     var cs: ChangeSet = .{
         .base_seq = 4,
-        .new_entities = &.{.{ .id = mine, .name = "Relay", .norm = "relay", .type = .service, .name_emb = &.{ 1, 0 } }},
+        .new_entities = &.{.{ .id = mine, .name = "Relay", .norm = "relay", .type = .software, .name_emb = &.{ 1, 0 } }},
         .new_facts = &.{.{ .fact = .{
             .id = my_fact,
             .graph_id = testId(0),
             .subject_id = subject,
-            .predicate = "depends_on",
+            .relation = "depends_on",
             .object = .{ .entity = mine },
             .text = "x",
             .scope = .project,
             .valid = .{ .lower = 100 },
-            .sys = .{ .lower = 100 },
-            .asserted_by = .user,
+            .known = .{ .lower = 100 },
+            .author = .user,
             .confidence = 0.9,
         }, .emb = &.{} }},
-        .provenance = &.{.{ .fact_id = my_fact, .role = .asserted, .quote = "q" }},
+        .evidence = &.{.{ .fact_id = my_fact, .kind = .stated, .quote = "q" }},
         .mentions = &.{ mine, subject },
     };
     const out = try apply(arena, &cs, .{
-        .entities = &.{.{ .id = theirs, .name = "relay", .norm = "relay", .type = .service }},
-        .facts = &.{.{ .active = true, .fact = .{ .item = 0, .id = their_fact, .subject_id = subject, .predicate = "depends_on", .object_id = theirs, .text = "y", .valid_lower = 50, .confidence = 0.7 } }},
+        .entities = &.{.{ .id = theirs, .name = "relay", .norm = "relay", .type = .software }},
+        .facts = &.{.{ .active = true, .fact = .{ .item = 0, .id = their_fact, .subject_id = subject, .relation = "depends_on", .object_id = theirs, .text = "y", .valid_lower = 50, .confidence = 0.7 } }},
     }, 200, 100);
     try testing.expectEqual(@as(usize, 0), out.possible_duplicates.len);
     try testing.expectEqual(@as(usize, 0), cs.new_entities.len);
     try testing.expectEqual(@as(usize, 0), cs.new_facts.len);
-    try testing.expectEqual(@as(usize, 1), cs.reaffirmations.len);
-    try testing.expect(cs.reaffirmations[0].fact_id.eql(their_fact));
-    try testing.expectApproxEqAbs(@as(f32, 0.79), cs.reaffirmations[0].confidence, 1e-6);
+    try testing.expectEqual(@as(usize, 1), cs.restatements.len);
+    try testing.expect(cs.restatements[0].fact_id.eql(their_fact));
+    try testing.expectApproxEqAbs(@as(f32, 0.79), cs.restatements[0].confidence, 1e-6);
     try testing.expect(cs.mentions[0].eql(theirs));
-    try testing.expectEqual(@as(usize, 1), cs.provenance.len);
-    try testing.expectEqual(core.types.ProvenanceRole.reaffirmed, cs.provenance[0].role);
+    try testing.expectEqual(@as(usize, 1), cs.evidence.len);
+    try testing.expectEqual(core.types.EvidenceKind.restated, cs.evidence[0].kind);
 }
 
 test "rebase ends a concurrently committed single-valued fact and drops work on facts that ended" {
@@ -348,30 +348,30 @@ test "rebase ends a concurrently committed single-valued fact and drops work on 
             .id = my_fact,
             .graph_id = testId(0),
             .subject_id = subject,
-            .predicate = "has_status",
+            .relation = "has_status",
             .object = .{ .value = "frozen" },
             .text = "x",
             .scope = .project,
             .valid = .{ .lower = 300 },
-            .sys = .{ .lower = 300 },
-            .asserted_by = .user,
+            .known = .{ .lower = 300 },
+            .author = .user,
             .confidence = 0.9,
         }, .emb = &.{} }},
-        .reaffirmations = &.{.{ .fact_id = gone, .confidence = 0.95 }},
-        .provenance = &.{ .{ .fact_id = my_fact, .role = .asserted }, .{ .fact_id = gone, .role = .reaffirmed } },
+        .restatements = &.{.{ .fact_id = gone, .confidence = 0.95 }},
+        .evidence = &.{ .{ .fact_id = my_fact, .kind = .stated }, .{ .fact_id = gone, .kind = .restated } },
     };
     _ = try apply(arena, &cs, .{
         .facts = &.{
-            .{ .active = true, .fact = .{ .item = 0, .id = their_fact, .subject_id = subject, .predicate = "has_status", .object_value = "open", .text = "y", .valid_lower = 200, .confidence = 0.9 } },
-            .{ .active = false, .fact = .{ .item = 0, .id = gone, .subject_id = subject, .predicate = "uses", .object_value = "z", .text = "z", .valid_lower = 10, .valid_upper = 20, .confidence = 0.9 } },
+            .{ .active = true, .fact = .{ .item = 0, .id = their_fact, .subject_id = subject, .relation = "has_status", .object_value = "open", .text = "y", .valid_lower = 200, .confidence = 0.9 } },
+            .{ .active = false, .fact = .{ .item = 0, .id = gone, .subject_id = subject, .relation = "uses", .object_value = "z", .text = "z", .valid_lower = 10, .valid_upper = 20, .confidence = 0.9 } },
         },
     }, 400, 300);
     try testing.expectEqual(@as(usize, 1), cs.new_facts.len);
     try testing.expectEqual(@as(usize, 1), cs.invalidations.len);
     try testing.expect(cs.invalidations[0].fact_id.eql(their_fact));
     try testing.expectEqual(@as(core.Micros, 300), cs.invalidations[0].valid_upper);
-    try testing.expectEqual(@as(usize, 0), cs.reaffirmations.len);
-    for (cs.provenance) |p| try testing.expect(!p.fact_id.eql(gone));
+    try testing.expectEqual(@as(usize, 0), cs.restatements.len);
+    for (cs.evidence) |p| try testing.expect(!p.fact_id.eql(gone));
 }
 
 test "rebase follows concurrent merges and records gray-band duplicates" {
@@ -384,13 +384,13 @@ test "rebase follows concurrent merges and records gray-band duplicates" {
     const lookalike = testId(8);
     var cs: ChangeSet = .{
         .base_seq = 1,
-        .new_entities = &.{.{ .id = mine, .name = "relay gateway", .norm = "relay gateway", .type = .service, .name_emb = &.{ 1, 0.5 } }},
+        .new_entities = &.{.{ .id = mine, .name = "relay gateway", .norm = "relay gateway", .type = .software, .name_emb = &.{ 1, 0.5 } }},
         .new_aliases = &.{.{ .entity_id = merged_away, .alias = "rly", .norm = "rly" }},
         .mentions = &.{ merged_away, mine },
     };
     const out = try apply(arena, &cs, .{ .entities = &.{
-        .{ .id = merged_away, .name = "rly", .norm = "rly", .type = .service, .merged_into = survivor },
-        .{ .id = lookalike, .name = "relay proxy", .norm = "relay proxy", .type = .service, .emb = &.{ 1, 0.4 } },
+        .{ .id = merged_away, .name = "rly", .norm = "rly", .type = .software, .merged_into = survivor },
+        .{ .id = lookalike, .name = "relay proxy", .norm = "relay proxy", .type = .software, .emb = &.{ 1, 0.4 } },
     } }, 10, 5);
     try testing.expect(cs.mentions[0].eql(survivor));
     try testing.expect(cs.new_aliases[0].entity_id.eql(survivor));

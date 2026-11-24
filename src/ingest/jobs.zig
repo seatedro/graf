@@ -11,7 +11,7 @@ const Id = core.Id;
 
 pub const summary_after_changes = 5;
 pub const summary_when_facts = 8;
-pub const promote_episodes = 5;
+pub const promote_entries = 5;
 pub const promote_sources = 2;
 pub const promotion_interval_s = 86_400;
 
@@ -20,26 +20,26 @@ pub const due_summaries_sql = std.fmt.comptimePrint(
     \\  SELECT e.id, e.name, e.type,
     \\    (SELECT COALESCE(json_agg(f.text ORDER BY f.created_seq DESC), '[]'::json) FROM (
     \\       SELECT text, created_seq FROM fact
-    \\       WHERE graph_id = e.graph_id AND (subject_id = e.id OR object_id = e.id) AND upper_inf(sys) AND upper_inf(valid)
+    \\       WHERE graph_id = e.graph_id AND (subject_id = e.id OR object_id = e.id) AND upper_inf(known) AND upper_inf(valid)
     \\       ORDER BY created_seq DESC LIMIT 40) f) AS facts
     \\  FROM entity e
     \\  WHERE e.graph_id = $1::uuid AND e.merged_into IS NULL AND (
     \\    e.facts_since_summary >= {d} OR (e.summary = '' AND (
-    \\      SELECT count(*) FROM fact f WHERE f.graph_id = e.graph_id AND f.subject_id = e.id AND upper_inf(f.sys) AND upper_inf(f.valid)) >= {d}))
+    \\      SELECT count(*) FROM fact f WHERE f.graph_id = e.graph_id AND f.subject_id = e.id AND upper_inf(f.known) AND upper_inf(f.valid)) >= {d}))
     \\  ORDER BY e.facts_since_summary DESC LIMIT $2) d
 , .{ summary_after_changes, summary_when_facts });
 
 pub const promote_sql = std.fmt.comptimePrint(
     \\WITH usage AS (
-    \\  SELECT f.predicate, count(DISTINCT p.fact_id) AS uses, count(DISTINCT e.id) AS episodes, count(DISTINCT e.source_id) AS sources
-    \\  FROM fact f JOIN fact_provenance p ON p.fact_id = f.id AND p.role IN ('asserted', 'reaffirmed')
-    \\  JOIN episode e ON e.id = p.episode_id
-    \\  WHERE f.graph_id = $1::uuid GROUP BY f.predicate
+    \\  SELECT f.relation, count(DISTINCT p.fact_id) AS uses, count(DISTINCT e.id) AS entries, count(DISTINCT e.source_id) AS sources
+    \\  FROM fact f JOIN fact_evidence p ON p.fact_id = f.id AND p.kind IN ('stated', 'restated')
+    \\  JOIN entry e ON e.id = p.entry_id
+    \\  WHERE f.graph_id = $1::uuid GROUP BY f.relation
     \\)
-    \\UPDATE predicate pr SET uses = u.uses, episodes = u.episodes, sources = u.sources,
-    \\  status = CASE WHEN pr.status = 'proposed' AND pr.mapped_to IS NULL AND u.episodes >= {d} AND u.sources >= {d} THEN 'learned' ELSE pr.status END
-    \\FROM usage u WHERE pr.graph_id = $1::uuid AND pr.name = u.predicate
-, .{ promote_episodes, promote_sources });
+    \\UPDATE relation pr SET uses = u.uses, entries = u.entries, sources = u.sources,
+    \\  status = CASE WHEN pr.status = 'proposed' AND pr.mapped_to IS NULL AND u.entries >= {d} AND u.sources >= {d} THEN 'learned' ELSE pr.status END
+    \\FROM usage u WHERE pr.graph_id = $1::uuid AND pr.name = u.relation
+, .{ promote_entries, promote_sources });
 
 pub const claim_job_sql =
     \\INSERT INTO ingest_job (graph_id, name, last_run) VALUES ($1::uuid, $2, now())
@@ -55,14 +55,14 @@ pub fn claimJob(conn: *pg.Conn, graph_id: Id, name: []const u8, interval_s: i32)
     return true;
 }
 
-pub fn promotePredicates(conn: *pg.Conn, graph_id: Id) !i64 {
+pub fn promoteRelations(conn: *pg.Conn, graph_id: Id) !i64 {
     var gbuf: [36]u8 = undefined;
     return (try conn.exec(promote_sql, .{postgres.idText(graph_id, &gbuf)})) orelse 0;
 }
 
 pub fn runDailyPromotion(conn: *pg.Conn, graph_id: Id) !bool {
-    if (!try claimJob(conn, graph_id, "predicate_promotion", promotion_interval_s)) return false;
-    _ = try promotePredicates(conn, graph_id);
+    if (!try claimJob(conn, graph_id, "relation_promotion", promotion_interval_s)) return false;
+    _ = try promoteRelations(conn, graph_id);
     return true;
 }
 

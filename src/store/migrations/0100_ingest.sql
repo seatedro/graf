@@ -1,4 +1,4 @@
-CREATE TABLE predicate_embedding (
+CREATE TABLE relation_embedding (
   graph_id uuid NOT NULL REFERENCES graph(id),
   name     text NOT NULL,
   emb      halfvec(512) NOT NULL,

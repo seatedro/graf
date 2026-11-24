@@ -119,10 +119,10 @@ pub const FakeModel = struct {
 };
 
 pub const MemoryBackend = struct {
-    pub const EpisodeRow = struct {
-        episode: core.Episode,
+    pub const EntryRow = struct {
+        entry: core.Entry,
         source: []const u8,
-        status: core.types.EpisodeStatus = .queued,
+        status: core.types.EntryStatus = .queued,
         attempts: i32 = 0,
         token: i64 = 0,
         extraction_json: ?[]const u8 = null,
@@ -141,15 +141,15 @@ pub const MemoryBackend = struct {
     };
 
     pub const FactRow = struct { fact: core.Fact, emb: []const f32 };
-    pub const ProvenanceRow = struct { fact_id: Id, episode_id: Id, role: core.types.ProvenanceRole };
+    pub const EvidenceRow = struct { fact_id: Id, entry_id: Id, kind: core.types.EvidenceKind };
 
     arena_state: std.heap.ArenaAllocator,
     io: std.Io,
-    episodes: std.ArrayList(EpisodeRow) = .empty,
+    entries: std.ArrayList(EntryRow) = .empty,
     entities: std.ArrayList(EntityRow) = .empty,
     facts: std.ArrayList(FactRow) = .empty,
-    provenance: std.ArrayList(ProvenanceRow) = .empty,
-    predicates: std.ArrayList(resolve.PredicateRow) = .empty,
+    evidence: std.ArrayList(EvidenceRow) = .empty,
+    relations: std.ArrayList(resolve.RelationRow) = .empty,
     seq: i64 = 0,
     next_token: i64 = 0,
     crash_after_extraction: bool = false,
@@ -157,7 +157,7 @@ pub const MemoryBackend = struct {
     pub fn init(gpa: Allocator, io: std.Io) !MemoryBackend {
         var b: MemoryBackend = .{ .arena_state = .init(gpa), .io = io };
         const a = b.arena_state.allocator();
-        for (core.ontology.core_predicates) |p| try b.predicates.append(a, .{
+        for (core.ontology.core_relations) |p| try b.relations.append(a, .{
             .name = p.name,
             .cardinality = p.cardinality,
             .opposes = p.opposes,
@@ -179,17 +179,17 @@ pub const MemoryBackend = struct {
         const a = b.arena();
         const id = Id.v7(b.io);
         var seq: i32 = 0;
-        for (b.episodes.items) |e| if (std.mem.eql(u8, e.source, source)) {
+        for (b.entries.items) |e| if (std.mem.eql(u8, e.source, source)) {
             seq += 1;
         };
-        try b.episodes.append(a, .{
-            .episode = .{
+        try b.entries.append(a, .{
+            .entry = .{
                 .id = id,
                 .graph_id = graph,
                 .seq_in_source = seq,
                 .kind = .turns,
                 .project = if (project) |p| try a.dupe(u8, p) else null,
-                .asserted_by = .user,
+                .author = .user,
                 .body = .{ .turns = try copy([]const core.Turn, a, turns) },
                 .content_hash = @splat(0),
                 .reference_time = reference_time,
@@ -206,14 +206,14 @@ pub const MemoryBackend = struct {
         return std.json.parseFromSliceLeaky(T, a, json, .{ .allocate = .alloc_always });
     }
 
-    pub fn row(b: *MemoryBackend, id: Id) *EpisodeRow {
-        for (b.episodes.items) |*e| if (e.episode.id.eql(id)) return e;
+    pub fn row(b: *MemoryBackend, id: Id) *EntryRow {
+        for (b.entries.items) |*e| if (e.entry.id.eql(id)) return e;
         unreachable;
     }
 
-    fn blocked(b: *MemoryBackend, e: EpisodeRow) bool {
-        for (b.episodes.items) |o| {
-            if (!std.mem.eql(u8, o.source, e.source) or o.episode.seq_in_source >= e.episode.seq_in_source) continue;
+    fn blocked(b: *MemoryBackend, e: EntryRow) bool {
+        for (b.entries.items) |o| {
+            if (!std.mem.eql(u8, o.source, e.source) or o.entry.seq_in_source >= e.entry.seq_in_source) continue;
             switch (o.status) {
                 .queued, .extracting, .extracted, .staged, .committing => return true,
                 else => {},
@@ -223,16 +223,16 @@ pub const MemoryBackend = struct {
     }
 
     pub fn claim(b: *MemoryBackend) ?store.Lease {
-        for (b.episodes.items) |*e| {
+        for (b.entries.items) |*e| {
             if (e.status != .queued and e.status != .extracted and e.status != .staged) continue;
             if (b.blocked(e.*)) continue;
             b.next_token += 1;
             e.token = b.next_token;
-            var ep = e.episode;
+            var ep = e.entry;
             ep.attempts = e.attempts;
             ep.status = e.status;
             e.status = if (e.extraction_json != null) .extracted else .extracting;
-            return .{ .episode_id = ep.id, .graph_id = graph, .token = e.token, .episode = ep, .extraction_json = e.extraction_json };
+            return .{ .entry_id = ep.id, .graph_id = graph, .token = e.token, .entry = ep, .extraction_json = e.extraction_json };
         }
         return null;
     }
@@ -243,23 +243,23 @@ pub const MemoryBackend = struct {
         e.token = 0;
     }
 
-    fn fenced(b: *MemoryBackend, lease: store.Lease) !*EpisodeRow {
-        const e = b.row(lease.episode_id);
+    fn fenced(b: *MemoryBackend, lease: store.Lease) !*EntryRow {
+        const e = b.row(lease.entry_id);
         if (e.token != lease.token) return error.LeaseLost;
         return e;
     }
 
     pub fn loadContext(b: *MemoryBackend, a: Allocator, lease: store.Lease) !pipeline.Context {
-        const me = b.row(lease.episode_id);
-        var prior: std.ArrayList(prompt.PriorEpisode) = .empty;
-        for (b.episodes.items) |e| {
+        const me = b.row(lease.entry_id);
+        var prior: std.ArrayList(prompt.PriorEntry) = .empty;
+        for (b.entries.items) |e| {
             if (e.status != .committed or !std.mem.eql(u8, e.source, me.source)) continue;
             var texts: std.ArrayList([]const u8) = .empty;
             if (e.change_set) |cs| for (cs.new_facts) |nf| try texts.append(a, nf.fact.text);
-            try prior.append(a, .{ .reference_time = e.episode.reference_time, .facts = texts.items });
+            try prior.append(a, .{ .reference_time = e.entry.reference_time, .facts = texts.items });
         }
         const start = prior.items.len -| 3;
-        return .{ .prior = prior.items[start..], .predicates = try a.dupe(resolve.PredicateRow, b.predicates.items) };
+        return .{ .prior = prior.items[start..], .relations = try a.dupe(resolve.RelationRow, b.relations.items) };
     }
 
     pub fn saveExtraction(b: *MemoryBackend, lease: store.Lease, json: []const u8) !void {
@@ -268,9 +268,9 @@ pub const MemoryBackend = struct {
         e.status = .extracted;
     }
 
-    pub fn savePredicateEmbeddings(b: *MemoryBackend, lease: store.Lease, names: []const []const u8, embs: []const []const f32) !void {
+    pub fn saveRelationEmbeddings(b: *MemoryBackend, lease: store.Lease, names: []const []const u8, embs: []const []const f32) !void {
         _ = lease;
-        for (names, embs) |n, v| for (b.predicates.items) |*p| if (std.mem.eql(u8, p.name, n)) {
+        for (names, embs) |n, v| for (b.relations.items) |*p| if (std.mem.eql(u8, p.name, n)) {
             p.emb = try b.arena().dupe(f32, v);
         };
     }
@@ -310,7 +310,7 @@ pub const MemoryBackend = struct {
         var facts: std.ArrayList(resolve.CandidateFact) = .empty;
         for (req.fact_subject, req.fact_object, req.fact_embs, 0..) |si, oi, emb, j| {
             for (b.facts.items) |f| {
-                if (f.fact.sys.upper != null or f.fact.valid.upper != null) continue;
+                if (f.fact.known.upper != null or f.fact.valid.upper != null) continue;
                 var related = rules.cosine(emb, f.emb) >= rules.neighbour_cosine;
                 for (ents.items) |c| {
                     if (c.item == si and c.id.eql(f.fact.subject_id)) related = true;
@@ -326,7 +326,7 @@ pub const MemoryBackend = struct {
                     .item = @intCast(j),
                     .id = f.fact.id,
                     .subject_id = f.fact.subject_id,
-                    .predicate = f.fact.predicate,
+                    .relation = f.fact.relation,
                     .qualifier = f.fact.qualifier,
                     .object_id = switch (f.fact.object) {
                         .entity => |x| x,
@@ -380,11 +380,11 @@ pub const MemoryBackend = struct {
         }
         for (cs.new_facts) |nf| {
             var f = nf.fact;
-            f.sys.lower = t;
+            f.known.lower = t;
             f.subject_id = b.canonical(f.subject_id);
             try b.facts.append(al, .{ .fact = f, .emb = nf.emb });
         }
-        for (cs.reaffirmations) |r| if (b.fact(r.fact_id)) |f| {
+        for (cs.restatements) |r| if (b.fact(r.fact_id)) |f| {
             f.fact.confidence = r.confidence;
         };
         for (cs.invalidations) |inv| if (b.fact(inv.fact_id)) |f| {
@@ -393,17 +393,17 @@ pub const MemoryBackend = struct {
             f.fact.ended_by = inv.ended_by;
         };
         for (cs.retractions) |r| if (b.fact(r.fact_id)) |f| {
-            f.fact.sys.upper = t;
+            f.fact.known.upper = t;
             f.fact.end_kind = r.end_kind;
             f.fact.ended_by = r.ended_by;
         };
-        for (cs.provenance) |p| try b.provenance.append(al, .{ .fact_id = p.fact_id, .episode_id = lease.episode_id, .role = p.role });
-        for (cs.new_predicates) |p| {
+        for (cs.evidence) |p| try b.evidence.append(al, .{ .fact_id = p.fact_id, .entry_id = lease.entry_id, .kind = p.kind });
+        for (cs.new_relations) |p| {
             var seen = false;
-            for (b.predicates.items) |q| if (std.mem.eql(u8, q.name, p.name)) {
+            for (b.relations.items) |q| if (std.mem.eql(u8, q.name, p.name)) {
                 seen = true;
             };
-            if (!seen) try b.predicates.append(al, .{ .name = p.name, .status = p.status, .mapped_to = p.mapped_to, .description = p.description });
+            if (!seen) try b.relations.append(al, .{ .name = p.name, .status = p.status, .mapped_to = p.mapped_to, .description = p.description });
         }
         b.seq += 1;
         e.status = .committed;
@@ -442,12 +442,12 @@ pub const MemoryBackend = struct {
                 const parent = e.*;
                 for (halves) |h| {
                     var child = parent;
-                    child.episode.id = Id.v7(b.io);
-                    child.episode.body = try copy(core.EpisodeBody, al, h);
+                    child.entry.id = Id.v7(b.io);
+                    child.entry.body = try copy(core.EntryBody, al, h);
                     child.status = .queued;
                     child.token = 0;
                     child.extraction_json = null;
-                    try b.episodes.append(al, child);
+                    try b.entries.append(al, child);
                 }
                 return;
             },
@@ -457,7 +457,7 @@ pub const MemoryBackend = struct {
 
     pub fn activeFacts(b: *MemoryBackend, a: Allocator) ![]const core.Fact {
         var out: std.ArrayList(core.Fact) = .empty;
-        for (b.facts.items) |f| if (f.fact.sys.upper == null and f.fact.valid.upper == null) try out.append(a, f.fact);
+        for (b.facts.items) |f| if (f.fact.known.upper == null and f.fact.valid.upper == null) try out.append(a, f.fact);
         return out.items;
     }
 };

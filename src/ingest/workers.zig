@@ -112,10 +112,10 @@ fn worker(shared: *Shared, index: usize) void {
         };
         if (lease) |l| {
             const outcome = driver.process(arena, l) catch |err| {
-                log.err("episode {f} failed: {t}", .{ l.episode_id, err });
+                log.err("entry {f} failed: {t}", .{ l.entry_id, err });
                 continue;
             };
-            log.debug("episode {f}: {t}", .{ l.episode_id, outcome });
+            log.debug("entry {f}: {t}", .{ l.entry_id, outcome });
             continue;
         }
         if (index == 0) {

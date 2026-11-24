@@ -24,7 +24,7 @@ pub const CandidateFact = struct {
     item: u32,
     id: Id,
     subject_id: Id,
-    predicate: []const u8,
+    relation: []const u8,
     qualifier: []const u8 = "",
     object_id: ?Id = null,
     object_value: ?[]const u8 = null,
@@ -35,11 +35,11 @@ pub const CandidateFact = struct {
     cosine: f32 = 0,
 };
 
-pub const PredicateRow = struct {
+pub const RelationRow = struct {
     name: []const u8,
     cardinality: core.types.Cardinality = .many,
     opposes: ?[]const u8 = null,
-    status: core.types.PredicateStatus = .proposed,
+    status: core.types.RelationStatus = .proposed,
     mapped_to: ?[]const u8 = null,
     description: []const u8 = "",
     emb: []const f32 = &.{},
@@ -52,7 +52,7 @@ pub const Prefetch = struct {
     entities: []const CandidateEntity = &.{},
     facts: []const CandidateFact = &.{},
     blocked: []const BlockedPair = &.{},
-    predicates: []const PredicateRow = &.{},
+    relations: []const RelationRow = &.{},
 
     fn isBlocked(p: Prefetch, a: Id, b: Id) bool {
         for (p.blocked) |pair| {
@@ -61,13 +61,13 @@ pub const Prefetch = struct {
         return false;
     }
 
-    fn predicate(p: Prefetch, name: []const u8) ?PredicateRow {
-        for (p.predicates) |row| if (std.mem.eql(u8, row.name, name)) return row;
+    fn relation(p: Prefetch, name: []const u8) ?RelationRow {
+        for (p.relations) |row| if (std.mem.eql(u8, row.name, name)) return row;
         return null;
     }
 };
 
-pub const EpisodeInfo = struct {
+pub const EntryInfo = struct {
     id: Id,
     graph_id: Id,
     reference_time: Micros,
@@ -77,7 +77,7 @@ pub const EpisodeInfo = struct {
 pub const Vectors = struct {
     entities: []const []const f32,
     facts: []const []const f32,
-    predicates: []const []const f32 = &.{},
+    relations: []const []const f32 = &.{},
 };
 
 pub const Thresholds = struct {
@@ -152,22 +152,22 @@ fn appendUnique(arena: Allocator, list: *std.ArrayList(Id), id: Id) Allocator.Er
     if (!containsId(list.items, id)) try list.append(arena, id);
 }
 
-pub fn novelPredicates(arena: Allocator, checked: extract.Checked, prefetch: Prefetch) Allocator.Error![]const []const u8 {
+pub fn novelRelations(arena: Allocator, checked: extract.Checked, prefetch: Prefetch) Allocator.Error![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     for (checked.result.facts) |f| {
-        if (core.ontology.find(f.predicate) != null) continue;
-        if (prefetch.predicate(f.predicate) != null) continue;
+        if (core.ontology.find(f.relation) != null) continue;
+        if (prefetch.relation(f.relation) != null) continue;
         var seen = false;
-        for (out.items) |n| if (std.mem.eql(u8, n, f.predicate)) {
+        for (out.items) |n| if (std.mem.eql(u8, n, f.relation)) {
             seen = true;
         };
-        if (!seen) try out.append(arena, f.predicate);
+        if (!seen) try out.append(arena, f.relation);
     }
     return out.items;
 }
 
-pub fn predicateDescription(checked: extract.Checked, name: []const u8) []const u8 {
-    for (checked.result.new_predicates) |p| if (std.mem.eql(u8, p.name, name)) return p.description;
+pub fn relationDescription(checked: extract.Checked, name: []const u8) []const u8 {
+    for (checked.result.new_relations) |p| if (std.mem.eql(u8, p.name, name)) return p.description;
     return name;
 }
 
@@ -234,7 +234,7 @@ fn planEntity(arena: Allocator, e: ingest.ExtractedEntity, item: usize, prefetch
 fn candidateKey(arena: Allocator, c: CandidateFact) Allocator.Error!rules.Key {
     return .{
         .subject = c.subject_id,
-        .predicate = c.predicate,
+        .relation = c.relation,
         .qualifier = c.qualifier,
         .object = if (c.object_id) |o| .{ .entity = o } else .{ .value = try core.text.norm(arena, c.object_value orelse "") },
         .valid = .{ .lower = c.valid_lower, .upper = c.valid_upper },
@@ -280,13 +280,13 @@ pub fn plan(arena: Allocator, checked: extract.Checked, prefetch: Prefetch) Allo
         };
         const value_norm = if (f.value) |v| try core.text.norm(arena, v) else null;
 
-        const opposed = rules.ruleFor(f.predicate, null).opposes;
+        const opposed = rules.ruleFor(f.relation, null).opposes;
         var restated = false;
         var pool: std.ArrayList(CandidateFact) = .empty;
         outer: for (prefetch.facts) |c| {
             if (c.item != j) continue;
             for (pool.items) |p| if (p.id.eql(c.id)) continue :outer;
-            const same_pred = std.mem.eql(u8, c.predicate, f.predicate);
+            const same_pred = std.mem.eql(u8, c.relation, f.relation);
             if (subj.decision == .existing and c.subject_id.eql(subj.decision.existing) and
                 same_pred and std.mem.eql(u8, c.qualifier, f.qualifier orelse ""))
             {
@@ -298,7 +298,7 @@ pub fn plan(arena: Allocator, checked: extract.Checked, prefetch: Prefetch) Allo
                     continue;
                 }
             }
-            const kin = same_pred or (if (opposed) |o| std.mem.eql(u8, c.predicate, o) else false);
+            const kin = same_pred or (if (opposed) |o| std.mem.eql(u8, c.relation, o) else false);
             const same_object_entity = if (object_known) |ok| (if (c.object_id) |co| co.eql(ok) else false) else false;
             const related = (kin and (containsId(subjects.items, c.subject_id) or same_object_entity)) or
                 c.cosine >= rules.neighbour_cosine;
@@ -505,27 +505,27 @@ pub fn findFact(prefetch: Prefetch, id: Id) ?CandidateFact {
 }
 
 pub const Context = struct {
-    episode: EpisodeInfo,
+    entry: EntryInfo,
     commit_time: Micros,
     io: std.Io,
 };
 
-const PredicateChoice = struct { name: []const u8, rule: rules.PredicateRule };
+const RelationChoice = struct { name: []const u8, rule: rules.RelationRule };
 
-fn choosePredicate(
+fn chooseRelation(
     arena: Allocator,
     name: []const u8,
     checked: extract.Checked,
     prefetch: Prefetch,
     novel: []const []const u8,
     vectors: Vectors,
-    proposed: *std.ArrayList(core.Predicate),
+    proposed: *std.ArrayList(core.Relation),
     warnings: *std.ArrayList([]const u8),
-) Allocator.Error!PredicateChoice {
+) Allocator.Error!RelationChoice {
     if (core.ontology.find(name) != null) return .{ .name = name, .rule = rules.ruleFor(name, null) };
-    if (prefetch.predicate(name)) |row| {
+    if (prefetch.relation(name)) |row| {
         if (row.mapped_to) |target| {
-            const t_row = prefetch.predicate(target);
+            const t_row = prefetch.relation(target);
             return .{ .name = target, .rule = rules.ruleFor(target, if (t_row) |tr| .{ .cardinality = tr.cardinality, .opposes = tr.opposes } else null) };
         }
         return .{ .name = name, .rule = rules.ruleFor(name, .{ .cardinality = row.cardinality, .opposes = row.opposes }) };
@@ -536,16 +536,16 @@ fn choosePredicate(
         if (std.mem.eql(u8, n, name)) break i;
     } else null;
     var mapped: ?[]const u8 = null;
-    if (k) |idx| if (idx < vectors.predicates.len) {
-        var known: std.ArrayList(rules.KnownPredicate) = .empty;
-        for (prefetch.predicates) |row| {
+    if (k) |idx| if (idx < vectors.relations.len) {
+        var known: std.ArrayList(rules.KnownRelation) = .empty;
+        for (prefetch.relations) |row| {
             if (row.emb.len == 0 or row.mapped_to != null or row.status == .retired) continue;
             try known.append(arena, .{ .name = row.name, .emb = row.emb });
         }
-        mapped = rules.collapsePredicate(vectors.predicates[idx], known.items);
+        mapped = rules.collapseRelation(vectors.relations[idx], known.items);
     };
-    const description = predicateDescription(checked, name);
-    const object_kind: core.types.ObjectKind = for (checked.result.new_predicates) |p| {
+    const description = relationDescription(checked, name);
+    const object_kind: core.types.ObjectKind = for (checked.result.new_relations) |p| {
         if (std.mem.eql(u8, p.name, name)) break p.object_kind;
     } else .either;
     try proposed.append(arena, .{
@@ -557,8 +557,8 @@ fn choosePredicate(
         .mapped_to = mapped,
     });
     if (mapped) |m| {
-        try warnings.append(arena, try std.fmt.allocPrint(arena, "predicate {s} collapsed onto {s}", .{ name, m }));
-        const row = prefetch.predicate(m);
+        try warnings.append(arena, try std.fmt.allocPrint(arena, "relation {s} collapsed onto {s}", .{ name, m }));
+        const row = prefetch.relation(m);
         return .{ .name = m, .rule = rules.ruleFor(m, if (row) |r| .{ .cardinality = r.cardinality, .opposes = r.opposes } else null) };
     }
     return .{ .name = name, .rule = .{} };
@@ -571,14 +571,14 @@ fn oldFact(c: CandidateFact, graph_id: Id) core.Fact {
         .id = c.id,
         .graph_id = graph_id,
         .subject_id = c.subject_id,
-        .predicate = c.predicate,
+        .relation = c.relation,
         .qualifier = c.qualifier,
         .object = if (c.object_id) |o| .{ .entity = o } else .{ .value = c.object_value orelse "" },
         .text = c.text,
         .scope = .project,
         .valid = .{ .lower = c.valid_lower, .upper = c.valid_upper },
-        .sys = .{},
-        .asserted_by = .agent,
+        .known = .{},
+        .author = .agent,
         .confidence = c.confidence,
     };
 }
@@ -647,8 +647,8 @@ pub fn build(
         try appendUnique(arena, &mentions, final[i]);
     }
 
-    const novel = try novelPredicates(arena, checked, prefetch);
-    var proposed: std.ArrayList(core.Predicate) = .empty;
+    const novel = try novelRelations(arena, checked, prefetch);
+    var proposed: std.ArrayList(core.Relation) = .empty;
 
     var olds: std.ArrayList(OldState) = .empty;
     for (prefetch.facts) |c| {
@@ -656,19 +656,19 @@ pub fn build(
         for (olds.items) |o| if (o.fact.id.eql(c.id)) {
             seen = true;
         };
-        if (!seen) try olds.append(arena, .{ .fact = oldFact(c, ctx.episode.graph_id), .ended = false });
+        if (!seen) try olds.append(arena, .{ .fact = oldFact(c, ctx.entry.graph_id), .ended = false });
     }
 
     var new_facts: std.ArrayList(ChangeSet.NewFact) = .empty;
     var new_keys: std.ArrayList(rules.Key) = .empty;
-    var reaffirmations: std.ArrayList(ChangeSet.Reaffirmation) = .empty;
+    var restatements: std.ArrayList(ChangeSet.Restatement) = .empty;
     var invalidations: std.ArrayList(ChangeSet.Invalidation) = .empty;
     var retractions: std.ArrayList(ChangeSet.Retraction) = .empty;
-    var provenance: std.ArrayList(ChangeSet.Provenance) = .empty;
+    var evidence: std.ArrayList(ChangeSet.Evidence) = .empty;
     var blast: rules.BlastRadius = .{};
 
     for (checked.result.facts, checked.meta, 0..) |f, m, j| {
-        const pred = try choosePredicate(arena, f.predicate, checked, prefetch, novel, vectors, &proposed, &warnings);
+        const pred = try chooseRelation(arena, f.relation, checked, prefetch, novel, vectors, &proposed, &warnings);
         const subject = final[entityIndex(checked, f.subject)];
         const object: core.types.FactObject = if (f.object) |o| .{ .entity = final[entityIndex(checked, o)] } else .{ .value = f.value.? };
         var valid = m.valid;
@@ -680,7 +680,7 @@ pub fn build(
         }
         const key: rules.Key = .{
             .subject = subject,
-            .predicate = pred.name,
+            .relation = pred.name,
             .qualifier = f.qualifier orelse "",
             .object = switch (object) {
                 .entity => |id| .{ .entity = id },
@@ -706,12 +706,12 @@ pub fn build(
         if (restated) |k| {
             const target = &olds.items[k].fact;
             var already = false;
-            for (reaffirmations.items) |r| if (r.fact_id.eql(target.id)) {
+            for (restatements.items) |r| if (r.fact_id.eql(target.id)) {
                 already = true;
             };
             if (!already) {
-                try reaffirmations.append(arena, .{ .fact_id = target.id, .confidence = rules.reaffirm(target.confidence) });
-                try provenance.append(arena, .{ .fact_id = target.id, .role = .reaffirmed, .quote = f.quote });
+                try restatements.append(arena, .{ .fact_id = target.id, .confidence = rules.restate(target.confidence) });
+                try evidence.append(arena, .{ .fact_id = target.id, .kind = .restated, .quote = f.quote });
             }
             continue;
         }
@@ -721,25 +721,25 @@ pub fn build(
             dup_new = true;
         };
         if (dup_new) {
-            try warnings.append(arena, try std.fmt.allocPrint(arena, "fact {d} repeats another fact in this episode", .{j}));
+            try warnings.append(arena, try std.fmt.allocPrint(arena, "fact {d} repeats another fact in this entry", .{j}));
             continue;
         }
 
         var nf: core.Fact = .{
             .id = Id.v7(ctx.io),
-            .graph_id = ctx.episode.graph_id,
+            .graph_id = ctx.entry.graph_id,
             .subject_id = subject,
-            .predicate = pred.name,
+            .relation = pred.name,
             .qualifier = f.qualifier orelse "",
             .object = object,
             .text = f.text,
             .rationale = f.rationale,
-            .project = ctx.episode.project,
+            .project = ctx.entry.project,
             .scope = f.scope,
             .valid = valid,
-            .sys = .{ .lower = ctx.commit_time },
-            .asserted_by = f.asserted_by,
-            .confidence = rules.initialConfidence(f.asserted_by),
+            .known = .{ .lower = ctx.commit_time },
+            .author = f.author,
+            .confidence = rules.initialConfidence(f.author),
         };
 
         for (olds.items) |*o| {
@@ -754,34 +754,34 @@ pub fn build(
             const k = kind orelse continue;
             var trial = o.fact;
             var trial_new = nf;
-            switch (rules.resolveConflict(&trial, &trial_new, k, ctx.commit_time, ctx.episode.reference_time)) {
+            switch (rules.resolveConflict(&trial, &trial_new, k, ctx.commit_time, ctx.entry.reference_time)) {
                 .none => {},
                 .bounded_new => nf = trial_new,
                 .ended_old => if (blast.admit()) {
                     o.fact = trial;
                     o.ended = true;
                     try invalidations.append(arena, .{ .fact_id = trial.id, .valid_upper = trial.valid.upper.?, .ended_by = nf.id });
-                    try provenance.append(arena, .{ .fact_id = trial.id, .role = .contradicted, .quote = f.quote });
+                    try evidence.append(arena, .{ .fact_id = trial.id, .kind = .contradicted, .quote = f.quote });
                 } else {
-                    try warnings.append(arena, try std.fmt.allocPrint(arena, "skipped ending fact {f}: more than {d} endings in one episode", .{ trial.id, rules.max_invalidations }));
+                    try warnings.append(arena, try std.fmt.allocPrint(arena, "skipped ending fact {f}: more than {d} endings in one entry", .{ trial.id, rules.max_invalidations }));
                 },
                 .retracted_old => if (blast.admit()) {
                     o.fact = trial;
                     o.ended = true;
                     try retractions.append(arena, .{ .fact_id = trial.id, .end_kind = .retracted, .ended_by = nf.id });
-                    try provenance.append(arena, .{ .fact_id = trial.id, .role = .retracted, .quote = f.quote });
+                    try evidence.append(arena, .{ .fact_id = trial.id, .kind = .retracted, .quote = f.quote });
                 } else {
-                    try warnings.append(arena, try std.fmt.allocPrint(arena, "skipped retracting fact {f}: more than {d} endings in one episode", .{ trial.id, rules.max_invalidations }));
+                    try warnings.append(arena, try std.fmt.allocPrint(arena, "skipped retracting fact {f}: more than {d} endings in one entry", .{ trial.id, rules.max_invalidations }));
                 },
             }
         }
 
         try new_keys.append(arena, key);
         try new_facts.append(arena, .{ .fact = nf, .emb = if (j < vectors.facts.len) vectors.facts[j] else &.{} });
-        try provenance.append(arena, .{ .fact_id = nf.id, .role = .asserted, .quote = f.quote });
+        try evidence.append(arena, .{ .fact_id = nf.id, .kind = .stated, .quote = f.quote });
     }
 
-    var preds_out: std.ArrayList(core.Predicate) = .empty;
+    var preds_out: std.ArrayList(core.Relation) = .empty;
     for (proposed.items) |pr| try preds_out.append(arena, pr);
 
     return .{
@@ -789,13 +789,13 @@ pub fn build(
         .new_entities = new_entities.items,
         .merges = merges.items,
         .new_facts = new_facts.items,
-        .reaffirmations = reaffirmations.items,
+        .restatements = restatements.items,
         .invalidations = invalidations.items,
         .retractions = retractions.items,
-        .provenance = provenance.items,
+        .evidence = evidence.items,
         .mentions = mentions.items,
         .new_aliases = new_aliases.items,
-        .new_predicates = preds_out.items,
+        .new_relations = preds_out.items,
         .warnings = warnings.items,
     };
 }

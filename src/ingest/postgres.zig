@@ -96,23 +96,23 @@ fn logPgError(conn: *pg.Conn, err: anyerror) anyerror {
 }
 
 pub const context_sql =
-    \\WITH me AS (SELECT source_id FROM episode WHERE id = $1::uuid)
+    \\WITH me AS (SELECT source_id FROM entry WHERE id = $1::uuid)
     \\SELECT json_build_object(
     \\  'prior', COALESCE((SELECT json_agg(p ORDER BY p.reference_time) FROM (
     \\      SELECT (extract(epoch FROM e.reference_time) * 1000000)::bigint AS reference_time,
     \\             COALESCE((SELECT json_agg(x->>'text') FROM jsonb_array_elements(e.extraction->'facts') x), '[]'::json) AS facts,
     \\             left(COALESCE(e.body->>'text', (SELECT string_agg(t->>'text', ' ') FROM jsonb_array_elements(e.body->'turns') t), ''), 300) AS excerpt
-    \\      FROM episode e, me
+    \\      FROM entry e, me
     \\      WHERE me.source_id IS NOT NULL AND e.source_id = me.source_id AND e.status = 'committed' AND e.id <> $1::uuid
     \\      ORDER BY e.seq_in_source DESC, e.reference_time DESC LIMIT 3) p), '[]'::json),
-    \\  'predicates', COALESCE((SELECT json_agg(json_build_object(
+    \\  'relations', COALESCE((SELECT json_agg(json_build_object(
     \\      'name', p.name, 'cardinality', p.cardinality, 'opposes', p.opposes, 'status', p.status,
     \\      'mapped_to', p.mapped_to, 'description', p.description,
     \\      'emb', COALESCE(pe.emb::text::json, '[]'::json)) ORDER BY p.name)
-    \\    FROM predicate p LEFT JOIN predicate_embedding pe ON pe.graph_id = p.graph_id AND pe.name = p.name
+    \\    FROM relation p LEFT JOIN relation_embedding pe ON pe.graph_id = p.graph_id AND pe.name = p.name
     \\    WHERE p.graph_id = $2::uuid), '[]'::json),
     \\  'core_embeddings', COALESCE((SELECT json_agg(json_build_object('name', pe.name, 'emb', pe.emb::text::json))
-    \\    FROM predicate_embedding pe WHERE pe.graph_id = $2::uuid), '[]'::json)
+    \\    FROM relation_embedding pe WHERE pe.graph_id = $2::uuid), '[]'::json)
     \\)::text
 ;
 
@@ -149,7 +149,7 @@ pub const prefetch_sql =
     \\),
     \\fact_in AS (
     \\  SELECT (f.ord - 1)::int AS item, (f.value->>'subject')::int AS subject, (f.value->>'object')::int AS object,
-    \\         f.value->>'predicate' AS predicate, f.value->>'opposed' AS opposed, f.value->>'text' AS text,
+    \\         f.value->>'relation' AS relation, f.value->>'opposed' AS opposed, f.value->>'text' AS text,
     \\         (f.value->'emb')::text::halfvec(512) AS emb
     \\  FROM req, jsonb_array_elements(r->'facts') WITH ORDINALITY f(value, ord)
     \\),
@@ -158,24 +158,24 @@ pub const prefetch_sql =
     \\),
     \\fact_hits AS (
     \\  SELECT fi.item, f.id FROM fact_in fi JOIN linked l ON l.item = fi.subject
-    \\  JOIN fact f ON f.graph_id = $2::uuid AND f.subject_id = l.id AND upper_inf(f.sys) AND upper_inf(f.valid)
-    \\    AND (f.predicate = fi.predicate OR f.predicate = fi.opposed)
+    \\  JOIN fact f ON f.graph_id = $2::uuid AND f.subject_id = l.id AND upper_inf(f.known) AND upper_inf(f.valid)
+    \\    AND (f.relation = fi.relation OR f.relation = fi.opposed)
     \\  UNION
     \\  SELECT fi.item, f.id FROM fact_in fi JOIN linked l ON l.item = fi.object
-    \\  JOIN fact f ON f.graph_id = $2::uuid AND f.object_id = l.id AND upper_inf(f.sys) AND upper_inf(f.valid)
-    \\    AND f.predicate = fi.predicate
+    \\  JOIN fact f ON f.graph_id = $2::uuid AND f.object_id = l.id AND upper_inf(f.known) AND upper_inf(f.valid)
+    \\    AND f.relation = fi.relation
     \\  UNION
     \\  SELECT fi.item, k.id FROM fact_in fi CROSS JOIN LATERAL (
-    \\    SELECT f.id FROM fact f WHERE f.graph_id = $2::uuid AND upper_inf(f.sys) AND upper_inf(f.valid)
+    \\    SELECT f.id FROM fact f WHERE f.graph_id = $2::uuid AND upper_inf(f.known) AND upper_inf(f.valid)
     \\    ORDER BY f.emb <=> fi.emb LIMIT 8) k
     \\  UNION
     \\  SELECT fi.item, k.id FROM fact_in fi CROSS JOIN LATERAL (
     \\    SELECT f.id FROM fact f, replace(plainto_tsquery('english', fi.text)::text, '&', '|') q
-    \\    WHERE q <> '' AND f.graph_id = $2::uuid AND upper_inf(f.sys) AND upper_inf(f.valid) AND f.tsv @@ q::tsquery
+    \\    WHERE q <> '' AND f.graph_id = $2::uuid AND upper_inf(f.known) AND upper_inf(f.valid) AND f.tsv @@ q::tsquery
     \\    ORDER BY ts_rank_cd(f.tsv, q::tsquery) DESC LIMIT 8) k
     \\),
     \\fact_out AS (
-    \\  SELECT h.item, f.id, f.subject_id, f.predicate, f.qualifier, f.object_id, f.object_value, f.text, f.confidence,
+    \\  SELECT h.item, f.id, f.subject_id, f.relation, f.qualifier, f.object_id, f.object_value, f.text, f.confidence,
     \\         CASE WHEN lower_inf(f.valid) OR NOT isfinite(lower(f.valid)) THEN NULL ELSE (extract(epoch FROM lower(f.valid)) * 1000000)::bigint END AS valid_lower,
     \\         CASE WHEN upper_inf(f.valid) OR NOT isfinite(upper(f.valid)) THEN NULL ELSE (extract(epoch FROM upper(f.valid)) * 1000000)::bigint END AS valid_upper,
     \\         1 - (f.emb <=> fi.emb) AS cosine
@@ -201,8 +201,8 @@ pub const touched_sql =
     \\      'emb', COALESCE(e.name_emb::text::json, '[]'::json)))
     \\    FROM entity e JOIN te ON te.id = e.id), '[]'::json),
     \\  'facts', COALESCE((SELECT json_agg(json_build_object(
-    \\      'active', upper_inf(f.sys) AND upper_inf(f.valid),
-    \\      'fact', json_build_object('item', 0, 'id', f.id, 'subject_id', f.subject_id, 'predicate', f.predicate,
+    \\      'active', upper_inf(f.known) AND upper_inf(f.valid),
+    \\      'fact', json_build_object('item', 0, 'id', f.id, 'subject_id', f.subject_id, 'relation', f.relation,
     \\        'qualifier', f.qualifier, 'object_id', f.object_id, 'object_value', f.object_value, 'text', f.text,
     \\        'confidence', f.confidence,
     \\        'valid_lower', CASE WHEN lower_inf(f.valid) OR NOT isfinite(lower(f.valid)) THEN NULL ELSE (extract(epoch FROM lower(f.valid)) * 1000000)::bigint END,
@@ -212,8 +212,8 @@ pub const touched_sql =
 ;
 
 const ContextRow = struct {
-    prior: []const prompt.PriorEpisode = &.{},
-    predicates: []const resolve.PredicateRow = &.{},
+    prior: []const prompt.PriorEntry = &.{},
+    relations: []const resolve.RelationRow = &.{},
     core_embeddings: []const struct { name: []const u8, emb: []const f32 } = &.{},
 };
 
@@ -232,12 +232,12 @@ pub const PgBackend = struct {
         defer conn.release();
         var ebuf: [36]u8 = undefined;
         var gbuf: [36]u8 = undefined;
-        const row = jsonRow(ContextRow, arena, conn, context_sql, .{ idText(lease.episode_id, &ebuf), idText(b.graph_id, &gbuf) }) catch |err| return logPgError(conn, err);
-        var preds: std.ArrayList(resolve.PredicateRow) = .empty;
-        try preds.appendSlice(arena, row.predicates);
-        for (core.ontology.core_predicates) |cp| {
+        const row = jsonRow(ContextRow, arena, conn, context_sql, .{ idText(lease.entry_id, &ebuf), idText(b.graph_id, &gbuf) }) catch |err| return logPgError(conn, err);
+        var preds: std.ArrayList(resolve.RelationRow) = .empty;
+        try preds.appendSlice(arena, row.relations);
+        for (core.ontology.core_relations) |cp| {
             var present = false;
-            for (row.predicates) |p| if (std.mem.eql(u8, p.name, cp.name)) {
+            for (row.relations) |p| if (std.mem.eql(u8, p.name, cp.name)) {
                 present = true;
             };
             if (present) continue;
@@ -247,14 +247,14 @@ pub const PgBackend = struct {
             };
             try preds.append(arena, .{ .name = cp.name, .cardinality = cp.cardinality, .opposes = cp.opposes, .status = .core, .description = cp.description, .emb = emb });
         }
-        return .{ .prior = row.prior, .predicates = preds.items };
+        return .{ .prior = row.prior, .relations = preds.items };
     }
 
     pub fn saveExtraction(b: *PgBackend, lease: store.Lease, json: []const u8) !void {
         return b.store.saveExtraction(lease, json);
     }
 
-    pub fn savePredicateEmbeddings(b: *PgBackend, lease: store.Lease, names: []const []const u8, embs: []const []const f32) !void {
+    pub fn saveRelationEmbeddings(b: *PgBackend, lease: store.Lease, names: []const []const u8, embs: []const []const f32) !void {
         _ = lease;
         var arena_state = std.heap.ArenaAllocator.init(b.store.allocator);
         defer arena_state.deinit();
@@ -263,7 +263,7 @@ pub const PgBackend = struct {
         defer conn.release();
         var gbuf: [36]u8 = undefined;
         _ = conn.exec(
-            \\INSERT INTO predicate_embedding (graph_id, name, emb)
+            \\INSERT INTO relation_embedding (graph_id, name, emb)
             \\SELECT $1::uuid, n.value #>> '{}', (($2::jsonb)->'embs'->((n.ord - 1)::int))::text::halfvec(512)
             \\FROM jsonb_array_elements(($2::jsonb)->'names') WITH ORDINALITY n(value, ord)
             \\ON CONFLICT (graph_id, name) DO UPDATE SET emb = EXCLUDED.emb
@@ -305,7 +305,7 @@ pub const PgBackend = struct {
     };
 
     pub fn commit(b: *PgBackend, arena: Allocator, lease: store.Lease, cs: *const core.ChangeSet) !store.CommitResult {
-        var ctx: RebaseCtx = .{ .arena = arena, .graph_id = b.graph_id, .reference_time = lease.episode.reference_time, .io = b.io };
+        var ctx: RebaseCtx = .{ .arena = arena, .graph_id = b.graph_id, .reference_time = lease.entry.reference_time, .io = b.io };
         const result = try b.store.commit(lease, cs, .{ .ptr = &ctx, .run = RebaseCtx.run });
         if (result == .committed and ctx.duplicates.len > 0) try b.recordDuplicates(arena, ctx.duplicates);
         return result;
@@ -370,19 +370,19 @@ const release = ", lease_owner = NULL, lease_token = NULL, lease_until = NULL";
 
 pub fn finishOn(arena: Allocator, conn: *pg.Conn, io: std.Io, lease: store.Lease, t: pipeline.Transition) !void {
     var ebuf: [36]u8 = undefined;
-    const eid = idText(lease.episode_id, &ebuf);
+    const eid = idText(lease.entry_id, &ebuf);
     const affected: ?i64 = switch (t) {
-        .skipped => |why| conn.exec("UPDATE episode SET status = 'skipped', warnings = warnings || jsonb_build_array($3::text)" ++ release ++ fence, .{ eid, lease.token, why }),
-        .dead => |why| conn.exec("UPDATE episode SET status = 'dead', last_error = jsonb_build_object('reason', $3::text)" ++ release ++ fence, .{ eid, lease.token, why }),
+        .skipped => |why| conn.exec("UPDATE entry SET status = 'skipped', warnings = warnings || jsonb_build_array($3::text)" ++ release ++ fence, .{ eid, lease.token, why }),
+        .dead => |why| conn.exec("UPDATE entry SET status = 'dead', last_error = jsonb_build_object('reason', $3::text)" ++ release ++ fence, .{ eid, lease.token, why }),
         .requeue => |r| conn.exec(
-            "UPDATE episode SET status = CASE WHEN extraction IS NULL THEN 'queued' ELSE 'extracted' END, attempts = attempts + $3, " ++
+            "UPDATE entry SET status = CASE WHEN extraction IS NULL THEN 'queued' ELSE 'extracted' END, attempts = attempts + $3, " ++
                 "not_before = now() + make_interval(secs => $4::float8 / 1000), last_error = jsonb_build_object('reason', $5::text)" ++ release ++ fence,
             .{ eid, lease.token, @as(i32, if (r.count_attempt) 1 else 0), @as(f64, @floatFromInt(r.delay_ms)), r.reason },
         ),
         .split => |halves| blk: {
             try conn.begin();
             errdefer conn.rollback() catch {};
-            const n = (conn.exec("UPDATE episode SET status = 'split'" ++ release ++ fence, .{ eid, lease.token }) catch |err| return logPgError(conn, err)) orelse 0;
+            const n = (conn.exec("UPDATE entry SET status = 'split'" ++ release ++ fence, .{ eid, lease.token }) catch |err| return logPgError(conn, err)) orelse 0;
             if (n == 0) {
                 try conn.rollback();
                 break :blk 0;
@@ -391,9 +391,9 @@ pub fn finishOn(arena: Allocator, conn: *pg.Conn, io: std.Io, lease: store.Lease
                 const body = try std.json.Stringify.valueAlloc(arena, h, .{});
                 var cbuf: [36]u8 = undefined;
                 _ = conn.exec(
-                    \\INSERT INTO episode (id, graph_id, source_id, seq_in_source, kind, project, asserted_by, body, content_hash, reference_time)
-                    \\SELECT $2::uuid, graph_id, source_id, seq_in_source, kind, project, asserted_by, $3::jsonb, sha256(convert_to($3::text, 'UTF8')), reference_time
-                    \\FROM episode WHERE id = $1::uuid
+                    \\INSERT INTO entry (id, graph_id, source_id, seq_in_source, kind, project, author, body, content_hash, reference_time)
+                    \\SELECT $2::uuid, graph_id, source_id, seq_in_source, kind, project, author, $3::jsonb, sha256(convert_to($3::text, 'UTF8')), reference_time
+                    \\FROM entry WHERE id = $1::uuid
                     \\ON CONFLICT (graph_id, content_hash) DO NOTHING
                 , .{ eid, idText(Id.v7(io), &cbuf), body }) catch |err| return logPgError(conn, err);
             }
@@ -406,14 +406,14 @@ pub fn finishOn(arena: Allocator, conn: *pg.Conn, io: std.Io, lease: store.Lease
 
 pub fn prefetchPayload(arena: Allocator, req: pipeline.PrefetchRequest) ![]const u8 {
     const E = struct { norms: []const []const u8, emb: []const f32 };
-    const F = struct { subject: u32, object: ?u32, predicate: []const u8, opposed: ?[]const u8, text: []const u8, emb: []const f32 };
+    const F = struct { subject: u32, object: ?u32, relation: []const u8, opposed: ?[]const u8, text: []const u8, emb: []const f32 };
     const ents = try arena.alloc(E, req.entity_norms.len);
     for (ents, 0..) |*e, i| e.* = .{ .norms = req.entity_norms[i], .emb = req.entity_embs[i] };
     const facts = try arena.alloc(F, req.fact_subject.len);
     for (facts, 0..) |*f, j| f.* = .{
         .subject = req.fact_subject[j],
         .object = req.fact_object[j],
-        .predicate = req.fact_predicates[j],
+        .relation = req.fact_relations[j],
         .opposed = req.fact_opposed[j],
         .text = req.fact_texts[j],
         .emb = req.fact_embs[j],

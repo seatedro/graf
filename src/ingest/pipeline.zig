@@ -35,8 +35,8 @@ pub fn dispositionForClass(class_name: []const u8) Disposition {
 }
 
 pub const Context = struct {
-    prior: []const prompt.PriorEpisode = &.{},
-    predicates: []const resolve.PredicateRow = &.{},
+    prior: []const prompt.PriorEntry = &.{},
+    relations: []const resolve.RelationRow = &.{},
 };
 
 pub const PrefetchRequest = struct {
@@ -45,7 +45,7 @@ pub const PrefetchRequest = struct {
     entity_embs: []const []const f32,
     fact_subject: []const u32,
     fact_object: []const ?u32,
-    fact_predicates: []const []const u8,
+    fact_relations: []const []const u8,
     fact_opposed: []const ?[]const u8,
     fact_embs: []const []const f32,
     fact_texts: []const []const u8,
@@ -55,7 +55,7 @@ pub const Transition = union(enum) {
     skipped: []const u8,
     requeue: struct { delay_ms: i64, count_attempt: bool, reason: []const u8 },
     dead: []const u8,
-    split: [2]core.EpisodeBody,
+    split: [2]core.EntryBody,
 };
 
 pub fn now(io: std.Io) Micros {
@@ -74,7 +74,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
         io: std.Io,
 
         pub fn process(d: *Self, arena: Allocator, lease: store.Lease) !ingest.Outcome {
-            const ep = lease.episode;
+            const ep = lease.entry;
             const body_text = try extract.bodyText(arena, ep.body);
             const ctx = try d.backend.loadContext(arena, lease);
 
@@ -97,10 +97,10 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 return .skipped;
             }
 
-            var predicates = try arena.dupe(resolve.PredicateRow, ctx.predicates);
-            const novel = try resolve.novelPredicates(arena, checked, .{ .predicates = predicates });
+            var relations = try arena.dupe(resolve.RelationRow, ctx.relations);
+            const novel = try resolve.novelRelations(arena, checked, .{ .relations = relations });
             var missing: std.ArrayList(usize) = .empty;
-            if (novel.len > 0) for (predicates, 0..) |row, k| {
+            if (novel.len > 0) for (relations, 0..) |row, k| {
                 if (row.emb.len == 0 and row.mapped_to == null and row.status != .retired) try missing.append(arena, k);
             };
 
@@ -109,10 +109,10 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             var inputs: std.ArrayList([]const u8) = .empty;
             for (ents) |e| try inputs.append(arena, e.name);
             for (facts) |f| try inputs.append(arena, f.text);
-            for (novel) |n| try inputs.append(arena, resolve.predicateDescription(checked, n));
-            for (missing.items) |k| try inputs.append(arena, predicates[k].description);
+            for (novel) |n| try inputs.append(arena, resolve.relationDescription(checked, n));
+            for (missing.items) |k| try inputs.append(arena, relations[k].description);
 
-            const embedded = d.model.embed(arena, .{ .purpose = .embed_batch, .episode_id = ep.id, .inputs = inputs.items }) catch |err| {
+            const embedded = d.model.embed(arena, .{ .purpose = .embed_batch, .entry_id = ep.id, .inputs = inputs.items }) catch |err| {
                 return d.providerFailure(arena, lease, err, .after_extraction);
             };
             if (embedded.vectors.len != inputs.items.len) return error.EmbeddingCountMismatch;
@@ -124,14 +124,14 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             if (missing.items.len > 0) {
                 var names: std.ArrayList([]const u8) = .empty;
                 for (missing.items, missing_vecs) |k, v| {
-                    predicates[k].emb = v;
-                    try names.append(arena, predicates[k].name);
+                    relations[k].emb = v;
+                    try names.append(arena, relations[k].name);
                 }
-                try d.backend.savePredicateEmbeddings(lease, names.items, missing_vecs);
+                try d.backend.saveRelationEmbeddings(lease, names.items, missing_vecs);
             }
 
             var prefetched = try d.backend.prefetch(arena, lease, try d.prefetchRequest(arena, checked, ent_vecs, fact_vecs));
-            prefetched.predicates = predicates;
+            prefetched.relations = relations;
 
             const p = try resolve.plan(arena, checked, prefetched);
             var verdict = try resolve.Verdict.none(arena, p);
@@ -144,10 +144,10 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             }
 
             var cs = try resolve.build(arena, .{
-                .episode = .{ .id = ep.id, .graph_id = d.graph_id, .reference_time = ep.reference_time, .project = ep.project },
+                .entry = .{ .id = ep.id, .graph_id = d.graph_id, .reference_time = ep.reference_time, .project = ep.project },
                 .commit_time = now(d.io),
                 .io = d.io,
-            }, checked, prefetched, p, .{ .entities = ent_vecs, .facts = fact_vecs, .predicates = novel_vecs }, verdict);
+            }, checked, prefetched, p, .{ .entities = ent_vecs, .facts = fact_vecs, .relations = novel_vecs }, verdict);
             if (extra_warnings.items.len > 0) {
                 var all: std.ArrayList([]const u8) = .empty;
                 try all.appendSlice(arena, cs.warnings);
@@ -168,18 +168,18 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
         const ExtractOutcome = union(enum) { checked: extract.Checked, outcome: ingest.Outcome };
 
         fn extractCall(d: *Self, arena: Allocator, lease: store.Lease, ctx: Context, body_text: []const u8) !ExtractOutcome {
-            const ep = lease.episode;
-            const system = try prompt.extractionSystem(arena, ctx.predicates);
+            const ep = lease.entry;
+            const system = try prompt.extractionSystem(arena, ctx.relations);
             const user = try prompt.extractionUser(arena, .{
                 .reference_time = ep.reference_time,
                 .project = ep.project,
                 .kind = ep.kind,
-                .asserted_by = ep.asserted_by,
+                .author = ep.author,
                 .body = ep.body,
             }, ctx.prior);
             const resp = d.model.structured(arena, .{
                 .purpose = .extract,
-                .episode_id = ep.id,
+                .entry_id = ep.id,
                 .system = system,
                 .user = user,
                 .schema_name = "extract_result",
@@ -193,7 +193,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 const problem = first.problem orelse "more than half of the facts failed validation";
                 const repaired = d.model.repair(arena, .{
                     .purpose = .extract,
-                    .episode_id = ep.id,
+                    .entry_id = ep.id,
                     .system = system,
                     .user = user,
                     .schema_name = "extract_result",
@@ -245,10 +245,10 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 }) };
             }
 
-            const user = try prompt.resolutionUser(arena, p, checked, prefetched, lease.episode.reference_time);
+            const user = try prompt.resolutionUser(arena, p, checked, prefetched, lease.entry.reference_time);
             const resp = d.model.structured(arena, .{
                 .purpose = .resolve,
-                .episode_id = lease.episode.id,
+                .entry_id = lease.entry.id,
                 .system = prompt.resolution_system,
                 .user = user,
                 .schema_name = "resolve_result",
@@ -266,7 +266,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             }
             const repaired = d.model.repair(arena, .{
                 .purpose = .resolve,
-                .episode_id = lease.episode.id,
+                .entry_id = lease.entry.id,
                 .system = prompt.resolution_system,
                 .user = user,
                 .schema_name = "resolve_result",
@@ -314,11 +314,11 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             const f = d.failureOf(err) orelse return err;
             switch (f.disposition) {
                 .split => {
-                    if (stage == .extraction) if (try splitBody(arena, lease.episode.body)) |halves| {
+                    if (stage == .extraction) if (try splitBody(arena, lease.entry.body)) |halves| {
                         try d.backend.finish(lease, .{ .split = halves });
                         return .split;
                     };
-                    try d.backend.finish(lease, .{ .dead = "context overflow on an episode too small to split" });
+                    try d.backend.finish(lease, .{ .dead = "context overflow on an entry too small to split" });
                     return .dead;
                 },
                 .dead => {
@@ -330,11 +330,11 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                     return .requeued;
                 },
                 .requeue => {
-                    if (lease.episode.attempts + 1 >= max_attempts) {
+                    if (lease.entry.attempts + 1 >= max_attempts) {
                         try d.backend.finish(lease, .{ .dead = "transient provider failures exhausted the retry budget" });
                         return .dead;
                     }
-                    const delay: i64 = if (f.retry_after_ms) |ra| ra else @as(i64, 30_000) << @intCast(@max(lease.episode.attempts, 0));
+                    const delay: i64 = if (f.retry_after_ms) |ra| ra else @as(i64, 30_000) << @intCast(@max(lease.entry.attempts, 0));
                     try d.backend.finish(lease, .{ .requeue = .{ .delay_ms = delay, .count_attempt = true, .reason = "transient provider failure" } });
                     return .requeued;
                 },
@@ -362,8 +362,8 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             for (facts, 0..) |f, j| {
                 subj[j] = @intCast(refIndex(checked, f.subject));
                 obj[j] = if (f.object) |o| @intCast(refIndex(checked, o)) else null;
-                preds[j] = f.predicate;
-                opp[j] = if (core.ontology.find(f.predicate)) |cp| cp.opposes else null;
+                preds[j] = f.relation;
+                opp[j] = if (core.ontology.find(f.relation)) |cp| cp.opposes else null;
                 texts[j] = f.text;
             }
             return .{
@@ -372,7 +372,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 .entity_embs = ent_vecs,
                 .fact_subject = subj,
                 .fact_object = obj,
-                .fact_predicates = preds,
+                .fact_relations = preds,
                 .fact_opposed = opp,
                 .fact_embs = fact_vecs,
                 .fact_texts = texts,
@@ -386,7 +386,7 @@ fn refIndex(checked: extract.Checked, ref: []const u8) usize {
     unreachable;
 }
 
-pub fn splitBody(arena: Allocator, body: core.EpisodeBody) Allocator.Error!?[2]core.EpisodeBody {
+pub fn splitBody(arena: Allocator, body: core.EntryBody) Allocator.Error!?[2]core.EntryBody {
     if (body.turns.len >= 2) {
         const mid = body.turns.len / 2;
         return .{ .{ .turns = body.turns[0..mid], .text = body.text }, .{ .turns = body.turns[mid..] } };

@@ -23,10 +23,10 @@ fn ent(ref: []const u8, name: []const u8, ty: core.EntityType) ingest.ExtractedE
     return .{ .ref = ref, .name = name, .type = ty, .aliases = &.{}, .description = "" };
 }
 
-fn fct(subject: []const u8, predicate: []const u8, object: ?[]const u8, value: ?[]const u8, quote: []const u8) ingest.ExtractedFact {
+fn fct(subject: []const u8, relation: []const u8, object: ?[]const u8, value: ?[]const u8, quote: []const u8) ingest.ExtractedFact {
     return .{
         .subject = subject,
-        .predicate = predicate,
+        .relation = relation,
         .qualifier = null,
         .object = object,
         .value = value,
@@ -36,7 +36,7 @@ fn fct(subject: []const u8, predicate: []const u8, object: ?[]const u8, value: ?
         .valid_to = null,
         .time_basis = .reference,
         .scope = .project,
-        .asserted_by = .user,
+        .author = .user,
         .quote = quote,
     };
 }
@@ -60,7 +60,7 @@ const Scenario = struct {
         const fact_vecs = try s.arena.alloc([]const f32, checked.result.facts.len);
         @memset(fact_vecs, &.{ 0, 1 });
         const cs = try resolve.build(s.arena, .{
-            .episode = .{ .id = id(200), .graph_id = graph, .reference_time = s.reference_time, .project = "lantern" },
+            .entry = .{ .id = id(200), .graph_id = graph, .reference_time = s.reference_time, .project = "lantern" },
             .commit_time = s.reference_time + 1000,
             .io = testing.io,
         }, checked, s.prefetch, p, .{ .entities = ent_vecs, .facts = fact_vecs }, verdict);
@@ -78,14 +78,14 @@ fn relayOncallPrefetch(item_subject: u32, item_object: u32, fact_item: u32) reso
     return .{
         .base_seq = 7,
         .entities = &.{
-            .{ .item = item_subject, .id = relay, .name = "Relay", .norm = "relay", .type = .service, .alias_match = true, .cosine = 1.0 },
+            .{ .item = item_subject, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .alias_match = true, .cosine = 1.0 },
             .{ .item = 1, .id = marco, .name = "Marco", .norm = "marco", .type = .person, .cosine = 0.55 },
         },
         .facts = &.{.{
             .item = fact_item,
             .id = marco_oncall,
             .subject_id = relay,
-            .predicate = "has_oncall",
+            .relation = "has_oncall",
             .object_id = marco,
             .text = "Marco is on call for Relay.",
             .valid_lower = at("2026-11-19T22:00:00Z"),
@@ -105,7 +105,7 @@ test "an on-call handoff ends the previous holder at the stated time" {
         .arena = arena,
         .reference_time = at("2026-11-20T18:00:00Z"),
         .body = "Heads up: Elena took over on call for Relay starting today at 17:00 UTC. Marco rotated off.",
-        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .service), ent("n2", "Elena", .person) }, .facts = &.{handoff}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Elena", .person) }, .facts = &.{handoff}, .new_relations = &.{} },
         .prefetch = relayOncallPrefetch(0, 1, 0),
     }).run();
     const cs = out.cs;
@@ -134,7 +134,7 @@ test "a dated historical on-call period never ends the current holder" {
         .arena = arena,
         .reference_time = at("2026-11-21T20:00:00Z"),
         .body = "Historical note: Priya was on call for Relay from November 10, 2026 until November 17, 2026, before Marco.",
-        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .service), ent("n2", "Priya", .person) }, .facts = &.{past}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Priya", .person) }, .facts = &.{past}, .new_relations = &.{} },
         .prefetch = relayOncallPrefetch(0, 1, 0),
     }).run();
     try testing.expectEqual(@as(usize, 0), out.cs.invalidations.len);
@@ -154,7 +154,7 @@ test "an undated backfill that predates current state is bounded by it" {
         .arena = arena,
         .reference_time = at("2026-11-21T20:00:00Z"),
         .body = "Priya was on call for Relay before Marco",
-        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .service), ent("n2", "Priya", .person) }, .facts = &.{past}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Relay", .software), ent("n2", "Priya", .person) }, .facts = &.{past}, .new_relations = &.{} },
         .prefetch = relayOncallPrefetch(0, 1, 0),
     }).run();
     try testing.expectEqual(@as(usize, 0), out.cs.invalidations.len);
@@ -172,12 +172,12 @@ test "gaining a feature ends the opposed lacks_feature fact" {
         .arena = arena,
         .reference_time = at("2026-11-21T17:00:00Z"),
         .body = "Good news: COPY support was merged into pg.zig today! So pg.zig now supports COPY.",
-        .raw = .{ .skip = null, .entities = &.{ent("n1", "pg.zig", .library)}, .facts = &.{fct("n1", "supports_feature", null, "COPY", "So pg.zig now supports COPY.")}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ent("n1", "pg.zig", .software)}, .facts = &.{fct("n1", "supports_feature", null, "COPY", "So pg.zig now supports COPY.")}, .new_relations = &.{} },
         .prefetch = .{
-            .entities = &.{.{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .library, .alias_match = true, .cosine = 1 }},
+            .entities = &.{.{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .software, .alias_match = true, .cosine = 1 }},
             .facts = &.{
-                .{ .item = 0, .id = lacks, .subject_id = driver, .predicate = "lacks_feature", .object_value = "COPY", .text = "pg.zig lacks COPY.", .valid_lower = at("2026-11-19T20:15:00Z"), .confidence = 0.7 },
-                .{ .item = 0, .id = pipelining, .subject_id = driver, .predicate = "lacks_feature", .object_value = "pipelining", .text = "pg.zig lacks pipelining.", .valid_lower = at("2026-11-19T20:15:00Z"), .confidence = 0.7 },
+                .{ .item = 0, .id = lacks, .subject_id = driver, .relation = "lacks_feature", .object_value = "COPY", .text = "pg.zig lacks COPY.", .valid_lower = at("2026-11-19T20:15:00Z"), .confidence = 0.7 },
+                .{ .item = 0, .id = pipelining, .subject_id = driver, .relation = "lacks_feature", .object_value = "pipelining", .text = "pg.zig lacks pipelining.", .valid_lower = at("2026-11-19T20:15:00Z"), .confidence = 0.7 },
             },
         },
     }).run();
@@ -200,12 +200,12 @@ test "switching a setting ends only the same qualifier" {
         .arena = arena,
         .reference_time = at("2026-11-21T19:00:00Z"),
         .body = "Actually let's switch lantern's extraction_model setting from model-a to model-b",
-        .raw = .{ .skip = null, .entities = &.{ent("n1", "Lantern", .project)}, .facts = &.{switch_fact}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ent("n1", "Lantern", .project)}, .facts = &.{switch_fact}, .new_relations = &.{} },
         .prefetch = .{
             .entities = &.{.{ .item = 0, .id = lantern, .name = "lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 }},
             .facts = &.{
-                .{ .item = 0, .id = old_model, .subject_id = lantern, .predicate = "has_setting", .qualifier = "extraction_model", .object_value = "model-a", .text = "lantern extraction_model is model-a", .valid_lower = at("2026-11-20T21:00:00Z"), .confidence = 0.9 },
-                .{ .item = 0, .id = other_setting, .subject_id = lantern, .predicate = "has_setting", .qualifier = "zig_version", .object_value = "0.17.1", .text = "lantern pins zig 0.17.1", .valid_lower = at("2026-11-18T18:00:00Z"), .confidence = 0.9 },
+                .{ .item = 0, .id = old_model, .subject_id = lantern, .relation = "has_setting", .qualifier = "extraction_model", .object_value = "model-a", .text = "lantern extraction_model is model-a", .valid_lower = at("2026-11-20T21:00:00Z"), .confidence = 0.9 },
+                .{ .item = 0, .id = other_setting, .subject_id = lantern, .relation = "has_setting", .qualifier = "zig_version", .object_value = "0.17.1", .text = "lantern pins zig 0.17.1", .valid_lower = at("2026-11-18T18:00:00Z"), .confidence = 0.9 },
             },
         },
     }).run();
@@ -225,10 +225,10 @@ test "a correction the resolution call marks was_wrong retracts instead of endin
         .arena = arena,
         .reference_time = at("2026-11-21T09:00:00Z"),
         .body = "That's wrong. Lantern uses Rust for its backend, not Go. We never used Go.",
-        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Lantern", .project), ent("n2", "Rust", .other) }, .facts = &.{fct("n1", "uses", "n2", null, "Lantern uses Rust for its backend, not Go")}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "Lantern", .project), ent("n2", "Rust", .other) }, .facts = &.{fct("n1", "uses", "n2", null, "Lantern uses Rust for its backend, not Go")}, .new_relations = &.{} },
         .prefetch = .{
             .entities = &.{.{ .item = 0, .id = lantern, .name = "Lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 }},
-            .facts = &.{.{ .item = 0, .id = uses_go, .subject_id = lantern, .predicate = "uses", .object_id = go, .text = "Lantern uses Go for its backend.", .valid_lower = at("2026-11-20T19:00:00Z"), .confidence = 0.7, .cosine = 0.8 }},
+            .facts = &.{.{ .item = 0, .id = uses_go, .subject_id = lantern, .relation = "uses", .object_id = go, .text = "Lantern uses Go for its backend.", .valid_lower = at("2026-11-20T19:00:00Z"), .confidence = 0.7, .cosine = 0.8 }},
         },
         .resolution = .{
             .entity_links = &.{},
@@ -240,13 +240,13 @@ test "a correction the resolution call marks was_wrong retracts instead of endin
     try testing.expect(out.cs.retractions[0].fact_id.eql(uses_go));
     try testing.expectEqual(core.types.EndKind.retracted, out.cs.retractions[0].end_kind);
     var saw_retracted = false;
-    for (out.cs.provenance) |pv| if (pv.fact_id.eql(uses_go) and pv.role == .retracted) {
+    for (out.cs.evidence) |pv| if (pv.fact_id.eql(uses_go) and pv.kind == .retracted) {
         saw_retracted = true;
     };
     try testing.expect(saw_retracted);
 }
 
-test "restating an existing fact reaffirms it instead of duplicating" {
+test "restating an existing fact restates it instead of duplicating" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -257,20 +257,20 @@ test "restating an existing fact reaffirms it instead of duplicating" {
         .arena = arena,
         .reference_time = at("2026-11-22T16:00:00Z"),
         .body = "Remember we already chose Postgres 17 for lantern.",
-        .raw = .{ .skip = null, .entities = &.{ ent("n1", "lantern", .project), ent("n2", "Postgres", .service) }, .facts = &.{fct("n1", "uses", "n2", null, "we already chose Postgres 17 for lantern")}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "lantern", .project), ent("n2", "Postgres", .software) }, .facts = &.{fct("n1", "uses", "n2", null, "we already chose Postgres 17 for lantern")}, .new_relations = &.{} },
         .prefetch = .{
             .entities = &.{
                 .{ .item = 0, .id = lantern, .name = "Lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 },
-                .{ .item = 1, .id = pg, .name = "PostgreSQL", .norm = "postgresql", .type = .service, .alias_match = true, .cosine = 0.95 },
+                .{ .item = 1, .id = pg, .name = "PostgreSQL", .norm = "postgresql", .type = .software, .alias_match = true, .cosine = 0.95 },
             },
-            .facts = &.{.{ .item = 0, .id = uses_pg, .subject_id = lantern, .predicate = "uses", .object_id = pg, .text = "Lantern uses Postgres 17.", .valid_lower = at("2026-11-18T18:00:00Z"), .confidence = 0.9 }},
+            .facts = &.{.{ .item = 0, .id = uses_pg, .subject_id = lantern, .relation = "uses", .object_id = pg, .text = "Lantern uses Postgres 17.", .valid_lower = at("2026-11-18T18:00:00Z"), .confidence = 0.9 }},
         },
     }).run();
     try testing.expectEqual(@as(usize, 0), out.cs.new_facts.len);
-    try testing.expectEqual(@as(usize, 1), out.cs.reaffirmations.len);
-    try testing.expect(out.cs.reaffirmations[0].fact_id.eql(uses_pg));
-    try testing.expectApproxEqAbs(@as(f32, 0.93), out.cs.reaffirmations[0].confidence, 1e-6);
-    try testing.expectEqual(core.types.ProvenanceRole.reaffirmed, out.cs.provenance[0].role);
+    try testing.expectEqual(@as(usize, 1), out.cs.restatements.len);
+    try testing.expect(out.cs.restatements[0].fact_id.eql(uses_pg));
+    try testing.expectApproxEqAbs(@as(f32, 0.93), out.cs.restatements[0].confidence, 1e-6);
+    try testing.expectEqual(core.types.EvidenceKind.restated, out.cs.evidence[0].kind);
     try testing.expect(!out.plan.needsResolution());
     try testing.expectEqual(@as(usize, 1), out.cs.new_aliases.len);
     try testing.expectEqualStrings("postgres", out.cs.new_aliases[0].norm);
@@ -281,14 +281,14 @@ test "an alias spelling merges deterministically into the existing entity" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const driver = id(20);
-    var e = ent("n1", "pg-zig", .library);
+    var e = ent("n1", "pg-zig", .software);
     e.aliases = &.{"the zig postgres driver"};
     const out = try (Scenario{
         .arena = arena,
         .reference_time = at("2026-11-20T16:30:00Z"),
         .body = "Since pg-zig has no COPY, we'll batch commit inserts with unnest.",
-        .raw = .{ .skip = null, .entities = &.{e}, .facts = &.{fct("n1", "lacks_feature", null, "COPY", "Since pg-zig has no COPY")}, .new_predicates = &.{} },
-        .prefetch = .{ .entities = &.{.{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .library, .alias_match = true, .cosine = 0.97 }} },
+        .raw = .{ .skip = null, .entities = &.{e}, .facts = &.{fct("n1", "lacks_feature", null, "COPY", "Since pg-zig has no COPY")}, .new_relations = &.{} },
+        .prefetch = .{ .entities = &.{.{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .software, .alias_match = true, .cosine = 0.97 }} },
     }).run();
     try testing.expectEqual(@as(usize, 0), out.cs.new_entities.len);
     try testing.expect(out.cs.new_facts[0].fact.subject_id.eql(driver));
@@ -306,9 +306,9 @@ test "same-name entities of incompatible types never merge without the model" {
         .arena = arena,
         .reference_time = at("2026-11-23T03:00:00Z"),
         .body = "We compared the vx coding agent against the VX currency rates dataset.",
-        .raw = .{ .skip = null, .entities = &.{ ent("n1", "VX currency rates", .dataset), ent("n2", "vx", .dataset) }, .facts = &.{}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "VX currency rates", .dataset), ent("n2", "vx", .dataset) }, .facts = &.{}, .new_relations = &.{} },
         .prefetch = .{ .entities = &.{
-            .{ .item = 1, .id = vx_tool, .name = "vx", .norm = "vx", .type = .tool, .alias_match = true, .cosine = 0.99 },
+            .{ .item = 1, .id = vx_tool, .name = "vx", .norm = "vx", .type = .software, .alias_match = true, .cosine = 0.99 },
         } },
     }).run();
     try testing.expectEqual(resolve.EntityDecision.ask, out.plan.entities[1].decision);
@@ -325,7 +325,7 @@ test "an organization and its similarly named tool stay apart, and a person neve
         .arena = arena,
         .reference_time = at("2026-11-21T01:00:00Z"),
         .body = "Acme maintains acme-box, a sandbox tool. Acme Robotics is a different company.",
-        .raw = .{ .skip = null, .entities = &.{ ent("n1", "acme-box", .tool), ent("n2", "Acme", .person) }, .facts = &.{}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "acme-box", .software), ent("n2", "Acme", .person) }, .facts = &.{}, .new_relations = &.{} },
         .prefetch = .{ .entities = &.{
             .{ .item = 0, .id = acme_org, .name = "Acme", .norm = "acme", .type = .organization, .cosine = 0.86 },
             .{ .item = 1, .id = acme_org, .name = "Acme", .norm = "acme", .type = .organization, .alias_match = true, .cosine = 1.0 },
@@ -350,10 +350,10 @@ test "a gray-band entity links only when the resolution call names one of its ca
         .arena = arena,
         .reference_time = at("2026-11-20T16:30:00Z"),
         .body = "the zig driver needs a separate branch per Zig release",
-        .raw = .{ .skip = null, .entities = &.{ent("n1", "the zig driver", .library)}, .facts = &.{}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ent("n1", "the zig driver", .software)}, .facts = &.{}, .new_relations = &.{} },
         .prefetch = .{ .entities = &.{
-            .{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .library, .cosine = 0.84 },
-            .{ .item = 0, .id = unrelated, .name = "zig", .norm = "zig", .type = .library, .cosine = 0.60 },
+            .{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .software, .cosine = 0.84 },
+            .{ .item = 0, .id = unrelated, .name = "zig", .norm = "zig", .type = .software, .cosine = 0.60 },
         } },
     };
     var linked = base;
@@ -372,7 +372,7 @@ test "a gray-band entity links only when the resolution call names one of its ca
     try testing.expectEqual(@as(usize, 1), c.cs.new_entities.len);
 }
 
-test "one episode ends at most five existing facts" {
+test "one entry ends at most five existing facts" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -382,7 +382,7 @@ test "one episode ends at most five existing facts" {
         .item = 0,
         .id = id(@intCast(100 + k)),
         .subject_id = subject,
-        .predicate = "uses",
+        .relation = "uses",
         .object_value = "old tool",
         .text = "old",
         .valid_lower = at("2026-11-01T00:00:00Z"),
@@ -399,7 +399,7 @@ test "one episode ends at most five existing facts" {
         .arena = arena,
         .reference_time = at("2026-11-22T00:00:00Z"),
         .body = "lantern now uses only the new tool",
-        .raw = .{ .skip = null, .entities = &.{ent("n1", "lantern", .project)}, .facts = &.{fct("n1", "uses", null, "new tool", "lantern now uses only the new tool")}, .new_predicates = &.{} },
+        .raw = .{ .skip = null, .entities = &.{ent("n1", "lantern", .project)}, .facts = &.{fct("n1", "uses", null, "new tool", "lantern now uses only the new tool")}, .new_relations = &.{} },
         .prefetch = .{
             .entities = &.{.{ .item = 0, .id = subject, .name = "lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 }},
             .facts = &facts,
@@ -415,29 +415,29 @@ test "one episode ends at most five existing facts" {
     try testing.expectEqual(@as(usize, 2), capped);
 }
 
-test "a new predicate close to a known one collapses onto it" {
+test "a new relation close to a known one collapses onto it" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const raw: ingest.ExtractResult = .{
         .skip = null,
-        .entities = &.{ ent("n1", "flaky test", .concept), ent("n2", "retry patch", .code_artifact) },
+        .entities = &.{ ent("n1", "flaky test", .concept), ent("n2", "retry patch", .code) },
         .facts = &.{fct("n1", "resolved_by", "n2", null, "the flaky test was resolved by the retry patch")},
-        .new_predicates = &.{.{ .name = "resolved_by", .description = "Subject was resolved by the object.", .object_kind = .entity }},
+        .new_relations = &.{.{ .name = "resolved_by", .description = "Subject was resolved by the object.", .object_kind = .entity }},
     };
     const checked = try extract.check(arena, raw, "the flaky test was resolved by the retry patch", at("2026-11-22T00:00:00Z"));
-    const prefetch: resolve.Prefetch = .{ .predicates = &.{.{ .name = "fixed_by", .status = .core, .emb = &.{ 1, 0, 0 } }} };
-    const novel = try resolve.novelPredicates(arena, checked, prefetch);
+    const prefetch: resolve.Prefetch = .{ .relations = &.{.{ .name = "fixed_by", .status = .core, .emb = &.{ 1, 0, 0 } }} };
+    const novel = try resolve.novelRelations(arena, checked, prefetch);
     try testing.expectEqual(@as(usize, 1), novel.len);
     const p = try resolve.plan(arena, checked, prefetch);
     const cs = try resolve.build(arena, .{
-        .episode = .{ .id = id(200), .graph_id = graph, .reference_time = at("2026-11-22T00:00:00Z") },
+        .entry = .{ .id = id(200), .graph_id = graph, .reference_time = at("2026-11-22T00:00:00Z") },
         .commit_time = at("2026-11-22T00:00:01Z"),
         .io = testing.io,
-    }, checked, prefetch, p, .{ .entities = &.{ &.{1}, &.{1} }, .facts = &.{&.{1}}, .predicates = &.{&.{ 0.97, 0.1, 0 }} }, try resolve.Verdict.none(arena, p));
-    try testing.expectEqualStrings("fixed_by", cs.new_facts[0].fact.predicate);
-    try testing.expectEqual(@as(usize, 1), cs.new_predicates.len);
-    try testing.expectEqualStrings("fixed_by", cs.new_predicates[0].mapped_to.?);
+    }, checked, prefetch, p, .{ .entities = &.{ &.{1}, &.{1} }, .facts = &.{&.{1}}, .relations = &.{&.{ 0.97, 0.1, 0 }} }, try resolve.Verdict.none(arena, p));
+    try testing.expectEqualStrings("fixed_by", cs.new_facts[0].fact.relation);
+    try testing.expectEqual(@as(usize, 1), cs.new_relations.len);
+    try testing.expectEqualStrings("fixed_by", cs.new_relations[0].mapped_to.?);
 }
 
 test "decision-model probabilities become a verdict" {
@@ -446,11 +446,11 @@ test "decision-model probabilities become a verdict" {
     const arena = arena_state.allocator();
     const lantern = id(30);
     const old = id(80);
-    const raw: ingest.ExtractResult = .{ .skip = null, .entities = &.{ent("n1", "Lantern", .project)}, .facts = &.{fct("n1", "uses", null, "rust", "Lantern uses Rust, not Go")}, .new_predicates = &.{} };
+    const raw: ingest.ExtractResult = .{ .skip = null, .entities = &.{ent("n1", "Lantern", .project)}, .facts = &.{fct("n1", "uses", null, "rust", "Lantern uses Rust, not Go")}, .new_relations = &.{} };
     const checked = try extract.check(arena, raw, "Lantern uses Rust, not Go", at("2026-11-21T09:00:00Z"));
     const prefetch: resolve.Prefetch = .{
         .entities = &.{.{ .item = 0, .id = lantern, .name = "Lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 }},
-        .facts = &.{.{ .item = 0, .id = old, .subject_id = lantern, .predicate = "uses", .object_value = "go", .text = "Lantern uses Go.", .valid_lower = at("2026-11-20T00:00:00Z"), .confidence = 0.7, .cosine = 0.8 }},
+        .facts = &.{.{ .item = 0, .id = old, .subject_id = lantern, .relation = "uses", .object_value = "go", .text = "Lantern uses Go.", .valid_lower = at("2026-11-20T00:00:00Z"), .confidence = 0.7, .cosine = 0.8 }},
     };
     const p = try resolve.plan(arena, checked, prefetch);
     const q = try resolve.decisionQuestions(arena, p, checked, prefetch);
