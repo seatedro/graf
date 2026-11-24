@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const json = @import("install_json.zig");
+const profiles = @import("profiles.zig");
 const Allocator = std.mem.Allocator;
 const Environ = std.process.Environ;
 const Io = std.Io;
@@ -66,7 +67,7 @@ pub fn install(arena: Allocator, io: Io, env: *const Environ.Map, opts: Options,
     var skipped: std.ArrayList(core.Harness) = .empty;
 
     for (opts.harnesses) |harness| {
-        const targets = try targetsFor(arena, env, home, harness) orelse {
+        const targets = try targetsFor(arena, io, env, home, harness) orelse {
             try skipped.append(arena, harness);
             try out.print("{s}: no local config to install into, skipped\n", .{@tagName(harness)});
             continue;
@@ -91,25 +92,29 @@ fn envDir(arena: Allocator, env: *const Environ.Map, name: []const u8, home: []c
     return std.fs.path.join(arena, parts.items);
 }
 
-fn targetsFor(arena: Allocator, env: *const Environ.Map, home: []const u8, harness: core.Harness) Allocator.Error!?[]const Target {
+fn targetsFor(arena: Allocator, io: Io, env: *const Environ.Map, home: []const u8, harness: core.Harness) !?[]const Target {
     const join = std.fs.path.join;
     return switch (harness) {
         .@"claude-code" => blk: {
-            const custom = env.get("CLAUDE_CONFIG_DIR");
-            const config_dir = try envDir(arena, env, "CLAUDE_CONFIG_DIR", home, &.{".claude"});
-            const mcp_path = if (custom != null and custom.?.len > 0) try join(arena, &.{ config_dir, ".claude.json" }) else try join(arena, &.{ home, ".claude.json" });
-
-            break :blk try arena.dupe(Target, &.{
-                .{ .path = mcp_path, .edit = .{ .mcp_json = .{ .keys = &.{"mcpServers"}, .stdio_type = true } } },
-                .{ .path = try join(arena, &.{ config_dir, "settings.json" }), .edit = .{ .hooks_json = "claude-code" } },
-            });
+            var targets: std.ArrayList(Target) = .empty;
+            for (try profiles.discover(arena, io, home, env.get(profiles.claude.env), profiles.claude)) |profile| {
+                const mcp_path = try join(arena, &.{ if (profile.default) home else profile.dir, ".claude.json" });
+                try targets.appendSlice(arena, &.{
+                    .{ .path = mcp_path, .edit = .{ .mcp_json = .{ .keys = &.{"mcpServers"}, .stdio_type = true } } },
+                    .{ .path = try join(arena, &.{ profile.dir, "settings.json" }), .edit = .{ .hooks_json = "claude-code" } },
+                });
+            }
+            break :blk targets.items;
         },
         .codex => blk: {
-            const codex_home = try envDir(arena, env, "CODEX_HOME", home, &.{".codex"});
-            break :blk try arena.dupe(Target, &.{
-                .{ .path = try join(arena, &.{ codex_home, "config.toml" }), .edit = .codex_toml },
-                .{ .path = try join(arena, &.{ codex_home, "hooks.json" }), .edit = .{ .hooks_json = "codex" } },
-            });
+            var targets: std.ArrayList(Target) = .empty;
+            for (try profiles.discover(arena, io, home, env.get(profiles.codex.env), profiles.codex)) |profile| {
+                try targets.appendSlice(arena, &.{
+                    .{ .path = try join(arena, &.{ profile.dir, "config.toml" }), .edit = .codex_toml },
+                    .{ .path = try join(arena, &.{ profile.dir, "hooks.json" }), .edit = .{ .hooks_json = "codex" } },
+                });
+            }
+            break :blk targets.items;
         },
         .pi => blk: {
             const pi_dir = try envDir(arena, env, "PI_CODING_AGENT_DIR", home, &.{ ".pi", "agent" });
@@ -602,6 +607,69 @@ test "harness home overrides from the environment" {
     try testing.expect(h.exists("alt-claude/.claude.json"));
     try testing.expect(h.exists("alt-claude/settings.json"));
     try testing.expect(!h.exists(".claude.json"));
+}
+
+test "every claude and codex profile directory is wired in one run" {
+    var h: Home = undefined;
+    try h.init();
+    defer h.deinit();
+    const arena = h.arena_state.allocator();
+
+    try h.write(".claude/settings.json", "{}\n");
+    try h.write(".claude-work/.claude.json", "{\"numStartups\": 3}\n");
+    try h.write(".codex/auth.json", "{}\n");
+    try h.write(".codex-alt/sessions/2026/11/24/rollout-x.jsonl", "");
+    try h.write(".claude.json.bak", "{\"old\": true}\n");
+    try h.write(".claude-backup/settings.json", "{}\n");
+    try h.write(".claude-router/config.json", "{}\n");
+    try h.write(".codexrc", "");
+
+    const report = try h.run(.{ .harnesses = &.{ .@"claude-code", .codex } });
+    try testing.expect(!report.failed());
+    try testing.expectEqual(@as(usize, 8), report.files.len);
+
+    const Server = struct { type: ?[]const u8 = null, command: []const u8, args: []const []const u8 };
+    const Mcp = struct { mcpServers: struct { graf: Server } };
+    for ([_][]const u8{ ".claude.json", ".claude-work/.claude.json" }) |sub| {
+        const doc = try std.json.parseFromSliceLeaky(Mcp, arena, try h.read(sub), .{ .ignore_unknown_fields = true });
+        try testing.expectEqualStrings("graf", doc.mcpServers.graf.command);
+    }
+    for ([_][]const u8{ ".claude/settings.json", ".claude-work/settings.json" }) |sub| try expectHooks(arena, try h.read(sub), "claude-code", "graf");
+    for ([_][]const u8{ ".codex", ".codex-alt" }) |dir| {
+        try expectHooks(arena, try h.read(try std.fs.path.join(arena, &.{ dir, "hooks.json" })), "codex", "graf");
+        try testing.expectEqualStrings("[mcp_servers.graf]\ncommand = \"graf\"\nargs = [\"mcp\"]\n", try h.read(try std.fs.path.join(arena, &.{ dir, "config.toml" })));
+    }
+
+    try testing.expect(!h.exists(".claude/.claude.json"));
+    try testing.expectEqualStrings("{\"old\": true}\n", try h.read(".claude.json.bak"));
+    try testing.expectEqualStrings("{}\n", try h.read(".claude-backup/settings.json"));
+    try testing.expect(!h.exists(".claude-backup/.claude.json"));
+    try testing.expect(!h.exists(".claude-router/settings.json"));
+    try testing.expect(!h.exists(".claude-router/.claude.json"));
+
+    const again = try h.run(.{ .harnesses = &.{ .@"claude-code", .codex } });
+    try testing.expect(!again.changed());
+}
+
+test "an env override outside home joins the discovered profiles" {
+    var h: Home = undefined;
+    try h.init();
+    defer h.deinit();
+
+    const arena = h.arena_state.allocator();
+    try h.write(".claude/settings.json", "{}\n");
+    try h.write(".codex/config.toml", "");
+    try h.env.put("CLAUDE_CONFIG_DIR", try std.fs.path.join(arena, &.{ h.home, "elsewhere", "claude" }));
+    try h.env.put("CODEX_HOME", try std.fs.path.join(arena, &.{ h.home, "elsewhere", "codex" }));
+
+    const report = try h.run(.{ .harnesses = &.{ .@"claude-code", .codex } });
+    try testing.expectEqual(@as(usize, 8), report.files.len);
+
+    try testing.expect(h.exists("elsewhere/claude/.claude.json"));
+    try testing.expect(h.exists("elsewhere/claude/settings.json"));
+    try testing.expect(h.exists(".claude.json"));
+    try testing.expect(h.exists("elsewhere/codex/hooks.json"));
+    try testing.expect(h.exists(".codex/hooks.json"));
 }
 
 test {
