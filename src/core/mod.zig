@@ -1,9 +1,9 @@
-//! Shared vocabulary for every workstream: the domain types (episodes, entities,
-//! facts, change sets), the core ontology, configuration, and the small interfaces
-//! that let modules talk without importing each other.
+//! Shared vocabulary for every module: the domain types (episodes, entities, facts,
+//! change sets), the core ontology, configuration, and the small interfaces that let
+//! modules talk without importing each other.
 //!
-//! Owned by the integrator. Workstreams may add new declarations here in their own
-//! PRs; changing an existing declaration needs its own small PR first (see AGENTS.md).
+//! Adding a declaration here is fine in any PR. Changing or removing an existing one
+//! needs its own PR first (see AGENTS.md).
 
 const std = @import("std");
 
@@ -32,7 +32,7 @@ pub const EpisodeSink = types.EpisodeSink;
 pub const LlmLedger = types.LlmLedger;
 pub const Config = config.Config;
 
-/// Returned by public interfaces that a workstream has declared but not built yet.
+/// Returned by public interfaces that are declared but not built yet.
 pub const NotImplemented = error.NotImplemented;
 
 test {

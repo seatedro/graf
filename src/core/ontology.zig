@@ -1,4 +1,4 @@
-//! The fixed core ontology (spec 3.5). Learned predicates live in the `predicate`
+//! The fixed core ontology. Learned predicates live in the `predicate`
 //! table; these are seeded per graph and never change at runtime.
 
 const std = @import("std");

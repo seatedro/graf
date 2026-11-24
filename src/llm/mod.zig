@@ -1,9 +1,9 @@
-//! LLM and embeddings client workstream (spec 5). Vendor-neutral: speaks the public
+//! LLM and embeddings client. Vendor-neutral: speaks the public
 //! OpenAI Responses, Anthropic Messages, OpenAI Chat Completions, and embeddings wire
 //! formats against whatever `base_url` the user configures. No provider, gateway or
 //! proxy is named in code; cost headers and model ids come from config.
 //!
-//! Planned layout (owned by this workstream): transport.zig (std.http.Client pool,
+//! Planned layout: transport.zig (std.http.Client pool,
 //! deadlines), codecs per wire route, schema_gen.zig (comptime JSON Schema from Zig
 //! types), recovery.zig (pure retry state machine), limiter.zig (global limiter,
 //! spend cap, priority lanes), decision.zig (typed decision-model backend).
@@ -13,7 +13,7 @@ const core = @import("core");
 
 pub const Route = core.config.Route;
 
-/// Provider failure classes and their handling (spec 5.4).
+/// Provider failure classes and their handling.
 pub const ErrorClass = enum {
     network_not_sent,
     timeout,
@@ -88,7 +88,7 @@ pub const EmbedResponse = struct {
     cost: Cost,
 };
 
-/// A batched question for the typed decision-model backend (spec 5.2, 6.2).
+/// A batched question for the typed decision-model backend.
 pub const Question = union(enum) {
     /// Probability that the statement is true.
     yes_no: []const u8,
@@ -145,7 +145,7 @@ pub const Client = struct {
 };
 
 /// Strict JSON Schema for `T` (`additionalProperties: false`, every field required,
-/// optionals as `[type, "null"]`), generated at compile time (spec 5.2).
+/// optionals as `[type, "null"]`), generated at compile time.
 pub fn jsonSchema(comptime T: type) []const u8 {
     @compileError("llm.jsonSchema is not implemented yet; requested for " ++ @typeName(T));
 }

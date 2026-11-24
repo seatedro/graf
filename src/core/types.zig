@@ -24,7 +24,7 @@ pub const Range = struct {
     }
 };
 
-/// Time-ordered UUIDv7, generated in Zig (spec 3.2).
+/// Time-ordered UUIDv7, generated in Zig.
 pub const Id = struct {
     bytes: [16]u8,
 
@@ -113,7 +113,7 @@ pub const ToolCall = struct {
     result_preview: []const u8 = "",
 };
 
-/// One normalized, redacted conversational turn (spec 4.1).
+/// One normalized, redacted conversational turn.
 pub const Turn = struct {
     role: Role,
     text: []const u8,
@@ -175,7 +175,7 @@ pub const Episode = struct {
     cost_usd: f64 = 0,
 };
 
-/// Core entity types (spec 3.5). Types guard merges; they are not property schemas.
+/// Core entity types. Types guard merges; they are not property schemas.
 pub const EntityType = enum {
     person,
     organization,
@@ -218,7 +218,7 @@ pub const FactObject = union(enum) {
     value: []const u8,
 };
 
-/// A bi-temporal fact edge (spec 3.2, 3.3).
+/// A bi-temporal fact edge.
 pub const Fact = struct {
     id: Id,
     graph_id: Id,
@@ -250,7 +250,7 @@ pub const Predicate = struct {
     mapped_to: ?[]const u8 = null,
 };
 
-/// The staged, deterministic mutation plan for one episode (spec 4.3 step 10).
+/// The staged, deterministic mutation plan for one episode.
 /// Persisted to `episode.change_set` before the fenced commit.
 pub const ChangeSet = struct {
     /// `commit_log.seq` snapshot taken at prefetch; the committer rebases past it.

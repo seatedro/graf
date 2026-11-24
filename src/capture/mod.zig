@@ -1,4 +1,4 @@
-//! Capture workstream (spec 4.1): transcript tailers for each local harness, the
+//! Capture: transcript tailers for each local harness, the
 //! normalizer (tool-aware retention, thinking stripped), the deterministic redactor,
 //! the segmenter that seals turns into episodes, exclusions, and `graf hook`.
 //!
@@ -8,7 +8,7 @@
 const std = @import("std");
 const core = @import("core");
 
-/// Where each harness writes its session logs, relative to `$HOME` (spec 1.1).
+/// Where each harness writes its session logs, relative to `$HOME`.
 pub const default_roots = [_]struct { core.Harness, []const u8 }{
     .{ .@"claude-code", ".claude/projects" },
     .{ .codex, ".codex/sessions" },
@@ -26,7 +26,7 @@ pub fn parseLine(harness: core.Harness, arena: std.mem.Allocator, line: []const 
 }
 
 /// Replaces secrets with `[REDACTED:<kind>]` before anything is stored or sent to a
-/// model (spec 4.1). Must never let a secret through: the eval gate is zero leaks.
+/// model. Must never let a secret through: the eval gate is zero leaks.
 pub fn redact(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
     _ = arena;
     _ = text;
@@ -34,7 +34,7 @@ pub fn redact(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
 }
 
 /// Accumulates turns per source and seals a window into an episode on the token,
-/// idle, hook, or gap triggers (spec 4.1).
+/// idle, hook, or gap triggers.
 pub const Segmenter = struct {
     pub const Trigger = enum { tokens, idle, hook, gap };
 
@@ -68,7 +68,7 @@ pub const Tailer = struct {
 };
 
 /// `graf hook <harness> <event>`: must exit 0 within its latency budget, spooling to
-/// disk if the daemon is down (spec 4.1, 6.1).
+/// disk if the daemon is down.
 pub const hooks = struct {
     pub const Event = enum { @"session-start", @"prompt-submit", stop, @"session-end" };
 

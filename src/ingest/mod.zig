@@ -1,9 +1,9 @@
-//! Ingestion workstream (spec 4.2-4.5): the worker pool and per-episode state machine.
-//! Claim -> continuity context -> Call 1 extract -> validate and persist -> batch
-//! embed -> one batched prefetch CTE -> deterministic resolution -> optional Call 2
+//! Ingestion: the worker pool and per-episode state machine.
+//! Claim -> continuity context -> extraction call -> validate and persist -> batch
+//! embed -> one batched prefetch CTE -> deterministic resolution -> optional resolution call
 //! -> bi-temporal invalidation -> staged change set -> fenced commit with rebase.
 //!
-//! The Call 1 and Call 2 result types below are the model-facing contracts. Their
+//! The extraction and resolution result types below are the model-facing contracts. Their
 //! JSON Schemas come from `llm.jsonSchema`, so changing a field here changes the
 //! prompt contract.
 
@@ -14,7 +14,7 @@ const llm = @import("llm");
 
 pub const TimeBasis = enum { explicit, relative, reference };
 
-/// Call 1 output (spec 4.3 step 4).
+/// Output of the extraction call.
 pub const ExtractResult = struct {
     /// Reason the episode holds no durable knowledge, or null.
     skip: ?[]const u8,
@@ -60,7 +60,7 @@ pub const ProposedPredicate = struct {
 
 pub const ConflictKind = enum { changed, was_wrong };
 
-/// Call 2 output (spec 4.3 step 8). Existing items are addressed by prefetch ids
+/// Output of the resolution call. Existing items are addressed by prefetch ids
 /// (`E1..E40`, `F1..F80`); new facts by their index in `ExtractResult.facts`.
 pub const ResolveResult = struct {
     entity_links: []const EntityLink,
@@ -86,7 +86,7 @@ pub const Contradiction = struct {
     at: ?[]const u8,
 };
 
-/// Pure bi-temporal invalidation for one conflicting pair (spec 4.3 step 9).
+/// Pure bi-temporal invalidation for one conflicting pair.
 pub fn resolveConflict(old: *core.Fact, new: *core.Fact, kind: ConflictKind, commit_time: core.Micros, new_reference_time: core.Micros) !void {
     _ = old;
     _ = new;

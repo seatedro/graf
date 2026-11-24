@@ -1,4 +1,4 @@
-//! Eval workstream (spec 7): replays the labeled episode suite through graf, reads
+//! Eval: replays the labeled episode suite through graf, reads
 //! the resulting graph and ledger, runs the retrieval queries, and scores the release
 //! gates. Fixtures live in `evals/` at the repo root.
 
@@ -23,7 +23,7 @@ pub const EvalEpisode = struct {
     turns: []const core.Turn = &.{},
 };
 
-/// v1 release bar (spec 7.3). M1 ships only when every gate passes.
+/// Release bar for v1: every gate must pass.
 pub const gates = struct {
     pub const entity_f1_min = 0.85;
     pub const merge_accuracy_min = 0.90;
