@@ -233,8 +233,8 @@ pub const PgBackend = struct {
         var ebuf: [36]u8 = undefined;
         var gbuf: [36]u8 = undefined;
         const row = jsonRow(ContextRow, arena, conn, context_sql, .{ idText(lease.entry_id, &ebuf), idText(b.graph_id, &gbuf) }) catch |err| return logPgError(conn, err);
-        var preds: std.ArrayList(resolve.RelationRow) = .empty;
-        try preds.appendSlice(arena, row.relations);
+        var rels: std.ArrayList(resolve.RelationRow) = .empty;
+        try rels.appendSlice(arena, row.relations);
         for (core.ontology.core_relations) |cp| {
             var present = false;
             for (row.relations) |p| if (std.mem.eql(u8, p.name, cp.name)) {
@@ -245,9 +245,9 @@ pub const PgBackend = struct {
             for (row.core_embeddings) |ce| if (std.mem.eql(u8, ce.name, cp.name)) {
                 emb = ce.emb;
             };
-            try preds.append(arena, .{ .name = cp.name, .cardinality = cp.cardinality, .opposes = cp.opposes, .status = .core, .description = cp.description, .emb = emb });
+            try rels.append(arena, .{ .name = cp.name, .cardinality = cp.cardinality, .opposes = cp.opposes, .status = .core, .description = cp.description, .emb = emb });
         }
-        return .{ .prior = row.prior, .relations = preds.items };
+        return .{ .prior = row.prior, .relations = rels.items };
     }
 
     pub fn saveExtraction(b: *PgBackend, lease: store.Lease, json: []const u8) !void {

@@ -228,11 +228,11 @@ pub const MemoryBackend = struct {
             if (b.blocked(e.*)) continue;
             b.next_token += 1;
             e.token = b.next_token;
-            var ep = e.entry;
-            ep.attempts = e.attempts;
-            ep.status = e.status;
+            var entry = e.entry;
+            entry.attempts = e.attempts;
+            entry.status = e.status;
             e.status = if (e.extraction_json != null) .extracted else .extracting;
-            return .{ .entry_id = ep.id, .graph_id = graph, .token = e.token, .entry = ep, .extraction_json = e.extraction_json };
+            return .{ .entry_id = entry.id, .graph_id = graph, .token = e.token, .entry = entry, .extraction_json = e.extraction_json };
         }
         return null;
     }

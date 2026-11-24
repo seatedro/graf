@@ -207,7 +207,7 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
         try kept_meta.append(arena, m);
     };
 
-    var preds: std.ArrayList(ingest.ProposedRelation) = .empty;
+    var rels: std.ArrayList(ingest.ProposedRelation) = .empty;
     outer: for (raw.new_relations) |p_in| {
         var p = p_in;
         p.name = trimmed(p.name);
@@ -215,8 +215,8 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
             try w.add("dropped proposed relation that is not snake_case", .{});
             continue;
         }
-        for (preds.items) |prev| if (std.mem.eql(u8, prev.name, p.name)) continue :outer;
-        try preds.append(arena, p);
+        for (rels.items) |prev| if (std.mem.eql(u8, prev.name, p.name)) continue :outer;
+        try rels.append(arena, p);
     }
 
     return .{
@@ -224,7 +224,7 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
             .skip = if (raw.skip) |s| (if (trimmed(s).len == 0) null else s) else null,
             .entities = entities.items,
             .facts = kept_facts.items,
-            .new_relations = preds.items,
+            .new_relations = rels.items,
         },
         .meta = kept_meta.items,
         .warnings = w.list.items,

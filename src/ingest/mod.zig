@@ -111,4 +111,5 @@ test {
     std.testing.refAllDecls(@This());
     _ = @import("scenarios_test.zig");
     _ = @import("pipeline_test.zig");
+    _ = @import("postgres_test.zig");
 }

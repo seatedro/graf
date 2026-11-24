@@ -316,7 +316,7 @@ test "same-name entities of incompatible types never merge without the model" {
     try testing.expectEqual(@as(usize, 0), out.cs.merges.len);
 }
 
-test "an organization and its similarly named tool stay apart, and a person never joins a group" {
+test "an organization and its similarly named software stay apart, and a person never joins a group" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();

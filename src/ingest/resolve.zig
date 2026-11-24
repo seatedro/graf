@@ -426,10 +426,10 @@ pub const Question = struct {
 pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, prefetch: Prefetch) Allocator.Error!struct { questions: []const Question, prompts: []const []const u8 } {
     var qs: std.ArrayList(Question) = .empty;
     var prompts: std.ArrayList([]const u8) = .empty;
-    for (p.entities, 0..) |ep, i| {
-        if (ep.decision != .ask) continue;
+    for (p.entities, 0..) |entry, i| {
+        if (entry.decision != .ask) continue;
         const e = checked.result.entities[i];
-        for (ep.gray) |g| {
+        for (entry.gray) |g| {
             const c = findEntity(prefetch, g) orelse continue;
             try qs.append(arena, .{ .kind = .same_entity, .item = i, .target = g });
             try prompts.append(arena, try std.fmt.allocPrint(arena, "\"{s}\" ({t}: {s}) and the existing \"{s}\" ({t}) are the same real-world entity.", .{ e.name, e.type, e.description, c.name, c.type }));
@@ -603,8 +603,8 @@ pub fn build(
     var mentions: std.ArrayList(Id) = .empty;
 
     for (ents, 0..) |e, i| {
-        const ep = p.entities[i];
-        const existing: ?Id = switch (ep.decision) {
+        const entry = p.entities[i];
+        const existing: ?Id = switch (entry.decision) {
             .existing => |id| id,
             .ask => verdict.links[i],
             .new => null,
@@ -624,7 +624,7 @@ pub fn build(
                 };
                 if (!dup) try new_aliases.append(arena, .{ .entity_id = id, .alias = n, .norm = nn });
             }
-            for (ep.absorb) |from| {
+            for (entry.absorb) |from| {
                 var seen = false;
                 for (merges.items) |m| if (m.from.eql(from)) {
                     seen = true;

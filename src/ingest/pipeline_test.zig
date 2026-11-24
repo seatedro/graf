@@ -65,10 +65,10 @@ test "entries flow through extraction, resolution and commit into the expected g
     var h = try Harness.init();
     defer h.deinit();
 
-    const ep1 = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), "acme/monorepo", turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
-    const ep2 = try h.backend.add("session-b", at("2026-11-20T18:00:00Z"), "acme/monorepo", turns("Heads up: Elena took over on call for Relay starting today at 17:00 UTC."));
-    const ep3 = try h.backend.add("session-c", at("2026-11-22T09:00:00Z"), "acme/monorepo", turns("Elena has Relay on call this week."));
-    const ep4 = try h.backend.add("session-d", at("2026-11-22T10:00:00Z"), null, turns("run the tests"));
+    const entry1 = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), "acme/monorepo", turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
+    const entry2 = try h.backend.add("session-b", at("2026-11-20T18:00:00Z"), "acme/monorepo", turns("Heads up: Elena took over on call for Relay starting today at 17:00 UTC."));
+    const entry3 = try h.backend.add("session-c", at("2026-11-22T09:00:00Z"), "acme/monorepo", turns("Elena has Relay on call this week."));
+    const entry4 = try h.backend.add("session-d", at("2026-11-22T10:00:00Z"), null, turns("run the tests"));
 
     try h.model.push(.{ .json = relay_marco });
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
@@ -112,23 +112,23 @@ test "entries flow through extraction, resolution and commit into the expected g
     try testing.expectEqual(ingest.Outcome.skipped, try h.step());
     try testing.expectEqual(@as(u32, 3), h.model.count(.embed_batch));
 
-    for ([_]core.Id{ ep1, ep2, ep3 }) |id| try testing.expectEqual(core.types.EntryStatus.committed, h.backend.row(id).status);
-    try testing.expectEqual(core.types.EntryStatus.skipped, h.backend.row(ep4).status);
+    for ([_]core.Id{ entry1, entry2, entry3 }) |id| try testing.expectEqual(core.types.EntryStatus.committed, h.backend.row(id).status);
+    try testing.expectEqual(core.types.EntryStatus.skipped, h.backend.row(entry4).status);
     try testing.expectEqual(@as(u32, 5), h.model.count(.extract) + h.model.count(.resolve));
 }
 
 test "a crash after extraction resumes without paying for extraction again" {
     var h = try Harness.init();
     defer h.deinit();
-    const ep = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
+    const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
     try h.model.push(.{ .json = relay_marco });
     h.backend.crash_after_extraction = true;
     try testing.expectError(error.SimulatedCrash, h.step());
-    try testing.expectEqual(core.types.EntryStatus.extracted, h.backend.row(ep).status);
+    try testing.expectEqual(core.types.EntryStatus.extracted, h.backend.row(entry).status);
     try testing.expectEqual(@as(u32, 1), h.model.count(.extract));
 
     h.backend.crash_after_extraction = false;
-    h.backend.expireLease(ep);
+    h.backend.expireLease(entry);
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(@as(u32, 1), h.model.count(.extract));
     try testing.expectEqual(@as(usize, 2), h.backend.facts.items.len);
@@ -151,19 +151,19 @@ test "a lost lease fences the commit" {
 test "provider failures requeue, kill, or split the entry" {
     var h = try Harness.init();
     defer h.deinit();
-    const ep = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
+    const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
 
     try h.model.push(.{ .fail = .http_5xx });
     try testing.expectEqual(ingest.Outcome.requeued, try h.step());
-    try testing.expectEqual(core.types.EntryStatus.queued, h.backend.row(ep).status);
+    try testing.expectEqual(core.types.EntryStatus.queued, h.backend.row(entry).status);
     try h.model.push(.{ .fail = .auth_401_403 });
     try testing.expectEqual(ingest.Outcome.requeued, try h.step());
-    try testing.expectEqual(@as(i32, 1), h.backend.row(ep).attempts);
+    try testing.expectEqual(@as(i32, 1), h.backend.row(entry).attempts);
     try h.model.push(.{ .fail = .timeout });
     try testing.expectEqual(ingest.Outcome.requeued, try h.step());
     try h.model.push(.{ .fail = .timeout });
     try testing.expectEqual(ingest.Outcome.dead, try h.step());
-    try testing.expectEqual(core.types.EntryStatus.dead, h.backend.row(ep).status);
+    try testing.expectEqual(core.types.EntryStatus.dead, h.backend.row(entry).status);
 
     const long = try h.backend.add("session-b", at("2026-11-19T23:00:00Z"), null, &.{
         .{ .role = .user, .text = "first half of a very long session" },

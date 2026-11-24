@@ -104,16 +104,16 @@ pub const EntryView = struct {
     body: core.EntryBody,
 };
 
-pub fn extractionUser(arena: Allocator, ep: EntryView, context: []const PriorEntry) Allocator.Error![]const u8 {
+pub fn extractionUser(arena: Allocator, entry: EntryView, context: []const PriorEntry) Allocator.Error![]const u8 {
     var out: Writer.Allocating = .init(arena);
-    writeExtractionUser(&out.writer, ep, context) catch return error.OutOfMemory;
+    writeExtractionUser(&out.writer, entry, context) catch return error.OutOfMemory;
     return out.written();
 }
 
-fn writeExtractionUser(w: *Writer, ep: EntryView, context: []const PriorEntry) Writer.Error!void {
+fn writeExtractionUser(w: *Writer, entry: EntryView, context: []const PriorEntry) Writer.Error!void {
     var buf: [20]u8 = undefined;
-    try w.print("Reference time: {s} ({s}, UTC)\n", .{ time.format(ep.reference_time, &buf), time.weekday(ep.reference_time) });
-    try w.print("Project: {s}\nKind: {t}\nAsserted by: {t}\n", .{ ep.project orelse "none", ep.kind, ep.author });
+    try w.print("Reference time: {s} ({s}, UTC)\n", .{ time.format(entry.reference_time, &buf), time.weekday(entry.reference_time) });
+    try w.print("Project: {s}\nKind: {t}\nAuthor: {t}\n", .{ entry.project orelse "none", entry.kind, entry.author });
     if (context.len > 0) {
         try w.writeAll("\nRecent context from this source, oldest first:\n");
         for (context) |c| {
@@ -127,8 +127,8 @@ fn writeExtractionUser(w: *Writer, ep: EntryView, context: []const PriorEntry) W
         }
     }
     try w.writeAll("\nEntry:\n");
-    if (ep.body.text) |t| try w.print("{s}\n", .{t});
-    for (ep.body.turns) |turn| {
+    if (entry.body.text) |t| try w.print("{s}\n", .{t});
+    for (entry.body.turns) |turn| {
         try w.print("[{t}] {s}\n", .{ turn.role, turn.text });
         for (turn.tool_calls) |tc| {
             try w.print("  [tool {s}] {s}\n", .{ tc.name, tc.args_preview });
@@ -184,10 +184,10 @@ fn writeResolutionUser(w: *Writer, p: resolve.Plan, checked: extract.Checked, pr
             };
         }
         try w.writeAll("\nNew entities with candidates:\n");
-        for (p.entities, checked.result.entities) |ep, e| {
-            if (ep.decision != .ask) continue;
+        for (p.entities, checked.result.entities) |entry, e| {
+            if (entry.decision != .ask) continue;
             try w.print("{s}: {s} ({t}) {s}; candidates:", .{ e.ref, e.name, e.type, e.description });
-            for (ep.gray) |g| try w.print(" E{d}", .{p.entityLabel(g).? + 1});
+            for (entry.gray) |g| try w.print(" E{d}", .{p.entityLabel(g).? + 1});
             try w.writeAll("\n");
         }
     }

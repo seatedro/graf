@@ -44,7 +44,7 @@ pub const promote_sql = std.fmt.comptimePrint(
 pub const claim_job_sql =
     \\INSERT INTO ingest_job (graph_id, name, last_run) VALUES ($1::uuid, $2, now())
     \\ON CONFLICT (graph_id, name) DO UPDATE SET last_run = now()
-    \\WHERE ingest_job.last_run <= now() - make_interval(secs => $3)
+    \\WHERE ingest_job.last_run <= now() - make_interval(secs => $3::int)
     \\RETURNING 1
 ;
 

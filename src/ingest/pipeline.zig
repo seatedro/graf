@@ -74,12 +74,12 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
         io: std.Io,
 
         pub fn process(d: *Self, arena: Allocator, lease: store.Lease) !ingest.Outcome {
-            const ep = lease.entry;
-            const body_text = try extract.bodyText(arena, ep.body);
+            const entry = lease.entry;
+            const body_text = try extract.bodyText(arena, entry.body);
             const ctx = try d.backend.loadContext(arena, lease);
 
             const checked = if (lease.extraction_json) |saved|
-                try extract.check(arena, try extract.decode(arena, saved), body_text, ep.reference_time)
+                try extract.check(arena, try extract.decode(arena, saved), body_text, entry.reference_time)
             else blk: {
                 const got = try d.extractCall(arena, lease, ctx, body_text);
                 switch (got) {
@@ -112,7 +112,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             for (novel) |n| try inputs.append(arena, resolve.relationDescription(checked, n));
             for (missing.items) |k| try inputs.append(arena, relations[k].description);
 
-            const embedded = d.model.embed(arena, .{ .purpose = .embed_batch, .entry_id = ep.id, .inputs = inputs.items }) catch |err| {
+            const embedded = d.model.embed(arena, .{ .purpose = .embed_batch, .entry_id = entry.id, .inputs = inputs.items }) catch |err| {
                 return d.providerFailure(arena, lease, err, .after_extraction);
             };
             if (embedded.vectors.len != inputs.items.len) return error.EmbeddingCountMismatch;
@@ -144,7 +144,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             }
 
             var cs = try resolve.build(arena, .{
-                .entry = .{ .id = ep.id, .graph_id = d.graph_id, .reference_time = ep.reference_time, .project = ep.project },
+                .entry = .{ .id = entry.id, .graph_id = d.graph_id, .reference_time = entry.reference_time, .project = entry.project },
                 .commit_time = now(d.io),
                 .io = d.io,
             }, checked, prefetched, p, .{ .entities = ent_vecs, .facts = fact_vecs, .relations = novel_vecs }, verdict);
@@ -168,38 +168,38 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
         const ExtractOutcome = union(enum) { checked: extract.Checked, outcome: ingest.Outcome };
 
         fn extractCall(d: *Self, arena: Allocator, lease: store.Lease, ctx: Context, body_text: []const u8) !ExtractOutcome {
-            const ep = lease.entry;
+            const entry = lease.entry;
             const system = try prompt.extractionSystem(arena, ctx.relations);
             const user = try prompt.extractionUser(arena, .{
-                .reference_time = ep.reference_time,
-                .project = ep.project,
-                .kind = ep.kind,
-                .author = ep.author,
-                .body = ep.body,
+                .reference_time = entry.reference_time,
+                .project = entry.project,
+                .kind = entry.kind,
+                .author = entry.author,
+                .body = entry.body,
             }, ctx.prior);
             const resp = d.model.structured(arena, .{
                 .purpose = .extract,
-                .entry_id = ep.id,
+                .entry_id = entry.id,
                 .system = system,
                 .user = user,
                 .schema_name = "extract_result",
                 .schema_json = schema.extract_result,
             }) catch |err| return .{ .outcome = try d.providerFailure(arena, lease, err, .extraction) };
 
-            const first = try decodeChecked(arena, resp.json, body_text, ep.reference_time);
+            const first = try decodeChecked(arena, resp.json, body_text, entry.reference_time);
             if (first.checked) |c| if (!c.needs_repair) return .{ .checked = c };
 
             if (!resp.repaired) {
                 const problem = first.problem orelse "more than half of the facts failed validation";
                 const repaired = d.model.repair(arena, .{
                     .purpose = .extract,
-                    .entry_id = ep.id,
+                    .entry_id = entry.id,
                     .system = system,
                     .user = user,
                     .schema_name = "extract_result",
                     .schema_json = schema.extract_result,
                 }, resp.json, problem) catch |err| return .{ .outcome = try d.providerFailure(arena, lease, err, .extraction) };
-                const second = try decodeChecked(arena, repaired.json, body_text, ep.reference_time);
+                const second = try decodeChecked(arena, repaired.json, body_text, entry.reference_time);
                 if (second.checked) |c| if (!c.needs_repair) return .{ .checked = c };
             }
             try d.backend.finish(lease, .{ .dead = "extraction output failed validation after one repair" });
@@ -356,13 +356,13 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             const facts = checked.result.facts;
             const subj = try arena.alloc(u32, facts.len);
             const obj = try arena.alloc(?u32, facts.len);
-            const preds = try arena.alloc([]const u8, facts.len);
+            const rels = try arena.alloc([]const u8, facts.len);
             const opp = try arena.alloc(?[]const u8, facts.len);
             const texts = try arena.alloc([]const u8, facts.len);
             for (facts, 0..) |f, j| {
                 subj[j] = @intCast(refIndex(checked, f.subject));
                 obj[j] = if (f.object) |o| @intCast(refIndex(checked, o)) else null;
-                preds[j] = f.relation;
+                rels[j] = f.relation;
                 opp[j] = if (core.ontology.find(f.relation)) |cp| cp.opposes else null;
                 texts[j] = f.text;
             }
@@ -372,7 +372,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 .entity_embs = ent_vecs,
                 .fact_subject = subj,
                 .fact_object = obj,
-                .fact_relations = preds,
+                .fact_relations = rels,
                 .fact_opposed = opp,
                 .fact_embs = fact_vecs,
                 .fact_texts = texts,
