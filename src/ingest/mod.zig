@@ -45,6 +45,7 @@ pub const ProposedPredicate = struct {
 pub const rules = @import("rules.zig");
 pub const time = @import("time.zig");
 pub const extract = @import("extract.zig");
+pub const resolve = @import("resolve.zig");
 
 pub const ConflictKind = rules.ConflictKind;
 
@@ -96,4 +97,5 @@ pub const Pipeline = struct {
 
 test {
     std.testing.refAllDecls(@This());
+    _ = @import("scenarios_test.zig");
 }
