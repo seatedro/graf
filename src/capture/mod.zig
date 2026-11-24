@@ -12,6 +12,9 @@ pub const state = @import("state.zig");
 pub const project = @import("project.zig");
 pub const hooks = @import("hooks.zig");
 pub const install = @import("install.zig");
+pub const sse = @import("sse.zig");
+pub const capy_api = @import("capy_api.zig");
+pub const capy = @import("capy.zig");
 
 test {
     std.testing.refAllDecls(@This());
