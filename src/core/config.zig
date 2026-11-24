@@ -28,6 +28,9 @@ pub const Config = struct {
         cost_header: []const u8 = "",
         timeout_ms: u32 = 120_000,
         stream: bool = false,
+        rpm: u32 = 0,
+        input_tpm: u32 = 0,
+        rates: []const []const u8 = &.{},
     };
 
     pub const Embed = struct {
@@ -36,6 +39,8 @@ pub const Config = struct {
         model: []const u8 = "text-embedding-3-large",
         dimensions: u32 = 512,
         cost_header: []const u8 = "",
+        rpm: u32 = 0,
+        input_tpm: u32 = 0,
     };
 
     pub const Decision = struct {
@@ -46,6 +51,8 @@ pub const Config = struct {
         dup_threshold: f64 = 0.70,
         contradict_threshold: f64 = 0.80,
         rerank_timeout_ms: u32 = 400,
+        rpm: u32 = 0,
+        input_tpm: u32 = 0,
     };
 
     pub const Limits = struct {
@@ -121,6 +128,7 @@ pub fn load(arena: Allocator, io: std.Io, env: *const Environ.Map, opts: LoadOpt
     }
     applyEnv(&cfg, env);
     resolveInheritance(&cfg);
+    try validateRates(&cfg, diag);
     return .{ .config = cfg, .path = path, .file_found = found };
 }
 
@@ -128,7 +136,47 @@ pub fn parse(arena: Allocator, src: []const u8, diag: *toml.Diagnostic) toml.Err
     var cfg: Config = .{};
     try toml.parseInto(Config, arena, src, &cfg, diag);
     resolveInheritance(&cfg);
+    try validateRates(&cfg, diag);
     return cfg;
+}
+
+pub const Rate = struct {
+    model: []const u8,
+    input_per_mtok: f64,
+    output_per_mtok: f64,
+    cache_read_per_mtok: f64 = 0,
+    cache_write_per_mtok: f64 = 0,
+};
+
+pub fn parseRate(text: []const u8) error{InvalidRate}!Rate {
+    var it = std.mem.tokenizeAny(u8, text, " \t");
+    var rate: Rate = .{ .model = it.next() orelse return error.InvalidRate, .input_per_mtok = -1, .output_per_mtok = -1 };
+    while (it.next()) |pair| {
+        const eq = std.mem.findScalar(u8, pair, '=') orelse return error.InvalidRate;
+        const usd = std.fmt.parseFloat(f64, pair[eq + 1 ..]) catch return error.InvalidRate;
+        if (!(usd >= 0) or !std.math.isFinite(usd)) return error.InvalidRate;
+        const key = pair[0..eq];
+        if (std.mem.eql(u8, key, "input")) {
+            rate.input_per_mtok = usd;
+        } else if (std.mem.eql(u8, key, "output")) {
+            rate.output_per_mtok = usd;
+        } else if (std.mem.eql(u8, key, "cache_read")) {
+            rate.cache_read_per_mtok = usd;
+        } else if (std.mem.eql(u8, key, "cache_write")) {
+            rate.cache_write_per_mtok = usd;
+        } else return error.InvalidRate;
+    }
+    if (rate.input_per_mtok < 0 or rate.output_per_mtok < 0) return error.InvalidRate;
+    return rate;
+}
+
+fn validateRates(cfg: *const Config, diag: *toml.Diagnostic) error{InvalidConfig}!void {
+    for (cfg.llm.rates) |text| {
+        _ = parseRate(text) catch {
+            diag.* = .{ .message = "llm.rates entries look like \"<model> input=<usd> output=<usd> [cache_read=<usd>] [cache_write=<usd>]\", in USD per million tokens" };
+            return error.InvalidConfig;
+        };
+    }
 }
 
 pub fn defaultPath(arena: Allocator, env: *const Environ.Map) Allocator.Error!?[]const u8 {
@@ -293,4 +341,37 @@ test "load reads the file named by GRAF_CONFIG and reports a missing explicit fi
     try empty_env.put("HOME", dir_path);
     const defaults = try load(arena, io, &empty_env, .{});
     try std.testing.expect(!defaults.file_found);
+}
+
+test "per-route limits and the rate table" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    var diag: toml.Diagnostic = .{};
+    const cfg = try parse(arena_state.allocator(),
+        \\[llm]
+        \\rpm = 500
+        \\input_tpm = 200000
+        \\rates = ["model-a input=1.25 output=10 cache_read=0.125", "model-b input=0.02 output=0"]
+        \\[embed]
+        \\rpm = 3000
+        \\[decision]
+        \\input_tpm = 50000
+        \\
+    , &diag);
+    try std.testing.expectEqual(@as(u32, 500), cfg.llm.rpm);
+    try std.testing.expectEqual(@as(u32, 200_000), cfg.llm.input_tpm);
+    try std.testing.expectEqual(@as(u32, 3000), cfg.embed.rpm);
+    try std.testing.expectEqual(@as(u32, 0), cfg.embed.input_tpm);
+    try std.testing.expectEqual(@as(u32, 50_000), cfg.decision.input_tpm);
+    const a = try parseRate(cfg.llm.rates[0]);
+    try std.testing.expectEqualStrings("model-a", a.model);
+    try std.testing.expectEqual(@as(f64, 10), a.output_per_mtok);
+    try std.testing.expectEqual(@as(f64, 0.125), a.cache_read_per_mtok);
+    try std.testing.expectEqual(@as(f64, 0), (try parseRate(cfg.llm.rates[1])).cache_write_per_mtok);
+
+    try std.testing.expectError(error.InvalidRate, parseRate("model-c input=1"));
+    try std.testing.expectError(error.InvalidRate, parseRate("model-c input=1 output=x"));
+    try std.testing.expectError(error.InvalidRate, parseRate("model-c input=1 output=2 cached=1"));
+    try std.testing.expectError(error.InvalidConfig, parse(arena_state.allocator(), "[llm]\nrates = [\"model-c input=-1 output=2\"]\n", &diag));
+    try std.testing.expect(std.mem.indexOf(u8, diag.message, "llm.rates") != null);
 }
