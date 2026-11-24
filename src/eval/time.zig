@@ -1,8 +1,6 @@
 const std = @import("std");
 const core = @import("core");
 
-pub const us_per_day: i64 = 86_400 * std.time.us_per_s;
-
 pub const Error = error{InvalidTimestamp};
 
 pub fn daysFromCivil(year: i64, month: u8, day: u8) i64 {
@@ -27,7 +25,7 @@ fn digits(s: []const u8, start: usize, len: usize) Error!u32 {
 
 fn dateMicros(year: i64, month: u32, day: u32) Error!core.Micros {
     if (month < 1 or month > 12 or day < 1 or day > 31) return error.InvalidTimestamp;
-    return daysFromCivil(year, @intCast(month), @intCast(day)) * us_per_day;
+    return daysFromCivil(year, @intCast(month), @intCast(day)) * std.time.us_per_day;
 }
 
 pub fn parseRfc3339(s: []const u8) Error!core.Micros {
@@ -102,7 +100,7 @@ pub fn parseLooseDate(s: []const u8) ?core.Micros {
 }
 
 pub fn withinOneDay(a: core.Micros, b: core.Micros) bool {
-    return @abs(a - b) <= us_per_day;
+    return @abs(a - b) <= std.time.us_per_day;
 }
 
 test "rfc3339 parsing" {
@@ -121,6 +119,6 @@ test "loose dates accept the forms extraction produces" {
     try std.testing.expectEqual(want, parseLooseDate("3 Dec 2026").?);
     try std.testing.expectEqual(want, parseLooseDate(" 2026-12-03 ").?);
     try std.testing.expect(parseLooseDate("unnest batch inserts") == null);
-    try std.testing.expect(withinOneDay(want, want + us_per_day));
-    try std.testing.expect(!withinOneDay(want, want + us_per_day + 1));
+    try std.testing.expect(withinOneDay(want, want + std.time.us_per_day));
+    try std.testing.expect(!withinOneDay(want, want + std.time.us_per_day + 1));
 }
