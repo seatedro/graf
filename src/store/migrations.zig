@@ -9,6 +9,7 @@ pub const Migration = struct {
 
 pub const all = [_]Migration{
     .{ .version = 1, .name = "init", .sql = @embedFile("migrations/0001_init.sql") },
+    .{ .version = 200, .name = "project_brief", .sql = @embedFile("migrations/0200_project_brief.sql") },
 };
 
 pub const Report = struct {
