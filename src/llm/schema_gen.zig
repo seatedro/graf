@@ -126,13 +126,13 @@ const TestExtract = struct {
     entities: []const struct {
         ref: []const u8,
         name: []const u8,
-        type: enum { person, organization, project, tool, library, concept, file, other },
+        type: enum { person, organization, project, repository, code, software, ai_model, dataset, document, decision, task, change, session, environment, run, problem, concept, event, other },
         aliases: []const []const u8,
         existing: ?[]const u8,
     },
     facts: []const struct {
         subject: []const u8,
-        predicate: []const u8,
+        relation: []const u8,
         object: ?[]const u8,
         value: ?[]const u8,
         qualifier: ?[]const u8,
@@ -146,7 +146,7 @@ const TestExtract = struct {
     },
     skip: bool,
 
-    pub const schema_descriptions = .{ .skip = "True when the episode holds no durable facts." };
+    pub const schema_descriptions = .{ .skip = "True when the entry holds no durable facts." };
 };
 
 test "strict schema for an extraction-shaped struct" {
@@ -159,7 +159,7 @@ test "strict schema for an extraction-shaped struct" {
     try std.testing.expectEqual(@as(usize, 3), root.get("required").?.array.items.len);
 
     const skip = root.get("properties").?.object.get("skip").?.object;
-    try std.testing.expectEqualStrings("True when the episode holds no durable facts.", skip.get("description").?.string);
+    try std.testing.expectEqualStrings("True when the entry holds no durable facts.", skip.get("description").?.string);
 
     const entity = root.get("properties").?.object.get("entities").?.object.get("items").?.object;
     try std.testing.expectEqual(false, entity.get("additionalProperties").?.bool);
@@ -168,7 +168,7 @@ test "strict schema for an extraction-shaped struct" {
     try std.testing.expectEqualStrings("string", existing[0].string);
     try std.testing.expectEqualStrings("null", existing[1].string);
     const kinds = entity.get("properties").?.object.get("type").?.object.get("enum").?.array.items;
-    try std.testing.expectEqual(@as(usize, 8), kinds.len);
+    try std.testing.expectEqual(@as(usize, 19), kinds.len);
 
     const fact = root.get("properties").?.object.get("facts").?.object.get("items").?.object;
     try std.testing.expectEqual(@as(usize, 12), fact.get("required").?.array.items.len);
@@ -177,8 +177,8 @@ test "strict schema for an extraction-shaped struct" {
 
 test "the schema's type decodes a conforming reply and rejects drift" {
     const reply =
-        \\{"entities":[{"ref":"e1","name":"pg.zig","type":"library","aliases":["pg-zig"],"existing":null}],
-        \\ "facts":[{"subject":"e1","predicate":"supports_feature","object":null,"value":"COPY","qualifier":null,
+        \\{"entities":[{"ref":"e1","name":"pg.zig","type":"software","aliases":["pg-zig"],"existing":null}],
+        \\ "facts":[{"subject":"e1","relation":"supports_feature","object":null,"value":"COPY","qualifier":null,
         \\   "text":"pg.zig supports COPY","quote":"it has COPY now","rationale":"stated","valid_from":"2026-11-20T00:00:00Z",
         \\   "valid_to":null,"confidence":0.9,"retracts":false}],"skip":false}
     ;

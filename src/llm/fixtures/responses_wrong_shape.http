@@ -76,8 +76,7 @@ x-example-cost-usd: 0.00011160
                   "enum": [
                     "person",
                     "project",
-                    "library",
-                    "tool",
+                    "software",
                     "other"
                   ]
                 }

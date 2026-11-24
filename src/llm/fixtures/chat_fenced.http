@@ -12,7 +12,7 @@ x-example-cost-usd: 0.00011080
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": "```json\n{\"entities\":[{\"name\":\"Dana\",\"type\":\"person\"},{\"name\":\"acme-indexer\",\"type\":\"project\"},{\"name\":\"zork-db\",\"type\":\"library\"},{\"name\":\"pgvector\",\"type\":\"other\"}]}\n```",
+        "content": "```json\n{\"entities\":[{\"name\":\"Dana\",\"type\":\"person\"},{\"name\":\"acme-indexer\",\"type\":\"project\"},{\"name\":\"zork-db\",\"type\":\"software\"},{\"name\":\"pgvector\",\"type\":\"other\"}]}\n```",
         "refusal": null,
         "annotations": []
       },

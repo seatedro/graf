@@ -87,7 +87,7 @@ const Harness = struct {
 const Entities = struct {
     entities: []const struct {
         name: []const u8,
-        type: enum { person, project, library, tool, other },
+        type: enum { person, project, software, other },
     },
 };
 
@@ -252,7 +252,7 @@ test "context overflow is never retried: split" {
     }
 }
 
-test "output cut off at the token limit splits the episode" {
+test "output cut off at the token limit splits the entry" {
     var h: Harness = undefined;
     h.init(.@"anthropic-messages", &.{fixture("messages_truncated")});
     defer h.deinit();
