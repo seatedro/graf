@@ -277,7 +277,7 @@ pub const ChangeSet = struct {
     pub const Evidence = struct { fact_id: Id, kind: EvidenceKind, quote: ?[]const u8 = null };
 };
 
-pub const LlmPurpose = enum { extract, resolve, repair, rerank, summarize, embed_entry, embed_batch, embed_query };
+pub const LlmPurpose = enum { extract, resolve, repair, rerank, summarize, embed_entry, embed_batch, embed_query, judge };
 pub const CostStatus = enum { priced, estimated, missing };
 
 pub const LlmCall = struct {

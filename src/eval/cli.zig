@@ -4,25 +4,30 @@ const mod = @import("mod.zig");
 const fixtures = @import("fixtures.zig");
 const score = @import("score.zig");
 const runner = @import("runner.zig");
+const judge = @import("judge.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
 pub const usage =
-    \\usage: graf eval run [--suite DIR] [--graph NAME] [--serve-bin PATH] [--json]
+    \\usage: graf eval run [--suite DIR] [--graph NAME] [--serve-bin PATH]
+    \\                     [--judge-model MODEL] [--judge-route ROUTE] [--json]
     \\
     \\Replays the labeled entry suite into a fresh graph, scores the release gates,
     \\and exits non-zero when any gate fails or could not be measured.
     \\
-    \\  --suite DIR        directory holding entries.jsonl and expected.json (default: evals)
-    \\  --graph NAME       graph to create for the run (default: eval-<unix ms>)
-    \\  --serve-bin PATH   graf binary used for the crash-resume check (skipped when absent)
-    \\  --json             print the report as JSON instead of a table
+    \\  --suite DIR          directory holding entries.jsonl and expected.json (default: evals)
+    \\  --graph NAME         graph to create for the run (default: eval-<unix ms>)
+    \\  --serve-bin PATH     graf binary used for the crash-resume check (skipped when absent)
+    \\  --judge-model MODEL  model that judges residual facts (default: eval.judge_model, else llm.model)
+    \\  --judge-route ROUTE  openai-responses, anthropic-messages, or openai-chat (default: eval.judge_route, else llm.route)
+    \\  --json               print the report as JSON instead of a table
     \\
 ;
 
 pub const Args = struct {
     run: runner.RunOptions = .{},
+    judge: judge.Overrides = .{},
     json: bool = false,
 };
 
@@ -45,6 +50,10 @@ pub fn parseArgs(args: []const []const u8) error{Usage}!Args {
             out.run.graph = value;
         } else if (std.mem.eql(u8, flag, "--serve-bin")) {
             out.run.serve_bin = value;
+        } else if (std.mem.eql(u8, flag, "--judge-model")) {
+            out.judge.model = value;
+        } else if (std.mem.eql(u8, flag, "--judge-route")) {
+            out.judge.route = value;
         } else return error.Usage;
     }
     return out;
@@ -82,6 +91,15 @@ pub fn main(
         try err.writeAll("graf eval: set database.url or GRAF_DATABASE_URL\n");
         return 2;
     }
+    const setup = judge.setup(arena, config, parsed.judge) catch |e| switch (e) {
+        error.InvalidRoute => {
+            try err.writeAll("graf eval: the judge route must be openai-responses, anthropic-messages, or openai-chat\n");
+            return 2;
+        },
+        else => |other| return other,
+    };
+    if (setup.warning) |w| try err.print("graf eval: warning: {s}\n", .{w});
+    parsed.run.judge = setup;
 
     const report = try runner.run(arena, io, config, parsed.run);
     if (parsed.json) try writeJson(report, out) else try writeScorecard(report, out);
@@ -94,7 +112,15 @@ fn formatValue(buf: []u8, unit: mod.Gate.Unit, value: f64) []const u8 {
         .count => std.fmt.bufPrint(buf, "{d:.0}", .{value}),
         .calls => std.fmt.bufPrint(buf, "{d:.2}", .{value}),
         .usd => std.fmt.bufPrint(buf, "${d:.4}", .{value}),
+        .times => std.fmt.bufPrint(buf, "{d:.2}x", .{value}),
     } catch "?";
+}
+
+fn scoringLabel(s: mod.Gate.Scoring) []const u8 {
+    return switch (s) {
+        .deterministic => "labels",
+        .judge => "judge",
+    };
 }
 
 fn statusLabel(s: mod.Gate.Status) []const u8 {
@@ -107,8 +133,9 @@ fn statusLabel(s: mod.Gate.Status) []const u8 {
 
 pub fn writeScorecard(report: score.Report, w: *Writer) !void {
     const d = report.detail;
-    try w.print("graf eval: graph {s}, {d} of {d} entries finished\n\n", .{ report.graph orelse "(none)", d.terminal_entries, d.suite_entries });
-    try w.print("{s:<24} {s:>10}  {s:<11} {s}\n", .{ "metric", "value", "gate", "result" });
+    try w.print("graf eval: graph {s}, {d} of {d} entries finished\n", .{ report.graph orelse "(none)", d.terminal_entries, d.suite_entries });
+    try w.print("judge: {s}\n\n", .{report.judge orelse "not used"});
+    try w.print("{s:<24} {s:<7} {s:>10}  {s:<11} {s}\n", .{ "metric", "scored", "value", "gate", "result" });
     var failing: u32 = 0;
     const list = report.metrics.gateList();
     for (list) |g| {
@@ -120,19 +147,22 @@ pub fn writeScorecard(report: score.Report, w: *Writer) !void {
         const gate = std.fmt.bufPrint(&gate_buf, "{s} {s}", .{ if (g.bound == .at_least) ">=" else "<=", limit }) catch "?";
         const status = g.status();
         if (status != .pass) failing += 1;
-        try w.print("{s:<24} {s:>10}  {s:<11} {s}\n", .{ g.metric, value, gate, statusLabel(status) });
+        try w.print("{s:<24} {s:<7} {s:>10}  {s:<11} {s}\n", .{ g.metric, scoringLabel(g.scoring), value, gate, statusLabel(status) });
     }
 
     try w.writeAll("\ndetails\n");
     try w.print("  entities: {d} matched, {d} false positives, {d} missing, {d} unlabeled\n", .{ d.entity_tp, d.entity_fp, d.entity_fn, d.unlabeled_entities });
     try w.print("  merges: {d} of {d} pairs correct\n", .{ d.merges_correct, d.merge_pairs });
-    try w.print("  facts: {d} true positives, {d} false positives; {d} of {d} gold items found\n", .{ d.fact_tp, d.fact_fp, d.gold_fact_items_found, d.gold_fact_items });
+    try w.print("  facts: {d} extracted for {d} gold facts; {d} match gold, {d} duplicates, {d} traps, {d} residual\n", .{ d.facts_extracted, d.gold_facts, d.facts_matched, d.duplicate_facts, report.metrics.trap_facts orelse 0, d.residual_facts });
+    try w.print("  recall: {d} of {d} gold items found\n", .{ d.gold_fact_items_found, d.gold_fact_items });
+    try w.print("  residual: {d} faithful, {d} unsupported, {d} transient, {d} unjudged\n", .{ d.residual_faithful, d.residual_unsupported, d.residual_transient, d.residual_unjudged });
     try w.print("  invalidations: {d} correct, {d} false positives, {d} missed\n", .{ d.invalidation_tp, d.invalidation_fp, d.invalidation_fn });
     try w.print("  temporal: {d} of {d} bounds within one day\n", .{ d.temporal_correct, d.temporal_items });
     if (d.retrieval_exclusion_violations) |v| {
         try w.print("  retrieval: {d} of {d} expected facts in the top 5, {d} exclusion violations\n", .{ d.retrieval_found, d.retrieval_expected, v });
     } else try w.writeAll("  retrieval: not run\n");
     try w.print("  ledger: {d} extraction, {d} resolution, {d} repair, {d} embedding calls; ${d:.4} total\n", .{ d.extraction_calls, d.resolution_calls, d.repair_calls, d.embedding_calls, d.total_cost_usd });
+    try w.print("  judge ledger (not in the ingestion gates): {d} calls; ${d:.4}\n", .{ d.judge_calls, d.judge_cost_usd });
 
     if (report.findings.len > 0) {
         try w.print("\nfindings ({d})\n", .{report.findings.len});
@@ -145,6 +175,7 @@ pub fn writeScorecard(report: score.Report, w: *Writer) !void {
 
 const JsonGate = struct {
     metric: []const u8,
+    scoring: mod.Gate.Scoring,
     value: ?f64,
     bound: mod.Gate.Bound,
     limit: f64,
@@ -152,13 +183,15 @@ const JsonGate = struct {
 };
 
 pub fn writeJson(report: score.Report, w: *Writer) !void {
-    var gates: [12]JsonGate = undefined;
-    for (report.metrics.gateList(), &gates) |g, *j| j.* = .{ .metric = g.metric, .value = g.value, .bound = g.bound, .limit = g.limit, .status = g.status() };
+    var gates: [mod.Metrics.gate_count]JsonGate = undefined;
+    for (report.metrics.gateList(), &gates) |g, *j| j.* = .{ .metric = g.metric, .scoring = g.scoring, .value = g.value, .bound = g.bound, .limit = g.limit, .status = g.status() };
     try std.json.Stringify.value(.{
         .graph = report.graph,
+        .judge = report.judge,
         .passes = report.metrics.passes(),
         .gates = gates,
         .detail = report.detail,
+        .residuals = report.residuals,
         .findings = report.findings,
     }, .{ .whitespace = .indent_2 }, w);
     try w.writeAll("\n");
@@ -167,7 +200,9 @@ pub fn writeJson(report: score.Report, w: *Writer) !void {
 const testing = std.testing;
 
 test "arguments parse into run options" {
-    const a = try parseArgs(&.{ "run", "--suite", "x/evals", "--graph", "g1", "--serve-bin", "zig-out/bin/graf", "--json" });
+    const a = try parseArgs(&.{ "run", "--suite", "x/evals", "--graph", "g1", "--serve-bin", "zig-out/bin/graf", "--judge-model", "judge-x", "--judge-route", "anthropic-messages", "--json" });
+    try testing.expectEqualStrings("judge-x", a.judge.model.?);
+    try testing.expectEqualStrings("anthropic-messages", a.judge.route.?);
     try testing.expectEqualStrings("x/evals", a.run.suite_dir);
     try testing.expectEqualStrings("g1", a.run.graph.?);
     try testing.expectEqualStrings("zig-out/bin/graf", a.run.serve_bin.?);
@@ -213,18 +248,20 @@ test "the scorecard shows every gate with its status" {
     try writeScorecard(report, &buf.writer);
     const text = buf.written();
     try testing.expect(std.mem.indexOf(u8, text, "graph eval-test, 20 of 20 entries finished") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "entity_f1                     1.000  >= 0.85     PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "cost_per_entry_usd          $0.0059  <= $0.0200  PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "cross_type_merges                 0  <= 0        PASS") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "result: PASS (12 of 12 gates)") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "entity_f1                labels       1.000  >= 0.85     PASS") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "cost_per_entry_usd       labels     $0.0059  <= $0.0200  PASS") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "cross_type_merges        labels           0  <= 0        PASS") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "fact_density             labels       1.00x  <= 1.75x    PASS") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "residual_faithfulness    judge        1.000  >= 0.80     PASS") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "result: PASS (15 of 15 gates)") != null);
     try testing.expect(std.mem.indexOf(u8, text, "FAIL") == null);
 
     const empty = try score.scoreState(arena, &suite, &.{});
     var buf2: std.Io.Writer.Allocating = .init(arena);
     try writeScorecard(empty, &buf2.writer);
     const text2 = buf2.written();
-    try testing.expect(std.mem.indexOf(u8, text2, "crash_resume_pass_rate            -  >= 1.00     n/a") != null);
-    try testing.expect(std.mem.indexOf(u8, text2, "result: FAIL (12 of 12 gates failed or unmeasured)") != null);
+    try testing.expect(std.mem.indexOf(u8, text2, "crash_resume_pass_rate   labels           -  >= 1.00     n/a") != null);
+    try testing.expect(std.mem.indexOf(u8, text2, "result: FAIL (15 of 15 gates failed or unmeasured)") != null);
     try testing.expect(std.mem.indexOf(u8, text2, "retrieval: not run") != null);
 }
 
@@ -239,7 +276,7 @@ test "the json report round-trips" {
     const Parsed = struct { passes: bool, gates: []const JsonGate, findings: []const []const u8 };
     const parsed = try std.json.parseFromSliceLeaky(Parsed, arena, buf.written(), .{ .ignore_unknown_fields = true });
     try testing.expect(!parsed.passes);
-    try testing.expectEqual(@as(usize, 12), parsed.gates.len);
+    try testing.expectEqual(@as(usize, mod.Metrics.gate_count), parsed.gates.len);
     try testing.expectEqual(mod.Gate.Status.unmeasured, parsed.gates[0].status);
     try testing.expect(parsed.gates[0].value == null);
 }

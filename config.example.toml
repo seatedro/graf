@@ -3,7 +3,8 @@
 #   GRAF_GRAPH, GRAF_DATABASE_URL,
 #   GRAF_LLM_BASE_URL, GRAF_LLM_API_KEY, GRAF_LLM_MODEL,
 #   GRAF_EMBED_BASE_URL, GRAF_EMBED_API_KEY, GRAF_EMBED_MODEL,
-#   GRAF_DECISION_BASE_URL, GRAF_DECISION_API_KEY
+#   GRAF_DECISION_BASE_URL, GRAF_DECISION_API_KEY,
+#   GRAF_EVAL_JUDGE_MODEL, GRAF_EVAL_JUDGE_ROUTE, GRAF_EVAL_JUDGE_BASE_URL, GRAF_EVAL_JUDGE_API_KEY
 
 graph = "default"
 
@@ -57,3 +58,11 @@ token = ""
 [capture]
 exclude_projects = []
 exclude_paths = []
+
+[eval]
+# Model that judges unlabeled facts in `graf eval`; pick a different family than llm.model.
+# Empty values fall back to the [llm] values.
+judge_model = ""
+judge_route = ""
+judge_base_url = ""
+judge_api_key = ""
