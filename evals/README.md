@@ -118,7 +118,7 @@ The source key is `(harness, source_id)`, and `seq` becomes `seq_in_source`.
 - Extraction of several facts per entry: `e01` to `e03`.
 - Entries with no durable knowledge: `e04` (test output) and `e14` (brainstorming).
 - Deduplication by alias and across projects: `e05`, `e08`, `e19`.
-- Merge traps: `Acme` (organization) against `acme-box` (tool) in `e09`, and `fx` (tool) against the FX dataset in `e20`.
+- Merge traps: `Acme` (organization) against `acme-box` (software) in `e09`, and `fx` (software) against the FX dataset in `e20`.
 - State changes: `e06` (on-call handoff), `e10` (opposed relation), `e11` (setting change).
 - Corrections: `e07` (refuted claim) and `e13` (self-correction within one entry).
 - Historical backfill that must not end current state: `e12`.

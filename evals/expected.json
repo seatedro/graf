@@ -32,8 +32,8 @@
     {"entry": "e19", "mention": "Tollgate", "must_resolve_to": "ent_tollgate", "rule": "cross_project_graph_wide_entity"}
   ],
   "must_not_merge": [
-    {"entry": "e09", "entity_a": "ent_acme", "entity_b": "ent_acmebox", "reason": "organization vs tool; distinct entities"},
-    {"entry": "e20", "entity_a": "ent_fx_agent", "entity_b": "ent_fx_dataset", "reason": "tool vs dataset; acronym collision"},
+    {"entry": "e09", "entity_a": "ent_acme", "entity_b": "ent_acmebox", "reason": "organization vs software; distinct entities"},
+    {"entry": "e20", "entity_a": "ent_fx_agent", "entity_b": "ent_fx_dataset", "reason": "software vs dataset; acronym collision"},
     {"entry": "e01", "entity_a": "ent_graf", "entity_b": "ent_potion", "reason": "explicitly separate projects"}
   ],
   "entries": {
@@ -177,7 +177,7 @@
       "facts_added": [
         {"id": "f_fx_compared_pi", "subject": "ent_fx_agent", "relation": "related_to", "object": "ent_fx_dataset", "valid_from": "2026-11-23T03:00:00Z"}
       ],
-      "note": "Primary test here is entity disambiguation: fx (tool) and FX currency rates dataset (dataset) must remain distinct."
+      "note": "Primary test here is entity disambiguation: fx (software) and FX currency rates dataset (dataset) must remain distinct."
     }
   },
   "retrieval_queries": [

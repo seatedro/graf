@@ -196,13 +196,13 @@ const fixture_sql =
     \\INSERT INTO graph (id, name) VALUES ('{graph}', '{name}');
     \\INSERT INTO entity (id, graph_id, name, norm, type, created_seq, updated_seq, name_emb) VALUES
     \\  ('{e_graf}', '{graph}', 'graf', 'graf', 'project', 1, 1, array_fill(0.01::float4, ARRAY[512])::halfvec),
-    \\  ('{e_pgzig}', '{graph}', 'pg.zig', 'pg zig', 'library', 1, 1, NULL),
+    \\  ('{e_pgzig}', '{graph}', 'pg.zig', 'pg zig', 'software', 1, 1, NULL),
     \\  ('{e_potion}', '{graph}', 'Potion', 'potion', 'project', 2, 2, NULL),
-    \\  ('{e_tollgate}', '{graph}', 'Tollgate', 'tollgate', 'service', 3, 3, NULL),
+    \\  ('{e_tollgate}', '{graph}', 'Tollgate', 'tollgate', 'software', 3, 3, NULL),
     \\  ('{e_marco}', '{graph}', 'Marco', 'marco', 'person', 3, 3, NULL),
     \\  ('{e_elena}', '{graph}', 'Elena', 'elena', 'person', 4, 4, NULL);
     \\INSERT INTO entity (id, graph_id, name, norm, type, created_seq, updated_seq, merged_into) VALUES
-    \\  ('{e_pgzig2}', '{graph}', 'karlseguin''s driver', 'karlseguins driver', 'library', 2, 3, '{e_pgzig}');
+    \\  ('{e_pgzig2}', '{graph}', 'karlseguin''s driver', 'karlseguins driver', 'software', 2, 3, '{e_pgzig}');
     \\INSERT INTO entity_alias (graph_id, norm, entity_id, alias) VALUES
     \\  ('{graph}', 'pg zig', '{e_pgzig}', 'pg-zig'),
     \\  ('{graph}', 'acme gateway', '{e_tollgate}', 'Acme gateway');
