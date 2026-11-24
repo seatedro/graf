@@ -196,9 +196,10 @@ pub const PgBackend = struct {
     graph_id: Id,
     io: std.Io,
     worker: []const u8 = "graf",
+    backfill_daily_usd: ?f64 = null,
 
     pub fn claim(b: *PgBackend, arena: Allocator) !?store.Lease {
-        return b.store.claim(arena, b.graph_id, b.worker);
+        return b.store.claimWithin(arena, b.graph_id, b.worker, b.backfill_daily_usd);
     }
 
     pub fn loadContext(b: *PgBackend, arena: Allocator, lease: store.Lease) !pipeline.Context {

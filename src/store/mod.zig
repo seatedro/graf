@@ -58,7 +58,38 @@ pub const Store = struct {
     }
 
     pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const u8) !?Lease {
-        return queue.claim(s, arena, graph_id, worker);
+        return queue.claim(s, arena, graph_id, worker, null);
+    }
+
+    pub fn claimWithin(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const u8, backfill_daily_usd: ?f64) !?Lease {
+        return queue.claim(s, arena, graph_id, worker, backfill_daily_usd);
+    }
+
+    pub fn findGraph(s: *Store, name: []const u8) !?Id {
+        var row = (try s.pool.row("SELECT id FROM graph WHERE name = $1", .{name})) orelse return null;
+        defer row.deinit() catch {};
+        return try idFromPg(try row.get([]const u8, 0));
+    }
+
+    pub fn hasEntry(s: *Store, graph_id: Id, content_hash: [32]u8) !bool {
+        var row = (try s.pool.row(
+            "SELECT 1 FROM entry WHERE graph_id = $1 AND content_hash = $2",
+            .{ @as([]const u8, &graph_id.bytes), @as([]const u8, &content_hash) },
+        )) orelse return false;
+        try row.deinit();
+        return true;
+    }
+
+    pub fn meanEntryCost(s: *Store, graph_id: Id) !?f64 {
+        var row = (try s.pool.row(
+            \\SELECT avg(cost_usd)::float8, count(*) FROM (
+            \\  SELECT cost_usd FROM entry
+            \\  WHERE graph_id = $1 AND status IN ('committed', 'skipped') AND cost_usd > 0
+            \\  ORDER BY received_at DESC LIMIT 500) recent
+        , .{@as([]const u8, &graph_id.bytes)})).?;
+        defer row.deinit() catch {};
+        if (try row.get(i64, 1) < 20) return null;
+        return try row.get(f64, 0);
     }
 
     pub fn heartbeat(s: *Store, lease: Lease) !void {

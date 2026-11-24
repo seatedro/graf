@@ -60,6 +60,11 @@ pub fn captureSince(io: std.Io, state_dir: []const u8, now: core.Micros) !core.M
     return now;
 }
 
+pub fn loadCaptureSince(io: std.Io, state_dir: []const u8) !?core.Micros {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    return readMicros(io, try std.fmt.bufPrint(&buf, "{s}/{s}", .{ state_dir, capture_since_file }));
+}
+
 fn readMicros(io: std.Io, path: []const u8) !?core.Micros {
     var buf: [64]u8 = undefined;
     const text = Dir.cwd().readFile(io, path, &buf) catch |err| switch (err) {

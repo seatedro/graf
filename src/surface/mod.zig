@@ -9,6 +9,7 @@ pub const client = @import("client.zig");
 pub const daemon = @import("daemon.zig");
 pub const upstream = @import("upstream.zig");
 pub const edge = @import("edge.zig");
+pub const backfill = @import("backfill.zig");
 
 test {
     std.testing.refAllDecls(@This());
