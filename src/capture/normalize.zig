@@ -1,6 +1,5 @@
 const std = @import("std");
 const core = @import("core");
-const redactor = @import("redact.zig");
 const Allocator = std.mem.Allocator;
 
 pub const result_budget: usize = 1500;
@@ -26,11 +25,11 @@ fn isContinuation(byte: u8) bool {
 }
 
 pub fn clean(arena: Allocator, scratch: Allocator, text: []const u8) Allocator.Error![]const u8 {
-    return arena.dupe(u8, try redactor.redact(scratch, text));
+    return arena.dupe(u8, try core.redact(scratch, text));
 }
 
 pub fn cleanBounded(arena: Allocator, scratch: Allocator, text: []const u8, budget: usize) Allocator.Error![]const u8 {
-    const redacted = try redactor.redact(scratch, text);
+    const redacted = try core.redact(scratch, text);
     return arena.dupe(u8, try headTail(scratch, redacted, budget));
 }
 

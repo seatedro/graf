@@ -1,4 +1,5 @@
 const std = @import("std");
+const types = @import("types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const Kind = enum { api_key, jwt, pem, assignment, bearer, url_credentials, high_entropy };
@@ -816,6 +817,46 @@ fn isBearerChar(c: u8) bool {
 
 fn isEntropyChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '+' or c == '/' or c == '_' or c == '-';
+}
+
+pub fn redactBody(arena: Allocator, body: types.EntryBody) Allocator.Error!types.EntryBody {
+    const turns = try arena.alloc(types.Turn, body.turns.len);
+    for (body.turns, turns) |src, *dst| {
+        const calls = try arena.alloc(types.ToolCall, src.tool_calls.len);
+        for (src.tool_calls, calls) |call, *out| out.* = .{
+            .name = try redact(arena, call.name),
+            .args_preview = try redact(arena, call.args_preview),
+            .result_preview = try redact(arena, call.result_preview),
+        };
+        dst.* = .{ .role = src.role, .text = try redact(arena, src.text), .tool_calls = calls, .ts = src.ts };
+    }
+    return .{ .turns = turns, .text = if (body.text) |text| try redact(arena, text) else null };
+}
+
+pub fn redactDraft(arena: Allocator, draft: types.EntryDraft) Allocator.Error!types.EntryDraft {
+    var out = draft;
+    out.body = try redactBody(arena, draft.body);
+    return out;
+}
+
+test "redactDraft clears every string in the body and is stable on redacted input" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const secret = try std.mem.concat(arena, u8, &.{ "gh" ++ "p_", "a1B2c3D4e5F6g7H8", "i9J0k1L2m3N4o5P6q7R8" });
+    const note = try std.fmt.allocPrint(arena, "remember GITHUB_TOKEN={s}", .{secret});
+    const turns = [_]types.Turn{.{
+        .role = .assistant,
+        .text = note,
+        .tool_calls = &.{.{ .name = "Bash", .args_preview = secret, .result_preview = note }},
+    }};
+    const draft: types.EntryDraft = .{ .kind = .turns, .author = .agent, .body = .{ .turns = &turns, .text = note }, .reference_time = 0 };
+    const once = try redactDraft(arena, draft);
+    const json = try std.json.Stringify.valueAlloc(arena, once.body, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "a1B2c3D4e5F6g7H8") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "[REDACTED:") != null);
+    const twice = try redactDraft(arena, once);
+    try std.testing.expectEqualStrings(json, try std.json.Stringify.valueAlloc(arena, twice.body, .{}));
 }
 
 test {

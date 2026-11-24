@@ -4,6 +4,7 @@ pub const types = @import("types.zig");
 pub const ontology = @import("ontology.zig");
 pub const config = @import("config.zig");
 pub const toml = @import("toml.zig");
+pub const redaction = @import("redact.zig");
 
 pub const Id = types.Id;
 pub const Micros = types.Micros;
@@ -24,6 +25,8 @@ pub const LlmCall = types.LlmCall;
 pub const EntrySink = types.EntrySink;
 pub const LlmLedger = types.LlmLedger;
 pub const Config = config.Config;
+pub const redact = redaction.redact;
+pub const redactDraft = redaction.redactDraft;
 
 pub const NotImplemented = error.NotImplemented;
 
