@@ -65,7 +65,7 @@ pub const Config = struct {
     pub const Limits = struct {
         daily_usd: f64 = 100.0,
         monthly_usd: f64 = 1500.0,
-        backfill_daily_usd: f64 = 25.0,
+        backfill_daily_usd: f64 = 250.0,
         max_inflight: u32 = 8,
     };
 

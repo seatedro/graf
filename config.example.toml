@@ -48,7 +48,7 @@ daily_usd = 100.0
 monthly_usd = 1500.0
 # Daily (UTC) spend that entries from `graf backfill` may use. Live entries always claim first,
 # and backfill entries wait for the next day once this is spent.
-backfill_daily_usd = 25.0
+backfill_daily_usd = 250.0
 max_inflight = 8
 
 [ingest]
