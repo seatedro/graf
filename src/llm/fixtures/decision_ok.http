@@ -1,0 +1,4 @@
+HTTP/1.1 200 OK
+content-type: application/json
+
+{"answers":{"q0":0.93,"q1":[0.05,0.9,0.05]},"usage":{"input_tokens":212,"output_tokens":9,"cost":0.0000412,"cost_status":"priced"}}
