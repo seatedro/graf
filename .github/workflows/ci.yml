@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: graf
+          POSTGRES_PASSWORD: graf
+          POSTGRES_DB: graf_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U graf -d graf_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      GRAF_TEST_DATABASE_URL: postgres://graf:graf@localhost:5432/graf_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - name: Format
+        run: zig fmt --check build.zig build.zig.zon src
+      - name: Build
+        run: zig build
+      - name: Test (unit + Postgres integration)
+        run: zig build test --summary all
+      - name: Vendor-neutrality check
+        env:
+          DENYLIST: ${{ secrets.GRAF_DENYLIST }}
+        run: |
+          if [ -z "$DENYLIST" ]; then
+            echo "GRAF_DENYLIST is not set; skipping."
+            exit 0
+          fi
+          status=0
+          if git grep -n -i -E "$DENYLIST"; then status=1; fi
+          range="${{ github.event.pull_request.base.sha || github.event.before }}..HEAD"
+          if git log --format='%H %s%n%b' "$range" 2>/dev/null | grep -n -i -E "$DENYLIST"; then status=1; fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Found a term from the vendor-neutrality denylist. See AGENTS.md."
+          fi
+          exit "$status"
+
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Dev shell provides Zig and Postgres with pgvector
+        run: |
+          nix develop --command zig version
+          nix develop --command bash -c 'test -f "$(pg_config --sharedir)/extension/vector.control"'
