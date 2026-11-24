@@ -280,22 +280,31 @@ pub fn plan(arena: Allocator, checked: extract.Checked, prefetch: Prefetch) Allo
         };
         const value_norm = if (f.value) |v| try core.text.norm(arena, v) else null;
 
+        const opposed = rules.ruleFor(f.predicate, null).opposes;
+        var restated = false;
         var pool: std.ArrayList(CandidateFact) = .empty;
         outer: for (prefetch.facts) |c| {
             if (c.item != j) continue;
             for (pool.items) |p| if (p.id.eql(c.id)) continue :outer;
+            const same_pred = std.mem.eql(u8, c.predicate, f.predicate);
             if (subj.decision == .existing and c.subject_id.eql(subj.decision.existing) and
-                std.mem.eql(u8, c.predicate, f.predicate) and std.mem.eql(u8, c.qualifier, f.qualifier orelse ""))
+                same_pred and std.mem.eql(u8, c.qualifier, f.qualifier orelse ""))
             {
                 const same_object = if (f.object != null)
                     (if (object_known) |ok| (if (c.object_id) |co| co.eql(ok) else false) else false)
                 else if (c.object_value) |cv| std.mem.eql(u8, try core.text.norm(arena, cv), value_norm.?) else false;
-                if (same_object) continue;
+                if (same_object) {
+                    restated = true;
+                    continue;
+                }
             }
-            const related = containsId(subjects.items, c.subject_id) or c.cosine >= rules.neighbour_cosine or
-                (if (object_known) |ok| (if (c.object_id) |co| co.eql(ok) else false) else false);
+            const kin = same_pred or (if (opposed) |o| std.mem.eql(u8, c.predicate, o) else false);
+            const same_object_entity = if (object_known) |ok| (if (c.object_id) |co| co.eql(ok) else false) else false;
+            const related = (kin and (containsId(subjects.items, c.subject_id) or same_object_entity)) or
+                c.cosine >= rules.neighbour_cosine;
             if (related) try pool.append(arena, c);
         }
+        if (restated) pool.clearRetainingCapacity();
         std.mem.sort(CandidateFact, pool.items, {}, byFactCosineDesc);
         var cands: std.ArrayList(Id) = .empty;
         for (pool.items) |c| {

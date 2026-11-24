@@ -48,6 +48,8 @@ pub const extract = @import("extract.zig");
 pub const resolve = @import("resolve.zig");
 pub const schema = @import("schema.zig");
 pub const prompt = @import("prompt.zig");
+pub const pipeline = @import("pipeline.zig");
+pub const testing = @import("testing.zig");
 
 pub const ConflictKind = rules.ConflictKind;
 
@@ -100,4 +102,5 @@ pub const Pipeline = struct {
 test {
     std.testing.refAllDecls(@This());
     _ = @import("scenarios_test.zig");
+    _ = @import("pipeline_test.zig");
 }

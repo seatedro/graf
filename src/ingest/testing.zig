@@ -1,0 +1,454 @@
+const std = @import("std");
+const core = @import("core");
+const store = @import("store");
+const llm = @import("llm");
+const pipeline = @import("pipeline.zig");
+const resolve = @import("resolve.zig");
+const prompt = @import("prompt.zig");
+const rules = @import("rules.zig");
+
+const Allocator = std.mem.Allocator;
+const Id = core.Id;
+const Micros = core.Micros;
+
+pub const FakeModel = struct {
+    pub const Reply = union(enum) {
+        json: []const u8,
+        fail: llm.ErrorClass,
+    };
+
+    pub const dims = 64;
+
+    replies: std.ArrayList(Reply) = .empty,
+    next: usize = 0,
+    calls: std.EnumArray(core.types.LlmPurpose, u32) = .initFill(0),
+    requests: std.ArrayList(llm.StructuredRequest) = .empty,
+    embed_fail: ?llm.ErrorClass = null,
+    failure: ?llm.Failure = null,
+    gpa: Allocator,
+    kept: std.heap.ArenaAllocator,
+
+    pub fn init(gpa: Allocator) FakeModel {
+        return .{ .gpa = gpa, .kept = .init(gpa) };
+    }
+
+    pub fn deinit(m: *FakeModel) void {
+        m.replies.deinit(m.gpa);
+        m.requests.deinit(m.gpa);
+        m.kept.deinit();
+    }
+
+    pub fn push(m: *FakeModel, reply: Reply) !void {
+        try m.replies.append(m.gpa, reply);
+    }
+
+    pub fn structured(m: *FakeModel, arena: Allocator, req: llm.StructuredRequest) !llm.StructuredResponse {
+        _ = arena;
+        m.calls.getPtr(req.purpose).* += 1;
+        var copy = req;
+        copy.system = try m.kept.allocator().dupe(u8, req.system);
+        copy.user = try m.kept.allocator().dupe(u8, req.user);
+        try m.requests.append(m.gpa, copy);
+        if (m.next >= m.replies.items.len) return error.NoScriptedReply;
+        const reply = m.replies.items[m.next];
+        m.next += 1;
+        switch (reply) {
+            .json => |j| {
+                m.failure = null;
+                return .{ .json = j, .model = "fake", .usage = .{}, .cost = .{}, .latency_ms = 1 };
+            },
+            .fail => |class| {
+                m.failure = .{ .class = class, .certainty = .possibly_sent };
+                return error.ProviderFailed;
+            },
+        }
+    }
+
+    pub fn embed(m: *FakeModel, arena: Allocator, req: llm.EmbedRequest) !llm.EmbedResponse {
+        m.calls.getPtr(req.purpose).* += 1;
+        if (m.embed_fail) |class| {
+            m.failure = .{ .class = class, .certainty = .possibly_sent };
+            return error.ProviderFailed;
+        }
+        const out = try arena.alloc([]const f32, req.inputs.len);
+        for (req.inputs, 0..) |input, i| out[i] = try vector(arena, input);
+        return .{ .vectors = out, .usage = .{}, .cost = .{} };
+    }
+
+    pub fn decide(m: *FakeModel, arena: Allocator, purpose: core.types.LlmPurpose, questions: []const llm.Question) ![]const llm.Answer {
+        _ = m;
+        _ = arena;
+        _ = purpose;
+        _ = questions;
+        return error.DecisionDisabled;
+    }
+
+    pub fn decisionEnabled(m: *FakeModel) bool {
+        _ = m;
+        return false;
+    }
+
+    pub fn lastFailure(m: *FakeModel) ?llm.Failure {
+        return m.failure;
+    }
+
+    pub fn count(m: *const FakeModel, purpose: core.types.LlmPurpose) u32 {
+        return m.calls.get(purpose);
+    }
+
+    pub fn vector(arena: Allocator, text: []const u8) ![]const f32 {
+        const v = try arena.alloc(f32, dims);
+        @memset(v, 0);
+        const n = try core.text.norm(arena, text);
+        var it = std.mem.tokenizeScalar(u8, n, ' ');
+        while (it.next()) |tok| {
+            const h = std.hash.Wyhash.hash(0, tok);
+            v[h % dims] += if ((h >> 32) & 1 == 0) 1 else -1;
+        }
+        return v;
+    }
+};
+
+pub const MemoryBackend = struct {
+    pub const EpisodeRow = struct {
+        episode: core.Episode,
+        source: []const u8,
+        status: core.types.EpisodeStatus = .queued,
+        attempts: i32 = 0,
+        token: i64 = 0,
+        extraction_json: ?[]const u8 = null,
+        change_set: ?core.ChangeSet = null,
+        last_error: ?[]const u8 = null,
+    };
+
+    pub const EntityRow = struct {
+        id: Id,
+        name: []const u8,
+        norm: []const u8,
+        type: core.EntityType,
+        aliases: std.ArrayList([]const u8) = .empty,
+        emb: []const f32,
+        merged_into: ?Id = null,
+    };
+
+    pub const FactRow = struct { fact: core.Fact, emb: []const f32 };
+    pub const ProvenanceRow = struct { fact_id: Id, episode_id: Id, role: core.types.ProvenanceRole };
+
+    arena_state: std.heap.ArenaAllocator,
+    io: std.Io,
+    episodes: std.ArrayList(EpisodeRow) = .empty,
+    entities: std.ArrayList(EntityRow) = .empty,
+    facts: std.ArrayList(FactRow) = .empty,
+    provenance: std.ArrayList(ProvenanceRow) = .empty,
+    predicates: std.ArrayList(resolve.PredicateRow) = .empty,
+    seq: i64 = 0,
+    next_token: i64 = 0,
+    crash_after_extraction: bool = false,
+
+    pub fn init(gpa: Allocator, io: std.Io) !MemoryBackend {
+        var b: MemoryBackend = .{ .arena_state = .init(gpa), .io = io };
+        const a = b.arena_state.allocator();
+        for (core.ontology.core_predicates) |p| try b.predicates.append(a, .{
+            .name = p.name,
+            .cardinality = p.cardinality,
+            .opposes = p.opposes,
+            .status = .core,
+            .description = p.description,
+        });
+        return b;
+    }
+
+    pub fn deinit(b: *MemoryBackend) void {
+        b.arena_state.deinit();
+    }
+
+    fn arena(b: *MemoryBackend) Allocator {
+        return b.arena_state.allocator();
+    }
+
+    pub fn add(b: *MemoryBackend, source: []const u8, reference_time: Micros, project: ?[]const u8, turns: []const core.Turn) !Id {
+        const a = b.arena();
+        const id = Id.v7(b.io);
+        var seq: i32 = 0;
+        for (b.episodes.items) |e| if (std.mem.eql(u8, e.source, source)) {
+            seq += 1;
+        };
+        try b.episodes.append(a, .{
+            .episode = .{
+                .id = id,
+                .graph_id = graph,
+                .seq_in_source = seq,
+                .kind = .turns,
+                .project = if (project) |p| try a.dupe(u8, p) else null,
+                .asserted_by = .user,
+                .body = .{ .turns = try copy([]const core.Turn, a, turns) },
+                .content_hash = @splat(0),
+                .reference_time = reference_time,
+            },
+            .source = try a.dupe(u8, source),
+        });
+        return id;
+    }
+
+    pub const graph = Id.fromParts(1, @splat(1));
+
+    fn copy(comptime T: type, a: Allocator, v: T) !T {
+        const json = try std.json.Stringify.valueAlloc(a, v, .{});
+        return std.json.parseFromSliceLeaky(T, a, json, .{ .allocate = .alloc_always });
+    }
+
+    pub fn row(b: *MemoryBackend, id: Id) *EpisodeRow {
+        for (b.episodes.items) |*e| if (e.episode.id.eql(id)) return e;
+        unreachable;
+    }
+
+    fn blocked(b: *MemoryBackend, e: EpisodeRow) bool {
+        for (b.episodes.items) |o| {
+            if (!std.mem.eql(u8, o.source, e.source) or o.episode.seq_in_source >= e.episode.seq_in_source) continue;
+            switch (o.status) {
+                .queued, .extracting, .extracted, .staged, .committing => return true,
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    pub fn claim(b: *MemoryBackend) ?store.Lease {
+        for (b.episodes.items) |*e| {
+            if (e.status != .queued and e.status != .extracted and e.status != .staged) continue;
+            if (b.blocked(e.*)) continue;
+            b.next_token += 1;
+            e.token = b.next_token;
+            var ep = e.episode;
+            ep.attempts = e.attempts;
+            ep.status = e.status;
+            e.status = if (e.extraction_json != null) .extracted else .extracting;
+            return .{ .episode_id = ep.id, .graph_id = graph, .token = e.token, .episode = ep, .extraction_json = e.extraction_json };
+        }
+        return null;
+    }
+
+    pub fn expireLease(b: *MemoryBackend, id: Id) void {
+        const e = b.row(id);
+        e.status = if (e.extraction_json != null) .extracted else .queued;
+        e.token = 0;
+    }
+
+    fn fenced(b: *MemoryBackend, lease: store.Lease) !*EpisodeRow {
+        const e = b.row(lease.episode_id);
+        if (e.token != lease.token) return error.LeaseLost;
+        return e;
+    }
+
+    pub fn loadContext(b: *MemoryBackend, a: Allocator, lease: store.Lease) !pipeline.Context {
+        const me = b.row(lease.episode_id);
+        var prior: std.ArrayList(prompt.PriorEpisode) = .empty;
+        for (b.episodes.items) |e| {
+            if (e.status != .committed or !std.mem.eql(u8, e.source, me.source)) continue;
+            var texts: std.ArrayList([]const u8) = .empty;
+            if (e.change_set) |cs| for (cs.new_facts) |nf| try texts.append(a, nf.fact.text);
+            try prior.append(a, .{ .reference_time = e.episode.reference_time, .facts = texts.items });
+        }
+        const start = prior.items.len -| 3;
+        return .{ .prior = prior.items[start..], .predicates = try a.dupe(resolve.PredicateRow, b.predicates.items) };
+    }
+
+    pub fn saveExtraction(b: *MemoryBackend, lease: store.Lease, json: []const u8) !void {
+        const e = try b.fenced(lease);
+        e.extraction_json = try b.arena().dupe(u8, json);
+        e.status = .extracted;
+    }
+
+    pub fn savePredicateEmbeddings(b: *MemoryBackend, lease: store.Lease, names: []const []const u8, embs: []const []const f32) !void {
+        _ = lease;
+        for (names, embs) |n, v| for (b.predicates.items) |*p| if (std.mem.eql(u8, p.name, n)) {
+            p.emb = try b.arena().dupe(f32, v);
+        };
+    }
+
+    fn canonical(b: *MemoryBackend, id: Id) Id {
+        var cur = id;
+        while (true) {
+            const e = b.entity(cur) orelse return cur;
+            cur = e.merged_into orelse return cur;
+        }
+    }
+
+    pub fn entity(b: *MemoryBackend, id: Id) ?*EntityRow {
+        for (b.entities.items) |*e| if (e.id.eql(id)) return e;
+        return null;
+    }
+
+    pub fn prefetch(b: *MemoryBackend, a: Allocator, lease: store.Lease, req: pipeline.PrefetchRequest) !resolve.Prefetch {
+        if (b.crash_after_extraction) return error.SimulatedCrash;
+        _ = lease;
+        var ents: std.ArrayList(resolve.CandidateEntity) = .empty;
+        for (req.entity_norms, req.entity_embs, 0..) |norms, emb, i| {
+            for (b.entities.items) |e| {
+                if (e.merged_into != null) continue;
+                var alias = false;
+                for (norms) |n| {
+                    if (std.mem.eql(u8, n, e.norm)) alias = true;
+                    for (e.aliases.items) |al| if (std.mem.eql(u8, n, al)) {
+                        alias = true;
+                    };
+                }
+                const cos = rules.cosine(emb, e.emb);
+                if (!alias and cos < 0.5) continue;
+                try ents.append(a, .{ .item = @intCast(i), .id = e.id, .name = e.name, .norm = e.norm, .type = e.type, .alias_match = alias, .cosine = cos });
+            }
+        }
+        var facts: std.ArrayList(resolve.CandidateFact) = .empty;
+        for (req.fact_subject, req.fact_object, req.fact_embs, 0..) |si, oi, emb, j| {
+            for (b.facts.items) |f| {
+                if (f.fact.sys.upper != null or f.fact.valid.upper != null) continue;
+                var related = rules.cosine(emb, f.emb) >= rules.neighbour_cosine;
+                for (ents.items) |c| {
+                    if (c.item == si and c.id.eql(f.fact.subject_id)) related = true;
+                    if (oi) |o| if (c.item == o) switch (f.fact.object) {
+                        .entity => |fo| if (fo.eql(c.id)) {
+                            related = true;
+                        },
+                        .value => {},
+                    };
+                }
+                if (!related) continue;
+                try facts.append(a, .{
+                    .item = @intCast(j),
+                    .id = f.fact.id,
+                    .subject_id = f.fact.subject_id,
+                    .predicate = f.fact.predicate,
+                    .qualifier = f.fact.qualifier,
+                    .object_id = switch (f.fact.object) {
+                        .entity => |x| x,
+                        .value => null,
+                    },
+                    .object_value = switch (f.fact.object) {
+                        .entity => null,
+                        .value => |v| v,
+                    },
+                    .text = f.fact.text,
+                    .valid_lower = f.fact.valid.lower,
+                    .valid_upper = f.fact.valid.upper,
+                    .confidence = f.fact.confidence,
+                    .cosine = rules.cosine(emb, f.emb),
+                });
+            }
+        }
+        return .{ .base_seq = b.seq, .entities = ents.items, .facts = facts.items };
+    }
+
+    pub fn saveChangeSet(b: *MemoryBackend, lease: store.Lease, cs: *const core.ChangeSet) !void {
+        const e = try b.fenced(lease);
+        e.change_set = try copy(core.ChangeSet, b.arena(), cs.*);
+        e.status = .staged;
+    }
+
+    pub fn commit(b: *MemoryBackend, a: Allocator, lease: store.Lease, cs_in: *const core.ChangeSet) !store.CommitResult {
+        _ = a;
+        const e = b.fenced(lease) catch return .fenced;
+        if (e.status != .staged) return .fenced;
+        const al = b.arena();
+        const cs = try copy(core.ChangeSet, al, cs_in.*);
+        const t = pipeline.now(b.io);
+        for (cs.new_entities) |ne| {
+            var aliases: std.ArrayList([]const u8) = .empty;
+            for (ne.aliases) |x| try aliases.append(al, try core.text.norm(al, x));
+            try b.entities.append(al, .{ .id = ne.id, .name = ne.name, .norm = ne.norm, .type = ne.type, .aliases = aliases, .emb = ne.name_emb });
+        }
+        for (cs.new_aliases) |x| if (b.entity(x.entity_id)) |ent| try ent.aliases.append(al, x.norm);
+        for (cs.merges) |m| {
+            if (b.entity(m.from)) |ent| ent.merged_into = m.into;
+            for (b.facts.items) |*f| {
+                if (f.fact.subject_id.eql(m.from)) f.fact.subject_id = m.into;
+                switch (f.fact.object) {
+                    .entity => |o| if (o.eql(m.from)) {
+                        f.fact.object = .{ .entity = m.into };
+                    },
+                    .value => {},
+                }
+            }
+        }
+        for (cs.new_facts) |nf| {
+            var f = nf.fact;
+            f.sys.lower = t;
+            f.subject_id = b.canonical(f.subject_id);
+            try b.facts.append(al, .{ .fact = f, .emb = nf.emb });
+        }
+        for (cs.reaffirmations) |r| if (b.fact(r.fact_id)) |f| {
+            f.fact.confidence = r.confidence;
+        };
+        for (cs.invalidations) |inv| if (b.fact(inv.fact_id)) |f| {
+            f.fact.valid.upper = inv.valid_upper;
+            f.fact.end_kind = .changed;
+            f.fact.ended_by = inv.ended_by;
+        };
+        for (cs.retractions) |r| if (b.fact(r.fact_id)) |f| {
+            f.fact.sys.upper = t;
+            f.fact.end_kind = r.end_kind;
+            f.fact.ended_by = r.ended_by;
+        };
+        for (cs.provenance) |p| try b.provenance.append(al, .{ .fact_id = p.fact_id, .episode_id = lease.episode_id, .role = p.role });
+        for (cs.new_predicates) |p| {
+            var seen = false;
+            for (b.predicates.items) |q| if (std.mem.eql(u8, q.name, p.name)) {
+                seen = true;
+            };
+            if (!seen) try b.predicates.append(al, .{ .name = p.name, .status = p.status, .mapped_to = p.mapped_to, .description = p.description });
+        }
+        b.seq += 1;
+        e.status = .committed;
+        e.change_set = cs;
+        return .{ .committed = .{ .seq = b.seq } };
+    }
+
+    pub fn fact(b: *MemoryBackend, id: Id) ?*FactRow {
+        for (b.facts.items) |*f| if (f.fact.id.eql(id)) return f;
+        return null;
+    }
+
+    pub fn afterCommit(b: *MemoryBackend, a: Allocator, lease: store.Lease, cs: *const core.ChangeSet) !void {
+        _ = b;
+        _ = a;
+        _ = lease;
+        _ = cs;
+    }
+
+    pub fn finish(b: *MemoryBackend, lease: store.Lease, t: pipeline.Transition) !void {
+        const e = try b.fenced(lease);
+        const al = b.arena();
+        switch (t) {
+            .skipped => e.status = .skipped,
+            .dead => |why| {
+                e.status = .dead;
+                e.last_error = try al.dupe(u8, why);
+            },
+            .requeue => |r| {
+                e.status = if (e.extraction_json != null) .extracted else .queued;
+                if (r.count_attempt) e.attempts += 1;
+            },
+            .split => |halves| {
+                e.status = .split;
+                e.token = 0;
+                const parent = e.*;
+                for (halves) |h| {
+                    var child = parent;
+                    child.episode.id = Id.v7(b.io);
+                    child.episode.body = try copy(core.EpisodeBody, al, h);
+                    child.status = .queued;
+                    child.token = 0;
+                    child.extraction_json = null;
+                    try b.episodes.append(al, child);
+                }
+                return;
+            },
+        }
+        e.token = 0;
+    }
+
+    pub fn activeFacts(b: *MemoryBackend, a: Allocator) ![]const core.Fact {
+        var out: std.ArrayList(core.Fact) = .empty;
+        for (b.facts.items) |f| if (f.fact.sys.upper == null and f.fact.valid.upper == null) try out.append(a, f.fact);
+        return out.items;
+    }
+};
