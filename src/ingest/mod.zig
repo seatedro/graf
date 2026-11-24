@@ -49,6 +49,7 @@ pub const resolve = @import("resolve.zig");
 pub const schema = @import("schema.zig");
 pub const prompt = @import("prompt.zig");
 pub const pipeline = @import("pipeline.zig");
+pub const rebase = @import("rebase.zig");
 pub const testing = @import("testing.zig");
 
 pub const ConflictKind = rules.ConflictKind;
