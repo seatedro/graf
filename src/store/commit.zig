@@ -83,7 +83,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
         const applied = try collectIds(a, conn,
             \\UPDATE fact f SET
             \\  valid = tstzrange(lower(f.valid), t.upper),
-            \\  end_kind = CASE WHEN t.ended_by IS NULL THEN f.end_kind ELSE 'changed' END,
+            \\  end_kind = 'changed',
             \\  ended_by = COALESCE(t.ended_by, f.ended_by)
             \\FROM unnest($2::uuid[], $3::timestamptz[], $4::uuid[]) AS t(id, upper, ended_by)
             \\WHERE f.id = t.id AND f.graph_id = $1
