@@ -33,6 +33,33 @@ pub const CandidateFact = struct {
     valid_upper: ?Micros = null,
     confidence: f32,
     cosine: f32 = 0,
+
+    pub fn key(c: CandidateFact, arena: Allocator) Allocator.Error!rules.Key {
+        return .{
+            .subject = c.subject_id,
+            .relation = c.relation,
+            .qualifier = c.qualifier,
+            .object = if (c.object_id) |o| .{ .entity = o } else .{ .value = try core.text.norm(arena, c.object_value orelse "") },
+            .valid = .{ .lower = c.valid_lower, .upper = c.valid_upper },
+        };
+    }
+
+    pub fn toFact(c: CandidateFact, graph_id: Id) core.Fact {
+        return .{
+            .id = c.id,
+            .graph_id = graph_id,
+            .subject_id = c.subject_id,
+            .relation = c.relation,
+            .qualifier = c.qualifier,
+            .object = if (c.object_id) |o| .{ .entity = o } else .{ .value = c.object_value orelse "" },
+            .text = c.text,
+            .scope = .project,
+            .valid = .{ .lower = c.valid_lower, .upper = c.valid_upper },
+            .known = .{},
+            .author = .agent,
+            .confidence = c.confidence,
+        };
+    }
 };
 
 pub const RelationRow = struct {
@@ -65,10 +92,13 @@ pub const Prefetch = struct {
         for (p.relations) |row| if (std.mem.eql(u8, row.name, name)) return row;
         return null;
     }
+
+    fn rule(p: Prefetch, name: []const u8) rules.RelationRule {
+        return rules.ruleFor(name, if (p.relation(name)) |row| .{ .cardinality = row.cardinality, .opposes = row.opposes } else null);
+    }
 };
 
 pub const EntryInfo = struct {
-    id: Id,
     graph_id: Id,
     reference_time: Micros,
     project: ?[]const u8 = null,
@@ -171,7 +201,7 @@ pub fn relationDescription(checked: extract.Checked, name: []const u8) []const u
     return name;
 }
 
-fn entityIndex(checked: extract.Checked, ref: []const u8) usize {
+pub fn entityIndex(checked: extract.Checked, ref: []const u8) usize {
     for (checked.result.entities, 0..) |e, i| if (std.mem.eql(u8, e.ref, ref)) return i;
     unreachable;
 }
@@ -231,16 +261,6 @@ fn planEntity(arena: Allocator, e: ingest.ExtractedEntity, item: usize, prefetch
     return .{ .decision = .new };
 }
 
-fn candidateKey(arena: Allocator, c: CandidateFact) Allocator.Error!rules.Key {
-    return .{
-        .subject = c.subject_id,
-        .relation = c.relation,
-        .qualifier = c.qualifier,
-        .object = if (c.object_id) |o| .{ .entity = o } else .{ .value = try core.text.norm(arena, c.object_value orelse "") },
-        .valid = .{ .lower = c.valid_lower, .upper = c.valid_upper },
-    };
-}
-
 fn byFactCosineDesc(_: void, a: CandidateFact, b: CandidateFact) bool {
     return a.cosine > b.cosine;
 }
@@ -286,20 +306,20 @@ pub fn plan(arena: Allocator, checked: extract.Checked, prefetch: Prefetch) Allo
         outer: for (prefetch.facts) |c| {
             if (c.item != j) continue;
             for (pool.items) |p| if (p.id.eql(c.id)) continue :outer;
-            const same_pred = std.mem.eql(u8, c.relation, f.relation);
+            const same_relation = std.mem.eql(u8, c.relation, f.relation);
+            const same_object_entity = if (object_known) |ok| (if (c.object_id) |co| co.eql(ok) else false) else false;
             if (subj.decision == .existing and c.subject_id.eql(subj.decision.existing) and
-                same_pred and std.mem.eql(u8, c.qualifier, f.qualifier orelse ""))
+                same_relation and std.mem.eql(u8, c.qualifier, f.qualifier orelse ""))
             {
                 const same_object = if (f.object != null)
-                    (if (object_known) |ok| (if (c.object_id) |co| co.eql(ok) else false) else false)
+                    same_object_entity
                 else if (c.object_value) |cv| std.mem.eql(u8, try core.text.norm(arena, cv), value_norm.?) else false;
                 if (same_object) {
                     restated = true;
                     continue;
                 }
             }
-            const kin = same_pred or (if (opposed) |o| std.mem.eql(u8, c.relation, o) else false);
-            const same_object_entity = if (object_known) |ok| (if (c.object_id) |co| co.eql(ok) else false) else false;
+            const kin = same_relation or (if (opposed) |o| std.mem.eql(u8, c.relation, o) else false);
             const related = (kin and (containsId(subjects.items, c.subject_id) or same_object_entity)) or
                 c.cosine >= rules.neighbour_cosine;
             if (related) try pool.append(arena, c);
@@ -325,9 +345,9 @@ pub fn plan(arena: Allocator, checked: extract.Checked, prefetch: Prefetch) Allo
 }
 
 pub const Verdict = struct {
-    links: []const ?Id,
-    duplicates: []const ?Id,
-    contradictions: []const []const Contradiction,
+    links: []?Id,
+    duplicates: []?Id,
+    contradictions: [][]const Contradiction,
 
     pub const Contradiction = struct { fact: Id, kind: ingest.ConflictKind, at: ?Micros };
 
@@ -350,13 +370,7 @@ pub const Interpreted = struct {
 };
 
 pub fn interpret(arena: Allocator, p: Plan, checked: extract.Checked, r: ingest.ResolveResult) Allocator.Error!Interpreted {
-    const links = try arena.alloc(?Id, p.entities.len);
-    @memset(links, null);
-    const dups = try arena.alloc(?Id, p.facts.len);
-    @memset(dups, null);
-    const cons = try arena.alloc([]const Verdict.Contradiction, p.facts.len);
-    @memset(cons, &.{});
-    const v: Verdict = .{ .links = links, .duplicates = dups, .contradictions = cons };
+    const v = try Verdict.none(arena, p);
     var warnings: std.ArrayList([]const u8) = .empty;
     var invalid: usize = 0;
     var total: usize = 0;
@@ -382,7 +396,7 @@ pub fn interpret(arena: Allocator, p: Plan, checked: extract.Checked, r: ingest.
             try warnings.append(arena, try std.fmt.allocPrint(arena, "resolution linked {s} to {s}, which was not one of its candidates", .{ link.ref, label }));
             continue;
         }
-        links[i] = id;
+        v.links[i] = id;
     }
 
     for (r.fact_verdicts) |fv| {
@@ -396,7 +410,7 @@ pub fn interpret(arena: Allocator, p: Plan, checked: extract.Checked, r: ingest.
         const allowed = p.facts[j].candidates;
         if (fv.duplicate_of) |label| {
             if (p.lookupFactLabel(label)) |id| {
-                if (containsId(allowed, id)) dups[j] = id else invalid += 1;
+                if (containsId(allowed, id)) v.duplicates[j] = id else invalid += 1;
             } else invalid += 1;
         }
         var list: std.ArrayList(Verdict.Contradiction) = .empty;
@@ -412,7 +426,7 @@ pub fn interpret(arena: Allocator, p: Plan, checked: extract.Checked, r: ingest.
             const at = if (c.at) |s| (time.parseBound(s) catch null) else null;
             try list.append(arena, .{ .fact = id, .kind = c.kind, .at = at });
         }
-        cons[j] = list.items;
+        v.contradictions[j] = list.items;
     }
     return .{ .verdict = v, .warnings = warnings.items, .invalid = invalid, .total = total };
 }
@@ -451,18 +465,12 @@ pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, pr
 }
 
 pub fn verdictFromProbabilities(arena: Allocator, p: Plan, questions: []const Question, probs: []const f64, th: Thresholds) Allocator.Error!Verdict {
-    const links = try arena.alloc(?Id, p.entities.len);
-    @memset(links, null);
-    const dups = try arena.alloc(?Id, p.facts.len);
-    @memset(dups, null);
-    const cons = try arena.alloc([]const Verdict.Contradiction, p.facts.len);
-    @memset(cons, &.{});
-    const v: Verdict = .{ .links = links, .duplicates = dups, .contradictions = cons };
+    const v = try Verdict.none(arena, p);
     const link_best = try arena.alloc(f64, p.entities.len);
     @memset(link_best, th.duplicate);
     const dup_best = try arena.alloc(f64, p.facts.len);
     @memset(dup_best, th.duplicate);
-    var lists = try arena.alloc(std.ArrayList(Verdict.Contradiction), p.facts.len);
+    const lists = try arena.alloc(std.ArrayList(Verdict.Contradiction), p.facts.len);
     for (lists) |*l| l.* = .empty;
 
     for (questions, 0..) |q, k| {
@@ -471,11 +479,11 @@ pub fn verdictFromProbabilities(arena: Allocator, p: Plan, questions: []const Qu
         switch (q.kind) {
             .same_entity => if (pr >= link_best[q.item]) {
                 link_best[q.item] = pr;
-                links[q.item] = q.target;
+                v.links[q.item] = q.target;
             },
             .duplicate => if (pr >= dup_best[q.item]) {
                 dup_best[q.item] = pr;
-                dups[q.item] = q.target;
+                v.duplicates[q.item] = q.target;
             },
             .contradicts => if (pr >= th.contradiction) {
                 const wrong = k + 1 < probs.len and k + 1 < questions.len and questions[k + 1].kind == .was_wrong and probs[k + 1] >= 0.5;
@@ -485,16 +493,16 @@ pub fn verdictFromProbabilities(arena: Allocator, p: Plan, questions: []const Qu
         }
     }
     for (lists, 0..) |l, j| {
-        if (dups[j]) |d| {
+        if (v.duplicates[j]) |d| {
             var filtered: std.ArrayList(Verdict.Contradiction) = .empty;
             for (l.items) |c| if (!c.fact.eql(d)) try filtered.append(arena, c);
-            cons[j] = filtered.items;
-        } else cons[j] = l.items;
+            v.contradictions[j] = filtered.items;
+        } else v.contradictions[j] = l.items;
     }
     return v;
 }
 
-fn findEntity(prefetch: Prefetch, id: Id) ?CandidateEntity {
+pub fn findEntity(prefetch: Prefetch, id: Id) ?CandidateEntity {
     for (prefetch.entities) |c| if (c.id.eql(id)) return c;
     return null;
 }
@@ -522,13 +530,10 @@ fn chooseRelation(
     proposed: *std.ArrayList(core.Relation),
     warnings: *std.ArrayList([]const u8),
 ) Allocator.Error!RelationChoice {
-    if (core.ontology.find(name) != null) return .{ .name = name, .rule = rules.ruleFor(name, null) };
+    if (core.ontology.find(name) != null) return .{ .name = name, .rule = prefetch.rule(name) };
     if (prefetch.relation(name)) |row| {
-        if (row.mapped_to) |target| {
-            const t_row = prefetch.relation(target);
-            return .{ .name = target, .rule = rules.ruleFor(target, if (t_row) |tr| .{ .cardinality = tr.cardinality, .opposes = tr.opposes } else null) };
-        }
-        return .{ .name = name, .rule = rules.ruleFor(name, .{ .cardinality = row.cardinality, .opposes = row.opposes }) };
+        const chosen = row.mapped_to orelse name;
+        return .{ .name = chosen, .rule = prefetch.rule(chosen) };
     }
     for (proposed.items) |p| if (std.mem.eql(u8, p.name, name)) return .{ .name = p.mapped_to orelse name, .rule = .{} };
 
@@ -558,30 +563,12 @@ fn chooseRelation(
     });
     if (mapped) |m| {
         try warnings.append(arena, try std.fmt.allocPrint(arena, "relation {s} collapsed onto {s}", .{ name, m }));
-        const row = prefetch.relation(m);
-        return .{ .name = m, .rule = rules.ruleFor(m, if (row) |r| .{ .cardinality = r.cardinality, .opposes = r.opposes } else null) };
+        return .{ .name = m, .rule = prefetch.rule(m) };
     }
     return .{ .name = name, .rule = .{} };
 }
 
-const OldState = struct { fact: core.Fact, ended: bool };
-
-fn oldFact(c: CandidateFact, graph_id: Id) core.Fact {
-    return .{
-        .id = c.id,
-        .graph_id = graph_id,
-        .subject_id = c.subject_id,
-        .relation = c.relation,
-        .qualifier = c.qualifier,
-        .object = if (c.object_id) |o| .{ .entity = o } else .{ .value = c.object_value orelse "" },
-        .text = c.text,
-        .scope = .project,
-        .valid = .{ .lower = c.valid_lower, .upper = c.valid_upper },
-        .known = .{},
-        .author = .agent,
-        .confidence = c.confidence,
-    };
-}
+const OldState = struct { fact: core.Fact, key: rules.Key, ended: bool };
 
 pub fn build(
     arena: Allocator,
@@ -656,7 +643,7 @@ pub fn build(
         for (olds.items) |o| if (o.fact.id.eql(c.id)) {
             seen = true;
         };
-        if (!seen) try olds.append(arena, .{ .fact = oldFact(c, ctx.entry.graph_id), .ended = false });
+        if (!seen) try olds.append(arena, .{ .fact = c.toFact(ctx.entry.graph_id), .key = try c.key(arena), .ended = false });
     }
 
     var new_facts: std.ArrayList(ChangeSet.NewFact) = .empty;
@@ -668,7 +655,7 @@ pub fn build(
     var blast: rules.BlastRadius = .{};
 
     for (checked.result.facts, checked.meta, 0..) |f, m, j| {
-        const pred = try chooseRelation(arena, f.relation, checked, prefetch, novel, vectors, &proposed, &warnings);
+        const relation = try chooseRelation(arena, f.relation, checked, prefetch, novel, vectors, &proposed, &warnings);
         const subject = final[entityIndex(checked, f.subject)];
         const object: core.types.FactObject = if (f.object) |o| .{ .entity = final[entityIndex(checked, o)] } else .{ .value = f.value.? };
         var valid = m.valid;
@@ -680,7 +667,7 @@ pub fn build(
         }
         const key: rules.Key = .{
             .subject = subject,
-            .relation = pred.name,
+            .relation = relation.name,
             .qualifier = f.qualifier orelse "",
             .object = switch (object) {
                 .entity => |id| .{ .entity = id },
@@ -692,8 +679,7 @@ pub fn build(
         var restated: ?usize = null;
         for (olds.items, 0..) |o, k| {
             if (o.ended) continue;
-            const c = findFact(prefetch, o.fact.id).?;
-            if (rules.sameCanonicalKey(key, try candidateKey(arena, c))) {
+            if (rules.sameCanonicalKey(key, o.key)) {
                 restated = k;
                 break;
             }
@@ -729,7 +715,7 @@ pub fn build(
             .id = Id.v7(ctx.io),
             .graph_id = ctx.entry.graph_id,
             .subject_id = subject,
-            .relation = pred.name,
+            .relation = relation.name,
             .qualifier = f.qualifier orelse "",
             .object = object,
             .text = f.text,
@@ -744,10 +730,8 @@ pub fn build(
 
         for (olds.items) |*o| {
             if (o.ended) continue;
-            const c = findFact(prefetch, o.fact.id).?;
-            const ck = try candidateKey(arena, c);
             var kind: ?ingest.ConflictKind = null;
-            if (rules.conflict(key, pred.rule, ck) != null) kind = .changed;
+            if (rules.conflict(key, relation.rule, o.key) != null) kind = .changed;
             for (verdict.contradictions[j]) |vc| if (vc.fact.eql(o.fact.id)) {
                 kind = vc.kind;
             };
@@ -781,9 +765,6 @@ pub fn build(
         try evidence.append(arena, .{ .fact_id = nf.id, .kind = .stated, .quote = f.quote });
     }
 
-    var preds_out: std.ArrayList(core.Relation) = .empty;
-    for (proposed.items) |pr| try preds_out.append(arena, pr);
-
     return .{
         .base_seq = prefetch.base_seq,
         .new_entities = new_entities.items,
@@ -795,7 +776,7 @@ pub fn build(
         .evidence = evidence.items,
         .mentions = mentions.items,
         .new_aliases = new_aliases.items,
-        .new_relations = preds_out.items,
+        .new_relations = proposed.items,
         .warnings = warnings.items,
     };
 }

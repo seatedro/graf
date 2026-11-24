@@ -269,11 +269,11 @@ fn collides(arena: Allocator, later: ExtractedFact, later_meta: FactMeta, earlie
     const eo = try objectOf(arena, earlier);
     const lq = later.qualifier orelse "";
     const eq = earlier.qualifier orelse "";
-    const same_pred = std.mem.eql(u8, later.relation, earlier.relation);
-    if (same_pred and std.mem.eql(u8, lq, eq) and sameObject(lo, eo)) return true;
+    const same_relation = std.mem.eql(u8, later.relation, earlier.relation);
+    if (same_relation and std.mem.eql(u8, lq, eq) and sameObject(lo, eo)) return true;
     if (!rules.rangesOverlap(later_meta.valid, earlier_meta.valid)) return false;
     const rule = rules.ruleFor(later.relation, null);
-    if (same_pred) switch (rule.cardinality) {
+    if (same_relation) switch (rule.cardinality) {
         .one_per_subject => return !sameObject(lo, eo),
         .one_per_subject_qualifier => return std.mem.eql(u8, lq, eq) and !sameObject(lo, eo),
         else => {},
@@ -424,7 +424,7 @@ test "dated statements about different periods do not self-correct" {
     };
     const c = try check(arena, raw, body, ref_time);
     try testing.expectEqual(@as(usize, 2), c.result.facts.len);
-    try testing.expectEqual(try time.parse("2026-11-17"), c.meta[0].valid.upper.?);
+    try testing.expectEqual(try core.time.parseRfc3339("2026-11-17"), c.meta[0].valid.upper.?);
 }
 
 test "bad dates drop the fact; an unknown start is unbounded" {

@@ -79,8 +79,6 @@ pub const Contradiction = struct {
     at: ?[]const u8,
 };
 
-pub const resolveConflict = rules.resolveConflict;
-
 pub const Outcome = enum { committed, skipped, requeued, split, dead, fenced };
 
 pub const Pipeline = struct {

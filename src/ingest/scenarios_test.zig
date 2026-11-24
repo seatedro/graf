@@ -3,7 +3,7 @@ const core = @import("core");
 const ingest = @import("mod.zig");
 const extract = @import("extract.zig");
 const resolve = @import("resolve.zig");
-const time = @import("time.zig");
+const fakes = @import("testing.zig");
 
 const testing = std.testing;
 const Id = core.Id;
@@ -15,9 +15,7 @@ fn id(n: u8) Id {
 
 const graph = Id.fromParts(1, @splat(0));
 
-fn at(s: []const u8) core.Micros {
-    return time.parse(s) catch unreachable;
-}
+const at = fakes.at;
 
 fn ent(ref: []const u8, name: []const u8, ty: core.EntityType) ingest.ExtractedEntity {
     return .{ .ref = ref, .name = name, .type = ty, .aliases = &.{}, .description = "" };
@@ -60,7 +58,7 @@ const Scenario = struct {
         const fact_vecs = try s.arena.alloc([]const f32, checked.result.facts.len);
         @memset(fact_vecs, &.{ 0, 1 });
         const cs = try resolve.build(s.arena, .{
-            .entry = .{ .id = id(200), .graph_id = graph, .reference_time = s.reference_time, .project = "lantern" },
+            .entry = .{ .graph_id = graph, .reference_time = s.reference_time, .project = "lantern" },
             .commit_time = s.reference_time + 1000,
             .io = testing.io,
         }, checked, s.prefetch, p, .{ .entities = ent_vecs, .facts = fact_vecs }, verdict);
@@ -70,7 +68,6 @@ const Scenario = struct {
 
 const relay = id(10);
 const hollis = id(11);
-const juno = id(12);
 const hollis_oncall = id(50);
 
 fn relayOncallPrefetch(item_subject: u32, item_object: u32, fact_item: u32) resolve.Prefetch {
@@ -240,7 +237,7 @@ test "a correction the resolution call marks was_wrong retracts instead of endin
     try testing.expect(out.cs.retractions[0].fact_id.eql(uses_go));
     try testing.expectEqual(core.types.EndKind.retracted, out.cs.retractions[0].end_kind);
     var saw_retracted = false;
-    for (out.cs.evidence) |pv| if (pv.fact_id.eql(uses_go) and pv.kind == .retracted) {
+    for (out.cs.evidence) |ev| if (ev.fact_id.eql(uses_go) and ev.kind == .retracted) {
         saw_retracted = true;
     };
     try testing.expect(saw_retracted);
@@ -431,7 +428,7 @@ test "a new relation close to a known one collapses onto it" {
     try testing.expectEqual(@as(usize, 1), novel.len);
     const p = try resolve.plan(arena, checked, prefetch);
     const cs = try resolve.build(arena, .{
-        .entry = .{ .id = id(200), .graph_id = graph, .reference_time = at("2026-11-22T00:00:00Z") },
+        .entry = .{ .graph_id = graph, .reference_time = at("2026-11-22T00:00:00Z") },
         .commit_time = at("2026-11-22T00:00:01Z"),
         .io = testing.io,
     }, checked, prefetch, p, .{ .entities = &.{ &.{1}, &.{1} }, .facts = &.{&.{1}}, .relations = &.{&.{ 0.97, 0.1, 0 }} }, try resolve.Verdict.none(arena, p));

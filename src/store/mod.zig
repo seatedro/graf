@@ -23,9 +23,14 @@ pub const Store = struct {
     };
 
     pub fn open(io: std.Io, allocator: std.mem.Allocator, url: []const u8, opts: OpenOptions) !Store {
+        return openWithSettings(io, allocator, url, opts, null);
+    }
+
+    fn openWithSettings(io: std.Io, allocator: std.mem.Allocator, url: []const u8, opts: OpenOptions, settings: ?std.StringHashMap([]const u8)) !Store {
         var arena_state = std.heap.ArenaAllocator.init(allocator);
         defer arena_state.deinit();
-        const pool_opts = try poolOptions(arena_state.allocator(), url, opts.pool_size);
+        var pool_opts = try poolOptions(arena_state.allocator(), url, opts.pool_size);
+        pool_opts.auth.startup_parameters = settings;
         const pool = try pg.Pool.init(io, allocator, pool_opts);
         return .{ .allocator = allocator, .io = io, .pool = pool, .lease_ms = opts.lease_ms };
     }
@@ -179,22 +184,6 @@ pub fn contentHash(gpa: std.mem.Allocator, draft: *const core.EntryDraft) ![32]u
     return out;
 }
 
-pub fn normalizeAlias(arena: std.mem.Allocator, s: []const u8) ![]const u8 {
-    if (comptime @hasDecl(core, "text") and @hasDecl(core.text, "norm")) return core.text.norm(arena, s);
-    var out: std.ArrayList(u8) = .empty;
-    var pending_space = false;
-    for (s) |c| {
-        if (c < 0x80 and !std.ascii.isAlphanumeric(c)) {
-            pending_space = out.items.len != 0;
-            continue;
-        }
-        if (pending_space) try out.append(arena, ' ');
-        pending_space = false;
-        try out.append(arena, std.ascii.toLower(c));
-    }
-    return out.toOwnedSlice(arena);
-}
-
 pub fn idFromPg(raw: []const u8) !Id {
     if (raw.len != 16) return error.InvalidId;
     return .{ .bytes = raw[0..16].* };
@@ -253,7 +242,11 @@ pub const testing = struct {
 
     pub fn openWith(opts: Store.OpenOptions) !Store {
         const url = databaseUrl() orelse return error.SkipZigTest;
-        var s = try Store.open(std.testing.io, std.testing.allocator, url, opts);
+        var settings = std.StringHashMap([]const u8).init(std.testing.allocator);
+        defer settings.deinit();
+        try settings.put("statement_timeout", "60s");
+        try settings.put("lock_timeout", "30s");
+        var s = try Store.openWithSettings(std.testing.io, std.testing.allocator, url, opts, settings);
         errdefer s.close();
         _ = try s.migrate();
         return s;
@@ -303,14 +296,13 @@ test "migrations apply, are idempotent, and create halfvec(512) columns" {
     try std.testing.expectEqualStrings("halfvec(512)", try row.get([]const u8, 0));
 }
 
-test "normalizeAlias folds case, punctuation and whitespace" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    try std.testing.expectEqualStrings("pg zig", try normalizeAlias(a, "pg.zig"));
-    try std.testing.expectEqualStrings("pg zig", try normalizeAlias(a, "pg-zig"));
-    try std.testing.expectEqualStrings("pg zig", try normalizeAlias(a, " PG_Zig "));
-    try std.testing.expectEqualStrings("karlseguin s driver", try normalizeAlias(a, "  Karlseguin's   Driver!"));
+test "test stores bound statement and lock waits" {
+    var s = try testing.open();
+    defer s.close();
+    var row = (try s.pool.row("SELECT current_setting('statement_timeout'), current_setting('lock_timeout')", .{})) orelse return error.MissingRow;
+    defer row.deinit() catch {};
+    try std.testing.expectEqualStrings("1min", try row.get([]const u8, 0));
+    try std.testing.expectEqualStrings("30s", try row.get([]const u8, 1));
 }
 
 test "content hash ignores reference time and cursor but not the source" {

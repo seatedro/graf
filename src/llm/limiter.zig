@@ -204,7 +204,7 @@ pub const Limiter = struct {
         if (usd <= 0) return;
         l.mutex.lockUncancelable(io);
         defer l.mutex.unlock(io);
-        l.rollSpendPeriods(nowUs(io));
+        l.rollSpendPeriods(core.time.now(io));
         l.spend.day_usd += usd;
         l.spend.month_usd += usd;
     }
@@ -219,7 +219,7 @@ pub const Limiter = struct {
 
     fn refreshSpend(l: *Limiter, io: Io) void {
         const now_ms = nowMs(io);
-        const now_us = nowUs(io);
+        const now_us = core.time.now(io);
         {
             l.mutex.lockUncancelable(io);
             defer l.mutex.unlock(io);
@@ -258,7 +258,7 @@ pub const Limiter = struct {
 };
 
 pub fn periodStarts(now_us: i64) struct { day: i64, month: i64 } {
-    const us_per_day: i64 = 86_400 * std.time.us_per_s;
+    const us_per_day = std.time.us_per_day;
     const day_index = @divFloor(now_us, us_per_day);
     const epoch_day: std.time.epoch.EpochDay = .{ .day = @intCast(day_index) };
     const into_month = epoch_day.calculateYearDay().calculateMonthDay().day_index;
@@ -267,10 +267,6 @@ pub fn periodStarts(now_us: i64) struct { day: i64, month: i64 } {
 
 pub fn nowMs(io: Io) u64 {
     return @intCast(@max(0, Io.Clock.awake.now(io).toMilliseconds()));
-}
-
-fn nowUs(io: Io) i64 {
-    return Io.Clock.real.now(io).toMicroseconds();
 }
 
 const testing = std.testing;
@@ -359,7 +355,7 @@ test "the monthly cap from the ledger pauses background work" {
 }
 
 test "UTC period starts" {
-    const daysFromCivil = @import("classify.zig").daysFromCivil;
+    const daysFromCivil = core.time.daysFromCivil;
     const t = (daysFromCivil(2026, 11, 23) * 86_400 + 3_600) * std.time.us_per_s;
     const p = periodStarts(t);
     try testing.expectEqual(daysFromCivil(2026, 11, 23) * 86_400 * std.time.us_per_s, p.day);

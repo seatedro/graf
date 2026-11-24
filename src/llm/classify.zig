@@ -1,4 +1,5 @@
 const std = @import("std");
+const core = @import("core");
 
 pub const ErrorClass = enum {
     network_not_sent,
@@ -118,17 +119,7 @@ fn parseHttpDate(s: []const u8) ?i64 {
         if (std.ascii.eqlIgnoreCase(m, mon_s)) month = @intCast(i);
     }
     if (month == 0 or day == 0 or day > 31 or year < 1970 or hh > 23 or mm > 59 or ss > 60) return null;
-    return (daysFromCivil(year, month, day) * 86_400) + @as(i64, hh) * 3600 + @as(i64, mm) * 60 + ss;
-}
-
-pub fn daysFromCivil(year: i64, month: i64, day: i64) i64 {
-    const y = if (month <= 2) year - 1 else year;
-    const era = @divFloor(y, 400);
-    const yoe = y - era * 400;
-    const mp = @mod(month + 9, 12);
-    const doy = @divFloor(153 * mp + 2, 5) + day - 1;
-    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
-    return era * 146_097 + doe - 719_468;
+    return (core.time.daysFromCivil(year, month, day) * 86_400) + @as(i64, hh) * 3600 + @as(i64, mm) * 60 + ss;
 }
 
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {

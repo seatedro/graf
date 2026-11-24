@@ -5,6 +5,7 @@ pub const ontology = @import("ontology.zig");
 pub const config = @import("config.zig");
 pub const toml = @import("toml.zig");
 pub const text = @import("text.zig");
+pub const time = @import("time.zig");
 pub const redaction = @import("redact.zig");
 
 pub const Id = types.Id;

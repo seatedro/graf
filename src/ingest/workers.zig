@@ -119,7 +119,7 @@ fn worker(shared: *Shared, index: usize) void {
             continue;
         }
         if (index == 0) {
-            const now = pipeline.now(io);
+            const now = core.time.now(io);
             if (now - last_housekeeping >= housekeeping_ms * 1000) {
                 last_housekeeping = now;
                 housekeeping(arena, p, &model) catch |err| log.warn("housekeeping failed: {t}", .{err});

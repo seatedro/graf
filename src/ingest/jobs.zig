@@ -1,6 +1,5 @@
 const std = @import("std");
 const core = @import("core");
-const store = @import("store");
 const pg = @import("pg");
 const prompt = @import("prompt.zig");
 const schema = @import("schema.zig");
@@ -31,14 +30,14 @@ pub const due_summaries_sql = std.fmt.comptimePrint(
 
 pub const promote_sql = std.fmt.comptimePrint(
     \\WITH usage AS (
-    \\  SELECT f.relation, count(DISTINCT p.fact_id) AS uses, count(DISTINCT e.id) AS entries, count(DISTINCT e.source_id) AS sources
-    \\  FROM fact f JOIN fact_evidence p ON p.fact_id = f.id AND p.kind IN ('stated', 'restated')
-    \\  JOIN entry e ON e.id = p.entry_id
+    \\  SELECT f.relation, count(DISTINCT ev.fact_id) AS uses, count(DISTINCT e.id) AS entries, count(DISTINCT e.source_id) AS sources
+    \\  FROM fact f JOIN fact_evidence ev ON ev.fact_id = f.id AND ev.kind IN ('stated', 'restated')
+    \\  JOIN entry e ON e.id = ev.entry_id
     \\  WHERE f.graph_id = $1::uuid GROUP BY f.relation
     \\)
-    \\UPDATE relation pr SET uses = u.uses, entries = u.entries, sources = u.sources,
-    \\  status = CASE WHEN pr.status = 'proposed' AND pr.mapped_to IS NULL AND u.entries >= {d} AND u.sources >= {d} THEN 'learned' ELSE pr.status END
-    \\FROM usage u WHERE pr.graph_id = $1::uuid AND pr.name = u.relation
+    \\UPDATE relation r SET uses = u.uses, entries = u.entries, sources = u.sources,
+    \\  status = CASE WHEN r.status = 'proposed' AND r.mapped_to IS NULL AND u.entries >= {d} AND u.sources >= {d} THEN 'learned' ELSE r.status END
+    \\FROM usage u WHERE r.graph_id = $1::uuid AND r.name = u.relation
 , .{ promote_entries, promote_sources });
 
 pub const claim_job_sql =
@@ -50,19 +49,15 @@ pub const claim_job_sql =
 
 pub fn claimJob(conn: *pg.Conn, graph_id: Id, name: []const u8, interval_s: i32) !bool {
     var gbuf: [36]u8 = undefined;
-    var row = (try conn.row(claim_job_sql, .{ postgres.idText(graph_id, &gbuf), name, interval_s })) orelse return false;
+    var row = (try conn.row(claim_job_sql, .{ graph_id.toString(&gbuf), name, interval_s })) orelse return false;
     row.deinit() catch {};
     return true;
 }
 
-pub fn promoteRelations(conn: *pg.Conn, graph_id: Id) !i64 {
-    var gbuf: [36]u8 = undefined;
-    return (try conn.exec(promote_sql, .{postgres.idText(graph_id, &gbuf)})) orelse 0;
-}
-
 pub fn runDailyPromotion(conn: *pg.Conn, graph_id: Id) !bool {
     if (!try claimJob(conn, graph_id, "relation_promotion", promotion_interval_s)) return false;
-    _ = try promoteRelations(conn, graph_id);
+    var gbuf: [36]u8 = undefined;
+    _ = try conn.exec(promote_sql, .{graph_id.toString(&gbuf)});
     return true;
 }
 
@@ -75,7 +70,7 @@ pub const DueEntity = struct {
 
 pub fn dueSummaries(arena: Allocator, conn: *pg.Conn, graph_id: Id, limit: i32) ![]const DueEntity {
     var gbuf: [36]u8 = undefined;
-    return postgres.jsonRow([]const DueEntity, arena, conn, due_summaries_sql, .{ postgres.idText(graph_id, &gbuf), limit });
+    return postgres.jsonRow([]const DueEntity, arena, conn, due_summaries_sql, .{ graph_id.toString(&gbuf), limit });
 }
 
 pub fn summaryUser(arena: Allocator, e: DueEntity) ![]const u8 {
@@ -88,7 +83,7 @@ pub fn summaryUser(arena: Allocator, e: DueEntity) ![]const u8 {
 
 pub fn saveSummary(conn: *pg.Conn, id: Id, summary: []const u8) !void {
     var buf: [36]u8 = undefined;
-    _ = try conn.exec("UPDATE entity SET summary = $2, facts_since_summary = 0 WHERE id = $1::uuid", .{ postgres.idText(id, &buf), summary });
+    _ = try conn.exec("UPDATE entity SET summary = $2, facts_since_summary = 0 WHERE id = $1::uuid", .{ id.toString(&buf), summary });
 }
 
 pub fn refreshSummaries(comptime Model: type, arena: Allocator, conn: *pg.Conn, model: *Model, graph_id: Id, limit: i32) !usize {

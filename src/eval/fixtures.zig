@@ -1,6 +1,5 @@
 const std = @import("std");
 const core = @import("core");
-const time = @import("time.zig");
 const match = @import("match.zig");
 const EvalEntry = @import("mod.zig").EvalEntry;
 
@@ -141,8 +140,8 @@ pub fn parseSuite(arena: std.mem.Allocator, entries_jsonl: []const u8, expected_
         for (g.facts_added) |f| try facts.append(arena, .{
             .fact = f,
             .entry = ep,
-            .valid_from = if (f.valid_from) |v| time.parseRfc3339(v) catch null else null,
-            .valid_to = if (f.valid_to) |v| time.parseRfc3339(v) catch null else null,
+            .valid_from = if (f.valid_from) |v| core.time.parseRfc3339(v) catch null else null,
+            .valid_to = if (f.valid_to) |v| core.time.parseRfc3339(v) catch null else null,
         });
     }
     return .{ .entries = entries, .expected = expected, .facts = facts.items };
@@ -197,7 +196,7 @@ pub fn validate(arena: std.mem.Allocator, suite: *const Suite) ![]const []const 
             if (prev.harness == ep.harness and std.mem.eql(u8, prev.source_id, ep.source_id) and prev.seq >= ep.seq)
                 try p(arena, &problems, "entry {s}: seq {d} does not follow {s} in source {s}", .{ ep.id, ep.seq, prev.id, ep.source_id });
         }
-        _ = time.parseRfc3339(ep.reference_time) catch try p(arena, &problems, "entry {s}: bad reference_time {s}", .{ ep.id, ep.reference_time });
+        _ = core.time.parseRfc3339(ep.reference_time) catch try p(arena, &problems, "entry {s}: bad reference_time {s}", .{ ep.id, ep.reference_time });
         if (ep.turns.len == 0) try p(arena, &problems, "entry {s}: no turns", .{ep.id});
         if (suite.gold(ep.id) == null) try p(arena, &problems, "entry {s}: no gold labels", .{ep.id});
     }
@@ -230,7 +229,7 @@ pub fn validate(arena: std.mem.Allocator, suite: *const Suite) ![]const []const 
         for (g.must_remain_active) |id| if (suite.factIndex(id) == null) try p(arena, &problems, "entry {s}: must_remain_active names unknown fact {s}", .{ ep, id });
         for (g.invalidations) |inv| {
             if (suite.factIndex(inv.fact_id) == null) try p(arena, &problems, "entry {s}: invalidates unknown fact {s}", .{ ep, inv.fact_id });
-            if (inv.valid_to) |v| _ = time.parseRfc3339(v) catch try p(arena, &problems, "entry {s}: bad invalidation valid_to {s}", .{ ep, v });
+            if (inv.valid_to) |v| _ = core.time.parseRfc3339(v) catch try p(arena, &problems, "entry {s}: bad invalidation valid_to {s}", .{ ep, v });
         }
         for (g.must_not_contain_facts) |text| {
             if (try parsePattern(arena, suite, text) == null) try p(arena, &problems, "entry {s}: cannot parse must_not_contain_facts entry '{s}'", .{ ep, text });
@@ -239,7 +238,7 @@ pub fn validate(arena: std.mem.Allocator, suite: *const Suite) ![]const []const 
     for (suite.expected.retrieval_queries) |q| {
         for (q.must_include) |id| if (suite.factIndex(id) == null) try p(arena, &problems, "query {s}: must_include names unknown fact {s}", .{ q.id, id });
         for (q.must_exclude) |id| if (suite.factIndex(id) == null) try p(arena, &problems, "query {s}: must_exclude names unknown fact {s}", .{ q.id, id });
-        if (q.as_of) |v| _ = time.parseRfc3339(v) catch try p(arena, &problems, "query {s}: bad as_of {s}", .{ q.id, v });
+        if (q.as_of) |v| _ = core.time.parseRfc3339(v) catch try p(arena, &problems, "query {s}: bad as_of {s}", .{ q.id, v });
     }
     return problems.items;
 }

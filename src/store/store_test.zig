@@ -14,10 +14,6 @@ fn emb(seed: u64) [store.embedding_dims]f32 {
     return out;
 }
 
-fn nowMicros(io: std.Io) i64 {
-    return @intCast(@divTrunc(std.Io.Timestamp.now(io, .real).nanoseconds, 1000));
-}
-
 fn note(source: []const u8, text: []const u8, t: i64) core.EntryDraft {
     return .{
         .source = .{ .harness = .cli, .external_id = source, .project = "example.test/graf" },
@@ -312,7 +308,7 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
         .evidence = &.{.{ .fact_id = uses.fact.id, .kind = .restated }},
         .warnings = &.{"from the pipeline"},
     };
-    try s.recordCall(&.{ .id = Id.v7(s.io), .graph_id = g, .entry_id = en2, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .cost_usd = 0.0042, .cost_status = .priced, .latency_ms = 900, .started_at = nowMicros(s.io) });
+    try s.recordCall(&.{ .id = Id.v7(s.io), .graph_id = g, .entry_id = en2, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .cost_usd = 0.0042, .cost_status = .priced, .latency_ms = 900, .started_at = core.time.now(s.io) });
     try stage(&s, l2, &cs2);
     try testing.expectEqual(@as(i64, 2), (try s.commit(l2, &cs2, null)).committed.seq);
 
@@ -549,7 +545,7 @@ test "the ledger records every attempt and sums spend from a point in time" {
     var s = try store.testing.open();
     defer s.close();
     const g = try store.testing.freshGraph(&s);
-    var prng = std.Random.DefaultPrng.init(@intCast(nowMicros(s.io)));
+    var prng = std.Random.DefaultPrng.init(@intCast(core.time.now(s.io)));
     const since: i64 = 4_102_444_800_000_000 + @as(i64, prng.random().intRangeAtMost(i64, 0, 300 * 365 * day));
 
     const ledger = s.ledger();
@@ -571,9 +567,9 @@ test "the ledger fills a missing graph id from the entry, then from the bound gr
     const entry_id = try enqueueNew(&s, g, note("ledger", "ledger entry", 1_000));
 
     const ledger = s.ledger();
-    try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .entry_id = entry_id, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = nowMicros(s.io) });
-    try testing.expectError(error.PG, ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = nowMicros(s.io) }));
+    try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .entry_id = entry_id, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = core.time.now(s.io) });
+    try testing.expectError(error.PG, ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = core.time.now(s.io) }));
     _ = s.sink(g);
-    try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = nowMicros(s.io) });
+    try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = core.time.now(s.io) });
     try testing.expectEqual(@as(i64, 2), try scalarI64(&s, "SELECT count(*) FROM llm_call WHERE graph_id = $1", .{gid}));
 }

@@ -167,7 +167,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
 
     var blast: rules.BlastRadius = .{ .used = invalidations.items.len + retractions.items.len };
     var new_facts: std.ArrayList(ChangeSet.NewFact) = .empty;
-    var active = try arena.alloc(bool, touched.facts.len);
+    const active = try arena.alloc(bool, touched.facts.len);
     for (touched.facts, 0..) |t, i| active[i] = t.active;
 
     for (cs.new_facts) |nf_in| {
@@ -192,7 +192,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
         var restated: ?resolve.CandidateFact = null;
         for (touched.facts, 0..) |t, i| {
             if (!active[i]) continue;
-            if (rules.sameCanonicalKey(key, try factKey(arena, t.fact))) {
+            if (rules.sameCanonicalKey(key, try t.fact.key(arena))) {
                 restated = t.fact;
                 break;
             }
@@ -227,8 +227,8 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
 
         for (touched.facts, 0..) |t, i| {
             if (!active[i]) continue;
-            if (rules.conflict(key, rule, try factKey(arena, t.fact)) == null) continue;
-            var old = oldFact(t.fact, nf.fact.graph_id);
+            if (rules.conflict(key, rule, try t.fact.key(arena)) == null) continue;
+            var old = t.fact.toFact(nf.fact.graph_id);
             var trial_new = nf.fact;
             switch (rules.resolveConflict(&old, &trial_new, .changed, commit_time, reference_time)) {
                 .none => {},
@@ -256,33 +256,6 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
     cs.evidence = evidence.items;
     cs.warnings = warnings.items;
     return .{ .possible_duplicates = dups.items };
-}
-
-fn factKey(arena: Allocator, c: resolve.CandidateFact) !rules.Key {
-    return .{
-        .subject = c.subject_id,
-        .relation = c.relation,
-        .qualifier = c.qualifier,
-        .object = if (c.object_id) |o| .{ .entity = o } else .{ .value = try core.text.norm(arena, c.object_value orelse "") },
-        .valid = .{ .lower = c.valid_lower, .upper = c.valid_upper },
-    };
-}
-
-fn oldFact(c: resolve.CandidateFact, graph_id: Id) core.Fact {
-    return .{
-        .id = c.id,
-        .graph_id = graph_id,
-        .subject_id = c.subject_id,
-        .relation = c.relation,
-        .qualifier = c.qualifier,
-        .object = if (c.object_id) |o| .{ .entity = o } else .{ .value = c.object_value orelse "" },
-        .text = c.text,
-        .scope = .project,
-        .valid = .{ .lower = c.valid_lower, .upper = c.valid_upper },
-        .known = .{},
-        .author = .agent,
-        .confidence = c.confidence,
-    };
 }
 
 const testing = std.testing;

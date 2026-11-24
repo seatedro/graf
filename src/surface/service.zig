@@ -192,7 +192,7 @@ pub const Service = struct {
             .project = if (in.scope == .global) null else in.project,
             .author = .user,
             .body = .{ .text = in.text },
-            .reference_time = try optTime(in.valid_from) orelse retrieve.time.now(s.io),
+            .reference_time = try optTime(in.valid_from) orelse core.time.now(s.io),
         };
         const id = switch (try sink.enqueue(&draft)) {
             .duplicate => return ok(arena, .{ .text = "Already remembered: an identical note is in memory.", .duplicate = true }),
@@ -352,7 +352,7 @@ fn isInputError(err: anyerror) bool {
 fn optTime(s: ?[]const u8) !?core.Micros {
     const t = s orelse return null;
     if (t.len == 0) return null;
-    return try retrieve.time.parseIso(t);
+    return try core.time.parseIso(t);
 }
 
 fn clampTokens(n: u32) u32 {

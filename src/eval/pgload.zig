@@ -302,13 +302,12 @@ test "loads a hand-built graph from Postgres and scores it" {
     try std.testing.expectEqual(@as(usize, 2), uses.evidence.len);
     try std.testing.expectEqualStrings("e01", uses.evidence[0].entry);
     try std.testing.expectEqual(core.types.EvidenceKind.restated, uses.evidence[1].kind);
-    const t = @import("time.zig");
-    try std.testing.expectEqual(try t.parseRfc3339("2026-11-18T18:00:00Z"), uses.valid.lower.?);
+    try std.testing.expectEqual(try core.time.parseRfc3339("2026-11-18T18:00:00Z"), uses.valid.lower.?);
     try std.testing.expect(uses.valid.upper == null);
 
     const hollis = state.facts[2];
     try std.testing.expectEqual(core.types.EndKind.changed, hollis.end_kind.?);
-    try std.testing.expectEqual(try t.parseRfc3339("2026-11-20T17:00:00Z"), hollis.valid.upper.?);
+    try std.testing.expectEqual(try core.time.parseRfc3339("2026-11-20T17:00:00Z"), hollis.valid.upper.?);
     const ver = state.facts[1];
     try std.testing.expect(ver.valid.lower == null and ver.valid.upper == null);
     try std.testing.expect(ver.known.upper != null);

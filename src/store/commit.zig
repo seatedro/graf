@@ -229,7 +229,7 @@ fn insertEntities(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i6
             try alias_ids.append(a, ids[i]);
             try alias_texts.append(a, e.name);
             for (e.aliases) |alias| {
-                try alias_norms.append(a, try store.normalizeAlias(a, alias));
+                try alias_norms.append(a, try core.text.norm(a, alias));
                 try alias_ids.append(a, ids[i]);
                 try alias_texts.append(a, alias);
             }
@@ -244,12 +244,10 @@ fn insertEntities(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i6
         try touched.appendSlice(a, ids);
     }
 
-    if (comptime @hasField(core.ChangeSet, "new_aliases")) {
-        for (cs.new_aliases) |*al| {
-            try alias_norms.append(a, al.norm);
-            try alias_ids.append(a, &al.entity_id.bytes);
-            try alias_texts.append(a, al.alias);
-        }
+    for (cs.new_aliases) |*al| {
+        try alias_norms.append(a, al.norm);
+        try alias_ids.append(a, &al.entity_id.bytes);
+        try alias_texts.append(a, al.alias);
     }
 
     if (alias_norms.items.len != 0) {

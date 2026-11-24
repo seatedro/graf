@@ -3,7 +3,6 @@ const core = @import("core");
 const store = @import("store");
 const db = @import("db.zig");
 const rank = @import("rank.zig");
-const time = @import("time.zig");
 const mod = @import("mod.zig");
 
 const as_of = "coalesce($4::timestamptz, now())";
@@ -99,7 +98,7 @@ pub const Options = struct {
 };
 
 pub fn run(e: *mod.Engine, arena: std.mem.Allocator, params: mod.SearchParams, opts: Options) !mod.SearchResult {
-    const qnorm = try store.normalizeAlias(arena, params.query);
+    const qnorm = try core.text.norm(arena, params.query);
     const qemb: ?[]const f32 = if (!opts.embed) null else if (e.embedder) |em| em.embedQuery(arena, params.query) catch |err| blk: {
         db.log.warn("query embedding failed, searching without vectors: {s}", .{@errorName(err)});
         break :blk null;
@@ -159,7 +158,7 @@ pub fn run(e: *mod.Engine, arena: std.mem.Allocator, params: mod.SearchParams, o
         }
         try conn.commit();
     }
-    if (rows.items.len == 0) as_of_us = params.as_of orelse time.now(e.io);
+    if (rows.items.len == 0) as_of_us = params.as_of orelse core.time.now(e.io);
 
     const cands = try arena.alloc(rank.Candidate, rows.items.len);
     for (rows.items, cands) |r, *c| {

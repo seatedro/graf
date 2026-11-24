@@ -6,12 +6,13 @@ const ingest = @import("mod.zig");
 const pipeline = @import("pipeline.zig");
 const postgres = @import("postgres.zig");
 const fakes = @import("testing.zig");
-const time = @import("time.zig");
 
 const testing = std.testing;
 const Replay = llm.transport.Replay;
 const Driver = pipeline.Driver(fakes.MemoryBackend, postgres.ClientModel);
 const PgDriver = pipeline.Driver(postgres.PgBackend, postgres.ClientModel);
+const at = fakes.at;
+const turns = fakes.turns;
 
 const dims = 8;
 
@@ -52,12 +53,6 @@ fn embeddingsOk(comptime n: usize, comptime width: usize) Replay.Step {
 const context_overflow: Replay.Step = .{ .capture = "HTTP/1.1 400 Bad Request\ncontent-type: application/json\n\n" ++
     "{\"error\":{\"message\":\"Your input exceeds the context window of this model.\",\"type\":\"invalid_request_error\",\"param\":\"input\",\"code\":\"context_length_exceeded\"}}" };
 
-const relay_hollis =
-    \\{"skip":null,"entities":[{"ref":"n1","name":"Relay","type":"software","aliases":[],"description":"Request gateway."},{"ref":"n2","name":"Hollis","type":"person","aliases":[],"description":"Engineer."}],
-    \\"facts":[{"subject":"n1","relation":"has_oncall","qualifier":null,"object":"n2","value":null,"text":"Hollis is on call for Relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"agent","quote":"Hollis is currently on call for Relay."},
-    \\{"subject":"n1","relation":"located_at","qualifier":null,"object":null,"value":"infra/relay","text":"Relay lives under infra/relay.","rationale":null,"valid_from":null,"valid_to":null,"time_basis":"reference","scope":"project","author":"agent","quote":"Relay lives under infra/relay"}],"new_relations":[]}
-;
-
 const Harness = struct {
     cfg: core.Config,
     replay: Replay,
@@ -93,16 +88,12 @@ const Harness = struct {
     }
 };
 
-fn turns(comptime text: []const u8) []const core.Turn {
-    return &.{.{ .role = .user, .text = text }};
-}
-
 test "an entry runs through the real client into the committed graph" {
     var h: Harness = undefined;
-    try h.init(&.{ comptime responsesOk(relay_hollis), comptime embeddingsOk(4, dims) });
+    try h.init(&.{ comptime responsesOk(fakes.relay_hollis), comptime embeddingsOk(4, dims) });
     defer h.deinit();
 
-    const entry = try h.backend.add("session-a", try time.parse("2026-11-19T22:00:00Z"), "brackwater/monorepo", turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
+    const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), "brackwater/monorepo", turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(core.types.EntryStatus.committed, h.backend.row(entry).status);
     try testing.expectEqual(@as(usize, 2), h.backend.entities.items.len);
@@ -117,7 +108,7 @@ test "a context overflow from the provider splits the entry" {
     try h.init(&.{context_overflow});
     defer h.deinit();
 
-    const entry = try h.backend.add("session-a", try time.parse("2026-11-19T22:00:00Z"), null, &.{
+    const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, &.{
         .{ .role = .user, .text = "first half of a very long session" },
         .{ .role = .assistant, .text = "second half of a very long session" },
     });
@@ -134,19 +125,18 @@ test "an entry commits through the store into Postgres" {
     const arena = arena_state.allocator();
 
     var h: Harness = undefined;
-    try h.init(&.{ comptime responsesOk(relay_hollis), comptime embeddingsOk(4, store.embedding_dims) });
+    try h.init(&.{ comptime responsesOk(fakes.relay_hollis), comptime embeddingsOk(4, store.embedding_dims) });
     defer h.deinit();
     h.cfg.embed.dimensions = store.embedding_dims;
 
-    var name_buf: [36]u8 = undefined;
-    const graph = try s.ensureGraph(postgres.idText(core.Id.v7(testing.io), &name_buf));
+    const graph = try store.testing.freshGraph(&s);
     const draft: core.EntryDraft = .{
         .source = .{ .harness = .cli, .external_id = "session-a", .project = "brackwater/monorepo" },
         .kind = .turns,
         .project = "brackwater/monorepo",
         .author = .user,
         .body = .{ .turns = turns("Relay lives under infra/relay. Hollis is currently on call for Relay.") },
-        .reference_time = try time.parse("2026-11-19T22:00:00Z"),
+        .reference_time = at("2026-11-19T22:00:00Z"),
     };
     const entry = switch (try s.enqueue(graph, &draft)) {
         .queued => |id| id,
@@ -164,7 +154,7 @@ test "an entry commits through the store into Postgres" {
     defer conn.release();
     var gbuf: [36]u8 = undefined;
     var ebuf: [36]u8 = undefined;
-    const g = postgres.idText(graph, &gbuf);
+    const g = graph.toString(&gbuf);
     const Counts = struct { status: []const u8, entities: i64, facts: i64, evidence: i64, commits: i64, relay_since_summary: i64 };
     const got = try postgres.jsonRow(Counts, arena, conn,
         \\SELECT json_build_object(
@@ -175,7 +165,7 @@ test "an entry commits through the store into Postgres" {
         \\  'commits', (SELECT count(*) FROM commit_log WHERE graph_id = $1::uuid AND entry_id = $2::uuid),
         \\  'relay_since_summary', (SELECT facts_since_summary FROM entity WHERE graph_id = $1::uuid AND norm = 'relay')
         \\)::text
-    , .{ g, postgres.idText(entry, &ebuf) });
+    , .{ g, entry.toString(&ebuf) });
     try testing.expectEqualStrings("committed", got.status);
     try testing.expectEqual(@as(i64, 2), got.entities);
     try testing.expectEqual(@as(i64, 2), got.facts);

@@ -8,7 +8,6 @@ const mod = @import("mod.zig");
 const fixtures = @import("fixtures.zig");
 const score = @import("score.zig");
 const pgload = @import("pgload.zig");
-const time = @import("time.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -37,7 +36,7 @@ pub fn toDraft(ep: mod.EvalEntry) !core.EntryDraft {
         .project = ep.project,
         .author = ep.author,
         .body = .{ .turns = ep.turns },
-        .reference_time = try time.parseRfc3339(ep.reference_time),
+        .reference_time = try core.time.parseRfc3339(ep.reference_time),
     };
 }
 
@@ -174,7 +173,7 @@ fn runQueries(arena: Allocator, engine: *retrieve.Engine, suite: *const fixtures
         const params: retrieve.SearchParams = .{
             .query = q.query,
             .project = q.project,
-            .as_of = if (q.as_of) |v| try time.parseRfc3339(v) else null,
+            .as_of = if (q.as_of) |v| try core.time.parseRfc3339(v) else null,
             .max_tokens = 1500,
         };
         const found = engine.search(arena, params) catch |err| {
@@ -290,7 +289,7 @@ test "entries convert to drafts with their source key and reference time" {
     try std.testing.expectEqualStrings("capy-thread-0012", draft.source.?.external_id);
     try std.testing.expectEqualStrings("github.com/tidewright/brinelog", draft.project.?);
     try std.testing.expectEqual(@as(i32, 1), draft.seq_in_source);
-    try std.testing.expectEqual(try time.parseRfc3339("2026-11-19T20:15:00Z"), draft.reference_time);
+    try std.testing.expectEqual(try core.time.parseRfc3339("2026-11-19T20:15:00Z"), draft.reference_time);
     try std.testing.expectEqual(@as(usize, 2), draft.body.turns.len);
 }
 

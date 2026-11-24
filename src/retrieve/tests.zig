@@ -2,7 +2,6 @@ const std = @import("std");
 const core = @import("core");
 const store = @import("store");
 const mod = @import("mod.zig");
-const time = @import("time.zig");
 const render = @import("render.zig");
 
 const day = std.time.us_per_day;
@@ -127,7 +126,7 @@ pub const Seeder = struct {
         for (aliases) |a| {
             var buf: [1024]u8 = undefined;
             var fba = std.heap.FixedBufferAllocator.init(&buf);
-            const n = try store.normalizeAlias(fba.allocator(), a);
+            const n = try core.text.norm(fba.allocator(), a);
             try sd.exec("INSERT INTO entity_alias (graph_id, norm, entity_id, alias) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING", .{ &sd.graph.bytes, n, &id.bytes, a });
         }
         return id;
@@ -171,7 +170,7 @@ pub fn seed(s: *store.Store, io: std.Io) !Seed {
     var name_buf: [36]u8 = undefined;
     _ = try s.pool.exec("INSERT INTO graph (id, name) VALUES ($1, $2)", .{ &graph.bytes, graph.toString(&name_buf) });
     var sd: Seeder = .{ .s = s, .io = io, .graph = graph };
-    const now = time.now(io);
+    const now = core.time.now(io);
     var r: Seed = .{
         .graph = graph,
         .now = now,
