@@ -15,6 +15,7 @@ pub const Config = struct {
     ingest: Ingest = .{},
     serve: Serve = .{},
     capture: Capture = .{},
+    sources: Sources = .{},
     eval: Eval = .{},
 
     pub const Database = struct {
@@ -77,6 +78,22 @@ pub const Config = struct {
         exclude_paths: []const []const u8 = &.{},
     };
 
+    pub const Sources = struct {
+        capy: Capy = .{},
+
+        pub const Capy = struct {
+            enabled: bool = false,
+            base_url: []const u8 = "https://api.capy.ai/api/v1",
+            api_key: []const u8 = "",
+            projects: []const []const u8 = &.{},
+            exclude_projects: []const []const u8 = &.{},
+            exclude_threads: []const []const u8 = &.{},
+            statuses: []const []const u8 = &.{},
+            discover_every_s: u32 = 60,
+            max_streams: u32 = 16,
+        };
+    };
+
     pub const Eval = struct {
         judge_model: []const u8 = "",
         judge_route: []const u8 = "",
@@ -86,6 +103,10 @@ pub const Config = struct {
 
     pub fn decisionEnabled(c: *const Config) bool {
         return c.decision.base_url.len > 0;
+    }
+
+    pub fn capyEnabled(c: *const Config) bool {
+        return c.sources.capy.enabled and c.sources.capy.api_key.len > 0;
     }
 };
 
@@ -104,6 +125,8 @@ pub const env_vars = [_]struct { []const u8, []const u8, []const u8 }{
     .{ "GRAF_EVAL_JUDGE_ROUTE", "eval", "judge_route" },
     .{ "GRAF_EVAL_JUDGE_BASE_URL", "eval", "judge_base_url" },
     .{ "GRAF_EVAL_JUDGE_API_KEY", "eval", "judge_api_key" },
+    .{ "GRAF_CAPY_API_KEY", "sources.capy", "api_key" },
+    .{ "GRAF_CAPY_BASE_URL", "sources.capy", "base_url" },
 };
 
 pub const config_path_env = "GRAF_CONFIG";
@@ -202,6 +225,8 @@ pub fn applyEnv(cfg: *Config, env: *const Environ.Map) void {
         if (env.get(ev[0])) |value| if (value.len > 0) {
             if (comptime ev[1].len == 0) {
                 @field(cfg, ev[2]) = value;
+            } else if (comptime std.mem.indexOfScalar(u8, ev[1], '.')) |dot| {
+                @field(@field(@field(cfg, ev[1][0..dot]), ev[1][dot + 1 ..]), ev[2]) = value;
             } else {
                 @field(@field(cfg, ev[1]), ev[2]) = value;
             }
@@ -329,6 +354,42 @@ test "file values, then env overrides, then inheritance" {
     try std.testing.expect(std.mem.indexOf(u8, text, ":pw@") == null);
     try std.testing.expect(std.mem.indexOf(u8, text, "postgres://graf:***@db.example.test:5432/graf") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "[llm]") != null);
+}
+
+test "capy source section parses, takes env overrides and masks its key" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var diag: toml.Diagnostic = .{};
+    var cfg = try parse(arena,
+        \\[sources.capy]
+        \\enabled = true
+        \\projects = ["proj-a", "WID"]
+        \\exclude_threads = ["jam_secret"]
+        \\discover_every_s = 30
+        \\
+    , &diag);
+    try std.testing.expect(cfg.sources.capy.enabled);
+    try std.testing.expect(!cfg.capyEnabled());
+    try std.testing.expectEqual(@as(u32, 30), cfg.sources.capy.discover_every_s);
+    try std.testing.expectEqualStrings("WID", cfg.sources.capy.projects[1]);
+    try std.testing.expectEqualStrings("https://api.capy.ai/api/v1", cfg.sources.capy.base_url);
+
+    var env = Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("GRAF_CAPY_API_KEY", "capy_k-789");
+    try env.put("GRAF_CAPY_BASE_URL", "http://127.0.0.1:9/api/v1");
+    applyEnv(&cfg, &env);
+    try std.testing.expect(cfg.capyEnabled());
+    try std.testing.expectEqualStrings("http://127.0.0.1:9/api/v1", cfg.sources.capy.base_url);
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try writeMasked(&cfg, &out.writer);
+    const text = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, text, "capy_k-789") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "[sources.capy]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "api_key = \"<set>\"") != null);
 }
 
 test "load reads the file named by GRAF_CONFIG and reports a missing explicit file" {
