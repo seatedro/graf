@@ -1,8 +1,20 @@
 const std = @import("std");
 const core = @import("core");
-const store = @import("store");
-const ingest = @import("ingest");
-const retrieve = @import("retrieve");
+
+pub const time = @import("time.zig");
+pub const fixtures = @import("fixtures.zig");
+pub const score = @import("score.zig");
+pub const pgload = @import("pgload.zig");
+pub const runner = @import("runner.zig");
+pub const cli = @import("cli.zig");
+
+pub const Suite = fixtures.Suite;
+pub const GraphState = score.GraphState;
+pub const Report = score.Report;
+pub const RunOptions = runner.RunOptions;
+pub const run = runner.run;
+pub const loadGraphState = pgload.loadGraphState;
+pub const main = cli.main;
 
 pub const EvalEpisode = struct {
     id: []const u8,
@@ -34,51 +46,95 @@ pub const gates = struct {
 };
 
 pub const Metrics = struct {
-    entity_f1: f64 = 0,
-    merge_accuracy: f64 = 0,
-    cross_type_merges: u32 = 0,
-    fact_precision: f64 = 0,
-    fact_recall: f64 = 0,
-    invalidation_f1: f64 = 0,
-    temporal_accuracy: f64 = 0,
-    secret_leaks: u32 = 0,
-    retrieval_recall_at_5: f64 = 0,
-    calls_per_episode: f64 = 0,
-    cost_per_episode_usd: f64 = 0,
-    crash_resume_pass_rate: f64 = 0,
+    entity_f1: ?f64 = null,
+    merge_accuracy: ?f64 = null,
+    cross_type_merges: ?u32 = null,
+    fact_precision: ?f64 = null,
+    fact_recall: ?f64 = null,
+    invalidation_f1: ?f64 = null,
+    temporal_accuracy: ?f64 = null,
+    secret_leaks: ?u32 = null,
+    retrieval_recall_at_5: ?f64 = null,
+    calls_per_episode: ?f64 = null,
+    cost_per_episode_usd: ?f64 = null,
+    crash_resume_pass_rate: ?f64 = null,
+
+    pub fn gateList(m: Metrics) [12]Gate {
+        return .{
+            .{ .metric = "entity_f1", .value = m.entity_f1, .bound = .at_least, .limit = gates.entity_f1_min, .unit = .ratio },
+            .{ .metric = "merge_accuracy", .value = m.merge_accuracy, .bound = .at_least, .limit = gates.merge_accuracy_min, .unit = .ratio },
+            .{ .metric = "cross_type_merges", .value = count(m.cross_type_merges), .bound = .at_most, .limit = gates.cross_type_merges_max, .unit = .count },
+            .{ .metric = "fact_precision", .value = m.fact_precision, .bound = .at_least, .limit = gates.fact_precision_min, .unit = .ratio },
+            .{ .metric = "fact_recall", .value = m.fact_recall, .bound = .at_least, .limit = gates.fact_recall_min, .unit = .ratio },
+            .{ .metric = "invalidation_f1", .value = m.invalidation_f1, .bound = .at_least, .limit = gates.invalidation_f1_min, .unit = .ratio },
+            .{ .metric = "temporal_accuracy", .value = m.temporal_accuracy, .bound = .at_least, .limit = gates.temporal_accuracy_min, .unit = .ratio },
+            .{ .metric = "secret_leaks", .value = count(m.secret_leaks), .bound = .at_most, .limit = gates.secret_leaks_max, .unit = .count },
+            .{ .metric = "retrieval_recall_at_5", .value = m.retrieval_recall_at_5, .bound = .at_least, .limit = gates.retrieval_recall_at_5_min, .unit = .ratio },
+            .{ .metric = "calls_per_episode", .value = m.calls_per_episode, .bound = .at_most, .limit = gates.calls_per_episode_max, .unit = .calls },
+            .{ .metric = "cost_per_episode_usd", .value = m.cost_per_episode_usd, .bound = .at_most, .limit = gates.cost_per_episode_max_usd, .unit = .usd },
+            .{ .metric = "crash_resume_pass_rate", .value = m.crash_resume_pass_rate, .bound = .at_least, .limit = gates.crash_resume_pass_rate_min, .unit = .ratio },
+        };
+    }
 
     pub fn passes(m: Metrics) bool {
-        return m.entity_f1 >= gates.entity_f1_min and
-            m.merge_accuracy >= gates.merge_accuracy_min and
-            m.cross_type_merges <= gates.cross_type_merges_max and
-            m.fact_precision >= gates.fact_precision_min and
-            m.fact_recall >= gates.fact_recall_min and
-            m.invalidation_f1 >= gates.invalidation_f1_min and
-            m.temporal_accuracy >= gates.temporal_accuracy_min and
-            m.secret_leaks <= gates.secret_leaks_max and
-            m.retrieval_recall_at_5 >= gates.retrieval_recall_at_5_min and
-            m.calls_per_episode <= gates.calls_per_episode_max and
-            m.cost_per_episode_usd <= gates.cost_per_episode_max_usd and
-            m.crash_resume_pass_rate >= gates.crash_resume_pass_rate_min;
+        for (m.gateList()) |g| if (g.status() != .pass) return false;
+        return true;
+    }
+
+    fn count(v: ?u32) ?f64 {
+        return if (v) |n| @floatFromInt(n) else null;
     }
 };
 
-pub const RunOptions = struct {
-    suite_dir: []const u8 = "evals",
-};
+pub const Gate = struct {
+    metric: []const u8,
+    value: ?f64,
+    bound: Bound,
+    limit: f64,
+    unit: Unit,
 
-pub fn run(arena: std.mem.Allocator, io: std.Io, config: *const core.Config, opts: RunOptions) !Metrics {
-    _ = arena;
-    _ = io;
-    _ = config;
-    _ = opts;
-    return core.NotImplemented;
-}
+    pub const Bound = enum { at_least, at_most };
+    pub const Unit = enum { ratio, count, calls, usd };
+    pub const Status = enum { pass, fail, unmeasured };
+
+    pub fn status(g: Gate) Status {
+        const v = g.value orelse return .unmeasured;
+        if (std.math.isNan(v)) return .fail;
+        const ok = switch (g.bound) {
+            .at_least => v >= g.limit,
+            .at_most => v <= g.limit,
+        };
+        return if (ok) .pass else .fail;
+    }
+};
 
 test {
     std.testing.refAllDecls(@This());
 }
 
-test "an all-zero scorecard fails the gates" {
+test "an unmeasured scorecard fails the gates" {
     try std.testing.expect(!(Metrics{}).passes());
+}
+
+test "every gate must be measured and within bounds to pass" {
+    var m: Metrics = .{
+        .entity_f1 = 0.9,
+        .merge_accuracy = 1,
+        .cross_type_merges = 0,
+        .fact_precision = 0.9,
+        .fact_recall = 0.85,
+        .invalidation_f1 = 1,
+        .temporal_accuracy = 1,
+        .secret_leaks = 0,
+        .retrieval_recall_at_5 = 0.9,
+        .calls_per_episode = 2.0,
+        .cost_per_episode_usd = 0.02,
+        .crash_resume_pass_rate = 1,
+    };
+    try std.testing.expect(m.passes());
+    m.crash_resume_pass_rate = null;
+    try std.testing.expect(!m.passes());
+    m.crash_resume_pass_rate = 1;
+    m.secret_leaks = 1;
+    try std.testing.expect(!m.passes());
 }
