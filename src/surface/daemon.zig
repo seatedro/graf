@@ -8,6 +8,7 @@ const retrieve = @import("retrieve");
 const http = @import("http.zig");
 const service = @import("service.zig");
 const edge = @import("edge.zig");
+const limits = @import("limits.zig");
 const Upstream = @import("upstream.zig").Upstream;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
@@ -132,6 +133,7 @@ fn replayHookSpool(cap: *capture.Capture) void {
 
 pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: *const core.Config, opts: Options) !void {
     try checkExposure(config);
+    limits.raiseOpenFiles();
 
     var rt: Runtime = undefined;
     try rt.open(gpa, io, env, config, .{ .pool_size = @intCast(@max(8, config.ingest.workers + 4)), .start_postgres = true });
@@ -184,6 +186,7 @@ fn announceUpstream(up: *Upstream) Io.Cancelable!void {
 
 pub fn runEdge(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: *const core.Config, opts: Options) !void {
     try checkExposure(config);
+    limits.raiseOpenFiles();
 
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();

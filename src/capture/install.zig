@@ -7,8 +7,10 @@ const Environ = std.process.Environ;
 const Io = std.Io;
 const Dir = std.Io.Dir;
 
+pub const default_harnesses = [_]core.Harness{ .@"claude-code", .codex, .pi, .fx };
+
 pub const Options = struct {
-    harnesses: []const core.Harness = &.{ .@"claude-code", .codex, .pi, .fx },
+    harnesses: []const core.Harness = &default_harnesses,
     command: []const u8 = "graf",
     dry_run: bool = false,
 };
@@ -81,6 +83,31 @@ pub fn install(arena: Allocator, io: Io, env: *const Environ.Map, opts: Options,
     }
 
     return .{ .dry_run = opts.dry_run, .files = files.items, .skipped = skipped.items };
+}
+
+pub fn parseHarnesses(arena: Allocator, specs: []const []const u8) error{ UnknownHarness, OutOfMemory }![]const core.Harness {
+    if (specs.len == 0) return &default_harnesses;
+
+    var chosen: std.EnumSet(core.Harness) = .empty;
+    for (specs) |spec| {
+        var names = std.mem.tokenizeAny(u8, spec, ", ");
+        while (names.next()) |name| {
+            if (std.mem.eql(u8, name, "all")) {
+                for (default_harnesses) |h| chosen.insert(h);
+                continue;
+            }
+
+            const h = std.meta.stringToEnum(core.Harness, name) orelse return error.UnknownHarness;
+            if (std.mem.indexOfScalar(core.Harness, &default_harnesses, h) == null) return error.UnknownHarness;
+            chosen.insert(h);
+        }
+    }
+
+    if (chosen.count() == 0) return error.UnknownHarness;
+
+    var list: std.ArrayList(core.Harness) = .empty;
+    for (default_harnesses) |h| if (chosen.contains(h)) try list.append(arena, h);
+    return list.items;
 }
 
 fn envDir(arena: Allocator, env: *const Environ.Map, name: []const u8, home: []const u8, fallback: []const []const u8) Allocator.Error![]const u8 {
@@ -316,18 +343,70 @@ fn ensureHook(arena: Allocator, text: []const u8, harness: []const u8, event: Ho
 }
 
 fn ensureCodexToml(arena: Allocator, text: []const u8, command: []const u8, changes: *std.ArrayList([]const u8)) Allocator.Error![]const u8 {
+    const desired = try std.fmt.allocPrint(arena, "{f}", .{std.json.fmt(command, .{})});
+    const literal = try std.mem.concat(arena, u8, &.{ "'", command, "'" });
+    var header_end: ?usize = null;
+
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |raw| {
-        var line = std.mem.trim(u8, raw, " \t\r");
-        if (std.mem.indexOfScalar(u8, line, '#')) |hash| line = std.mem.trimEnd(u8, line[0..hash], " \t");
-        if (line.len < 2 or line[0] != '[' or line[line.len - 1] != ']') continue;
-        const name = std.mem.trim(u8, line[1 .. line.len - 1], " \t");
-        if (std.mem.eql(u8, name, "mcp_servers.graf") or std.mem.eql(u8, name, "mcp_servers.\"graf\"")) return text;
+        const start = @intFromPtr(raw.ptr) - @intFromPtr(text.ptr);
+        if (tomlTableName(raw)) |name| {
+            if (header_end != null) break;
+            if (std.mem.eql(u8, name, "mcp_servers.graf") or std.mem.eql(u8, name, "mcp_servers.\"graf\"")) header_end = start + raw.len;
+            continue;
+        }
+
+        if (header_end == null) continue;
+        const value = tomlCommandValue(raw) orelse continue;
+        if (std.mem.eql(u8, value, desired) or std.mem.eql(u8, value, literal)) return text;
+
+        try changes.append(arena, "update [mcp_servers.graf] command");
+        const at = @intFromPtr(value.ptr) - @intFromPtr(text.ptr);
+        return std.mem.concat(arena, u8, &.{ text[0..at], desired, text[at + value.len ..] });
+    }
+
+    if (header_end) |at| {
+        try changes.append(arena, "add [mcp_servers.graf] command");
+        return std.mem.concat(arena, u8, &.{ text[0..at], "\ncommand = ", desired, text[at..] });
     }
 
     try changes.append(arena, "add [mcp_servers.graf]");
     const sep: []const u8 = if (text.len == 0) "" else if (std.mem.endsWith(u8, text, "\n")) "\n" else "\n\n";
-    return std.fmt.allocPrint(arena, "{s}{s}[mcp_servers.graf]\ncommand = {f}\nargs = [\"mcp\"]\n", .{ text, sep, std.json.fmt(command, .{}) });
+    return std.fmt.allocPrint(arena, "{s}{s}[mcp_servers.graf]\ncommand = {s}\nargs = [\"mcp\"]\n", .{ text, sep, desired });
+}
+
+fn tomlTableName(raw: []const u8) ?[]const u8 {
+    var line = std.mem.trim(u8, raw, " \t\r");
+    if (std.mem.indexOfScalar(u8, line, '#')) |hash| line = std.mem.trimEnd(u8, line[0..hash], " \t");
+    if (line.len < 2 or line[0] != '[' or line[line.len - 1] != ']') return null;
+    return std.mem.trim(u8, line[1 .. line.len - 1], " \t");
+}
+
+fn tomlCommandValue(raw: []const u8) ?[]const u8 {
+    const line = std.mem.trimStart(u8, raw, " \t");
+    const key_len: usize = for ([_][]const u8{ "command", "\"command\"", "'command'" }) |key| {
+        if (std.mem.startsWith(u8, line, key)) break key.len;
+    } else return null;
+
+    const after_key = std.mem.trimStart(u8, line[key_len..], " \t");
+    if (after_key.len == 0 or after_key[0] != '=') return null;
+    const value = std.mem.trimStart(u8, after_key[1..], " \t");
+    if (value.len == 0) return null;
+
+    const len: usize = switch (value[0]) {
+        '\'' => if (std.mem.indexOfScalarPos(u8, value, 1, '\'')) |close| close + 1 else value.len,
+        '"' => blk: {
+            var i: usize = 1;
+            while (i < value.len) : (i += 1) switch (value[i]) {
+                '\\' => i += 1,
+                '"' => break :blk i + 1,
+                else => {},
+            };
+            break :blk value.len;
+        },
+        else => std.mem.trimEnd(u8, value[0 .. std.mem.indexOfScalar(u8, value, '#') orelse value.len], " \t\r").len,
+    };
+    return value[0..@min(len, value.len)];
 }
 
 fn describe(out: *std.Io.Writer, dry_run: bool, r: FileReport, home: []const u8) !void {
@@ -670,6 +749,87 @@ test "an env override outside home joins the discovered profiles" {
     try testing.expect(h.exists(".claude.json"));
     try testing.expect(h.exists("elsewhere/codex/hooks.json"));
     try testing.expect(h.exists(".codex/hooks.json"));
+}
+
+test "codex config.toml follows a changed --command without touching the rest of the table" {
+    var h: Home = undefined;
+    try h.init();
+    defer h.deinit();
+
+    const bare =
+        \\model = "some-model"
+        \\
+        \\[mcp_servers.graf]
+        \\command = "graf"   # managed by graf install
+        \\args = ["mcp"]
+        \\
+        \\[mcp_servers.graf.env]
+        \\GRAF_PROJECT = "brackwater"
+        \\
+    ;
+    try h.write(".codex/config.toml", bare);
+
+    const moved = try h.run(.{ .harnesses = &.{.codex}, .command = "/opt/brackwater tools/graf" });
+    try testing.expectEqual(Action.update, moved.files[0].action);
+    try testing.expectEqualStrings("update [mcp_servers.graf] command", moved.files[0].changes[0]);
+    try testing.expectEqualStrings(
+        \\model = "some-model"
+        \\
+        \\[mcp_servers.graf]
+        \\command = "/opt/brackwater tools/graf"   # managed by graf install
+        \\args = ["mcp"]
+        \\
+        \\[mcp_servers.graf.env]
+        \\GRAF_PROJECT = "brackwater"
+        \\
+    , try h.read(".codex/config.toml"));
+    try testing.expectEqualStrings(bare, try h.read(".codex/config.toml.bak"));
+
+    const again = try h.run(.{ .harnesses = &.{.codex}, .command = "/opt/brackwater tools/graf" });
+    try testing.expectEqual(Action.unchanged, again.files[0].action);
+}
+
+test "codex config.toml literal strings, quoted keys and a missing command" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var changes: std.ArrayList([]const u8) = .empty;
+
+    const literal = "[mcp_servers.graf]\ncommand = '/usr/local/bin/graf'\nargs = [\"mcp\"]\n";
+    try testing.expectEqualStrings(literal, try ensureCodexToml(arena, literal, "/usr/local/bin/graf", &changes));
+    try testing.expectEqual(@as(usize, 0), changes.items.len);
+
+    try testing.expectEqualStrings(
+        "[mcp_servers.\"graf\"]\n\"command\" = \"/usr/local/bin/graf\"\n",
+        try ensureCodexToml(arena, "[mcp_servers.\"graf\"]\n\"command\" = 'graf'\n", "/usr/local/bin/graf", &changes),
+    );
+
+    try testing.expectEqualStrings(
+        "[mcp_servers.graf]\ncommand = \"graf\"\nargs = [\"mcp\"]\n\n[mcp_servers.other]\ncommand = \"other\"\n",
+        try ensureCodexToml(arena, "[mcp_servers.graf]\nargs = [\"mcp\"]\n\n[mcp_servers.other]\ncommand = \"other\"\n", "graf", &changes),
+    );
+    try testing.expectEqualStrings("add [mcp_servers.graf] command", changes.items[changes.items.len - 1]);
+
+    try testing.expectEqualStrings(
+        "[mcp_servers.other]\ncommand = \"graf\"\n\n[mcp_servers.graf]\ncommand = \"/bin/graf\"\n",
+        try ensureCodexToml(arena, "[mcp_servers.other]\ncommand = \"graf\"\n\n[mcp_servers.graf]\ncommand = \"graf\\\"\"\n", "/bin/graf", &changes),
+    );
+}
+
+test "harness flags repeat, take comma lists and dedupe in install order" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try testing.expectEqualSlices(core.Harness, &default_harnesses, try parseHarnesses(arena, &.{}));
+    try testing.expectEqualSlices(core.Harness, &.{ .@"claude-code", .codex, .pi }, try parseHarnesses(arena, &.{ "pi", "codex", "claude-code" }));
+    try testing.expectEqualSlices(core.Harness, &.{ .@"claude-code", .codex, .pi }, try parseHarnesses(arena, &.{"claude-code,codex,pi"}));
+    try testing.expectEqualSlices(core.Harness, &.{ .codex, .fx }, try parseHarnesses(arena, &.{ "fx, codex", "codex" }));
+    try testing.expectEqualSlices(core.Harness, &default_harnesses, try parseHarnesses(arena, &.{ "codex", "all" }));
+
+    try testing.expectError(error.UnknownHarness, parseHarnesses(arena, &.{"claude-code,cursor"}));
+    try testing.expectError(error.UnknownHarness, parseHarnesses(arena, &.{"capy"}));
+    try testing.expectError(error.UnknownHarness, parseHarnesses(arena, &.{","}));
 }
 
 test {
