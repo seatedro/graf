@@ -1,7 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 
-pub const Op = enum { search, entity, remember, forget, episodes, brief, flush, warm, recall };
+pub const Op = enum { search, entity, remember, forget, entries, brief, flush, warm, recall };
 
 pub const Request = struct {
     op: Op,

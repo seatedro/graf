@@ -113,7 +113,7 @@ pub const Call = struct {
 
 pub fn route(arena: Allocator, req: api.Request) !Call {
     return switch (req.op) {
-        .episodes => .{ .method = .POST, .path = "/v1/episodes", .body = req.body },
+        .entries => .{ .method = .POST, .path = "/v1/entries", .body = req.body },
         .search => .{ .method = .POST, .path = "/v1/search", .body = req.body },
         .entity => .{ .method = .POST, .path = "/v1/entity", .body = req.body },
         .remember => .{ .method = .POST, .path = "/v1/remember", .body = req.body },
@@ -266,7 +266,7 @@ test "client handler round-trips every request through the daemon" {
         .{ .op = .entity, .body = "{\"name_or_id\":\"acme\"}" },
         .{ .op = .remember, .body = "{\"text\":\"We deploy on Fridays.\"}" },
         .{ .op = .forget, .body = "{\"fact_id\":\"00000000-0000-0000-0000-000000000001\"}" },
-        .{ .op = .episodes, .body = "{\"harness\":\"cli\",\"text\":\"hi\"}" },
+        .{ .op = .entries, .body = "{\"harness\":\"cli\",\"text\":\"hi\"}" },
         .{ .op = .flush, .body = "{\"harness\":\"cli\",\"session_id\":\"s\",\"transcript_path\":\"/t\",\"cwd\":\"/w\"}" },
         .{ .op = .brief, .body = "{\"project\":\"acme web/caf\u{e9}\"}" },
         .{ .op = .brief },

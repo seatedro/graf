@@ -215,7 +215,7 @@ const Fixture = struct {
     engine: mod.Engine = undefined,
 
     fn init(f: *Fixture) !void {
-        f.s = try store.testing.open();
+        f.* = .{ .s = try store.testing.open(), .seed = undefined };
         errdefer f.s.close();
         f.seed = try seed(&f.s, std.testing.io);
         f.engine = .init(std.testing.allocator, std.testing.io, &f.s, &f.config, f.seed.graph, .{ .embedder = f.embedder.embedder() });

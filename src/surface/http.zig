@@ -28,7 +28,7 @@ const Route = struct { method: std.http.Method, endpoint: Endpoint };
 const fixed_routes = [_]struct { path: []const u8, route: Route }{
     .{ .path = "/v1/health", .route = .{ .method = .GET, .endpoint = .health } },
     .{ .path = "/mcp", .route = .{ .method = .POST, .endpoint = .mcp } },
-    .{ .path = "/v1/episodes", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .episodes } } } },
+    .{ .path = "/v1/entries", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .entries } } } },
     .{ .path = "/v1/search", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .search } } } },
     .{ .path = "/v1/entity", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .entity } } } },
     .{ .path = "/v1/remember", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .remember } } } },
@@ -373,7 +373,7 @@ test "http routes over tcp and unix socket" {
     };
 
     const posts = [_]struct { path: []const u8, op: api.Op }{
-        .{ .path = "/v1/episodes", .op = .episodes },
+        .{ .path = "/v1/entries", .op = .entries },
         .{ .path = "/v1/search", .op = .search },
         .{ .path = "/v1/entity", .op = .entity },
         .{ .path = "/v1/remember", .op = .remember },

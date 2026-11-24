@@ -12,7 +12,9 @@ const search_ = @import("search.zig");
 const entity_ = @import("entity.zig");
 const brief_ = @import("brief.zig");
 const recall_ = @import("recall.zig");
+const outcome_ = @import("outcome.zig");
 
+pub const testing = @import("tests.zig");
 pub const Hit = db.Hit;
 pub const render = render_.render;
 pub const renderEntity = render_.renderEntity;
@@ -20,6 +22,8 @@ pub const estimateTokens = render_.estimateTokens;
 pub const EntityResult = entity_.EntityResult;
 pub const ForgetResult = entity_.ForgetResult;
 pub const RecallCache = recall_.RecallCache;
+pub const EntryOutcome = outcome_.EntryOutcome;
+pub const ForgetTarget = entity_.ForgetTarget;
 
 pub const SearchParams = struct {
     query: []const u8,
@@ -176,6 +180,11 @@ pub const Engine = struct {
         return brief_.build(e, arena, project);
     }
 
+    /// Facts an entry stated, restated and ended once it committed; null for an unknown entry.
+    pub fn entryOutcome(e: *Engine, arena: std.mem.Allocator, entry_id: core.Id) !?EntryOutcome {
+        return outcome_.get(e, arena, entry_id);
+    }
+
     /// Full search for the session's current topic, cached for `recall`.
     pub fn warm(e: *Engine, session_id: []const u8, prompt: []const u8, project: ?[]const u8) !void {
         return recall_.warm(e, session_id, prompt, project);
@@ -198,5 +207,6 @@ test {
     _ = entity_;
     _ = brief_;
     _ = recall_;
-    _ = @import("tests.zig");
+    _ = outcome_;
+    _ = testing;
 }
