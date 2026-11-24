@@ -9,7 +9,7 @@ pub const ExtractResult = struct {
     skip: ?[]const u8,
     entities: []const ExtractedEntity,
     facts: []const ExtractedFact,
-    new_predicates: []const ProposedPredicate,
+    new_relations: []const ProposedRelation,
 };
 
 pub const ExtractedEntity = struct {
@@ -22,7 +22,7 @@ pub const ExtractedEntity = struct {
 
 pub const ExtractedFact = struct {
     subject: []const u8,
-    predicate: []const u8,
+    relation: []const u8,
     qualifier: ?[]const u8,
     object: ?[]const u8,
     value: ?[]const u8,
@@ -32,11 +32,11 @@ pub const ExtractedFact = struct {
     valid_to: ?[]const u8,
     time_basis: TimeBasis,
     scope: core.types.Scope,
-    asserted_by: core.types.FactAssertedBy,
+    author: core.types.FactAuthor,
     quote: []const u8,
 };
 
-pub const ProposedPredicate = struct {
+pub const ProposedRelation = struct {
     name: []const u8,
     description: []const u8,
     object_kind: core.types.ObjectKind,

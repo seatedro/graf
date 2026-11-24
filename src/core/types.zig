@@ -120,40 +120,40 @@ pub const SourceKey = struct {
     model: ?[]const u8 = null,
 };
 
-pub const EpisodeKind = enum { turns, note, text, json };
-pub const AssertedBy = enum { user, agent, mixed, tool };
-pub const FactAssertedBy = enum { user, agent, tool };
+pub const EntryKind = enum { turns, note, text, json };
+pub const Author = enum { user, agent, mixed, tool };
+pub const FactAuthor = enum { user, agent, tool };
 
-pub const EpisodeStatus = enum { queued, extracting, extracted, staged, committing, committed, skipped, split, dead };
+pub const EntryStatus = enum { queued, extracting, extracted, staged, committing, committed, skipped, split, dead };
 
-pub const EpisodeBody = struct {
+pub const EntryBody = struct {
     turns: []const Turn = &.{},
     text: ?[]const u8 = null,
 };
 
-pub const EpisodeDraft = struct {
+pub const EntryDraft = struct {
     source: ?SourceKey = null,
     seq_in_source: i32 = 0,
-    kind: EpisodeKind,
+    kind: EntryKind,
     project: ?[]const u8 = null,
-    asserted_by: AssertedBy,
-    body: EpisodeBody,
+    author: Author,
+    body: EntryBody,
     reference_time: Micros,
     cursor: ?[]const u8 = null,
 };
 
-pub const Episode = struct {
+pub const Entry = struct {
     id: Id,
     graph_id: Id,
     source_id: ?Id = null,
     seq_in_source: i32 = 0,
-    kind: EpisodeKind,
+    kind: EntryKind,
     project: ?[]const u8 = null,
-    asserted_by: AssertedBy,
-    body: EpisodeBody,
+    author: Author,
+    body: EntryBody,
     content_hash: [32]u8,
     reference_time: Micros,
-    status: EpisodeStatus = .queued,
+    status: EntryStatus = .queued,
     attempts: i32 = 0,
     lease_token: ?i64 = null,
     base_seq: ?i64 = null,
@@ -164,19 +164,22 @@ pub const Episode = struct {
 pub const EntityType = enum {
     person,
     organization,
-    team,
     project,
     repository,
-    code_artifact,
-    service,
-    library,
-    tool,
+    code,
+    software,
     ai_model,
     dataset,
     document,
+    decision,
+    task,
+    change,
+    session,
+    environment,
+    run,
+    problem,
     concept,
     event,
-    place,
     other,
 };
 
@@ -194,9 +197,9 @@ pub const Entity = struct {
 pub const Scope = enum { project, global };
 pub const EndKind = enum { changed, retracted, forgotten };
 pub const Cardinality = enum { many, one_per_subject, one_per_subject_qualifier, one_per_object };
-pub const PredicateStatus = enum { core, learned, proposed, retired };
+pub const RelationStatus = enum { core, learned, proposed, retired };
 pub const ObjectKind = enum { entity, value, either };
-pub const ProvenanceRole = enum { asserted, reaffirmed, contradicted, retracted, forgotten };
+pub const EvidenceKind = enum { stated, restated, contradicted, retracted, forgotten };
 
 pub const FactObject = union(enum) {
     entity: Id,
@@ -207,7 +210,7 @@ pub const Fact = struct {
     id: Id,
     graph_id: Id,
     subject_id: Id,
-    predicate: []const u8,
+    relation: []const u8,
     qualifier: []const u8 = "",
     object: FactObject,
     text: []const u8,
@@ -215,20 +218,20 @@ pub const Fact = struct {
     project: ?[]const u8 = null,
     scope: Scope,
     valid: Range,
-    sys: Range,
+    known: Range,
     end_kind: ?EndKind = null,
     ended_by: ?Id = null,
-    asserted_by: FactAssertedBy,
+    author: FactAuthor,
     confidence: f32,
 };
 
-pub const Predicate = struct {
+pub const Relation = struct {
     name: []const u8,
     description: []const u8,
     cardinality: Cardinality = .many,
     opposes: ?[]const u8 = null,
     object_kind: ObjectKind = .either,
-    status: PredicateStatus = .proposed,
+    status: RelationStatus = .proposed,
     mapped_to: ?[]const u8 = null,
 };
 
@@ -237,13 +240,13 @@ pub const ChangeSet = struct {
     new_entities: []const NewEntity = &.{},
     merges: []const Merge = &.{},
     new_facts: []const NewFact = &.{},
-    reaffirmations: []const Reaffirmation = &.{},
+    restatements: []const Restatement = &.{},
     invalidations: []const Invalidation = &.{},
     retractions: []const Retraction = &.{},
-    provenance: []const Provenance = &.{},
+    evidence: []const Evidence = &.{},
     mentions: []const Id = &.{},
     new_aliases: []const Alias = &.{},
-    new_predicates: []const Predicate = &.{},
+    new_relations: []const Relation = &.{},
     warnings: []const []const u8 = &.{},
 
     pub const NewEntity = struct {
@@ -265,22 +268,22 @@ pub const ChangeSet = struct {
         emb: []const f32,
     };
 
-    pub const Reaffirmation = struct { fact_id: Id, confidence: f32 };
+    pub const Restatement = struct { fact_id: Id, confidence: f32 };
 
     pub const Invalidation = struct { fact_id: Id, valid_upper: Micros, ended_by: ?Id };
 
     pub const Retraction = struct { fact_id: Id, end_kind: EndKind, ended_by: ?Id };
 
-    pub const Provenance = struct { fact_id: Id, role: ProvenanceRole, quote: ?[]const u8 = null };
+    pub const Evidence = struct { fact_id: Id, kind: EvidenceKind, quote: ?[]const u8 = null };
 };
 
-pub const LlmPurpose = enum { extract, resolve, repair, rerank, summarize, embed_episode, embed_batch, embed_query };
+pub const LlmPurpose = enum { extract, resolve, repair, rerank, summarize, embed_entry, embed_batch, embed_query };
 pub const CostStatus = enum { priced, estimated, missing };
 
 pub const LlmCall = struct {
     id: Id,
     graph_id: Id,
-    episode_id: ?Id = null,
+    entry_id: ?Id = null,
     purpose: LlmPurpose,
     route: []const u8,
     model: []const u8,
@@ -298,7 +301,7 @@ pub const LlmCall = struct {
     started_at: Micros,
 };
 
-pub const EpisodeSink = struct {
+pub const EntrySink = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
@@ -308,15 +311,15 @@ pub const EpisodeSink = struct {
     };
 
     pub const VTable = struct {
-        enqueue: *const fn (ptr: *anyopaque, draft: *const EpisodeDraft) anyerror!Outcome,
+        enqueue: *const fn (ptr: *anyopaque, draft: *const EntryDraft) anyerror!Outcome,
         loadCursor: *const fn (ptr: *anyopaque, arena: std.mem.Allocator, source: *const SourceKey) anyerror!?[]const u8,
     };
 
-    pub fn enqueue(s: EpisodeSink, draft: *const EpisodeDraft) !Outcome {
+    pub fn enqueue(s: EntrySink, draft: *const EntryDraft) !Outcome {
         return s.vtable.enqueue(s.ptr, draft);
     }
 
-    pub fn loadCursor(s: EpisodeSink, arena: std.mem.Allocator, source: *const SourceKey) !?[]const u8 {
+    pub fn loadCursor(s: EntrySink, arena: std.mem.Allocator, source: *const SourceKey) !?[]const u8 {
         return s.vtable.loadCursor(s.ptr, arena, source);
     }
 };
@@ -367,13 +370,13 @@ test "change set round-trips through json" {
                 .id = id,
                 .graph_id = id,
                 .subject_id = id,
-                .predicate = "uses",
+                .relation = "uses",
                 .object = .{ .value = "Postgres 17" },
                 .text = "graf uses Postgres 17.",
                 .scope = .project,
                 .valid = .{ .lower = 1_700_000_000_000_000 },
-                .sys = .{ .lower = 1_700_000_000_000_000 },
-                .asserted_by = .user,
+                .known = .{ .lower = 1_700_000_000_000_000 },
+                .author = .user,
                 .confidence = 0.9,
             },
             .emb = &.{ 0.25, -0.5 },
