@@ -263,10 +263,10 @@ test "the shipped suite loads and is referentially intact" {
     const arena = arena_state.allocator();
     const suite = try loadShippedSuite(arena, std.testing.io);
     try std.testing.expectEqual(@as(usize, 20), suite.entries.len);
-    try std.testing.expectEqual(@as(usize, 22), suite.entities().len);
+    try std.testing.expectEqual(@as(usize, 24), suite.entities().len);
     try std.testing.expectEqual(@as(usize, 10), suite.expected.retrieval_queries.len);
     try std.testing.expectEqual(@as(usize, 20), suite.expected.entries.map.count());
-    try std.testing.expectEqual(@as(usize, 28), suite.facts.len);
+    try std.testing.expectEqual(@as(usize, 31), suite.facts.len);
     try std.testing.expectEqual(@as(usize, 4), suite.expected.expected_merges.len);
     try std.testing.expectEqual(@as(usize, 3), suite.expected.must_not_merge.len);
     const problems = try validate(arena, &suite);
