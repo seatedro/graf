@@ -82,9 +82,14 @@ pub fn hardBlocked(a: EntityType, b: EntityType) bool {
     return (a == .person and isGroup(b)) or (b == .person and isGroup(a));
 }
 
+fn isCodebase(t: EntityType) bool {
+    return t == .project or t == .repository;
+}
+
 pub fn compatible(a: EntityType, b: EntityType) bool {
     if (a == b) return true;
     if (isSoftware(a) and isSoftware(b)) return true;
+    if (isCodebase(a) and isCodebase(b)) return true;
     if ((a == .other and b != .person) or (b == .other and a != .person)) return true;
     return false;
 }
@@ -395,6 +400,8 @@ test "entity type guards" {
     try testing.expect(hardBlocked(.project, .person));
     try testing.expect(!hardBlocked(.code, .dataset));
     try testing.expect(compatible(.software, .code));
+    try testing.expect(compatible(.project, .repository));
+    try testing.expect(!compatible(.repository, .organization));
     try testing.expect(!compatible(.code, .dataset));
     try testing.expect(!compatible(.organization, .code));
     try testing.expect(compatible(.other, .software));
