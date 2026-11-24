@@ -107,6 +107,7 @@ pub fn loadGraphState(arena: Allocator, pool: *pg.Pool, graph_id: core.Id, links
         const sql = "SELECT id::text, subject_id::text, relation, qualifier, object_id::text, object_value, text, end_kind,\n" ++
             std.fmt.comptimePrint(range_bounds, .{"valid"}) ++ ", " ++ std.fmt.comptimePrint(range_bounds, .{"known"}) ++
             "\nFROM fact WHERE graph_id = $1 ORDER BY created_seq, id";
+
         var result = try pool.query(sql, .{gid});
         defer result.deinit();
         while (try result.next()) |row| {
@@ -115,6 +116,7 @@ pub fn loadGraphState(arena: Allocator, pool: *pg.Pool, graph_id: core.Id, links
                 .{ .entity = try dupe(arena, o) }
             else
                 .{ .value = try dupe(arena, (try row.get(?[]const u8, 5)) orelse "") };
+
             try facts.append(arena, .{
                 .key = key,
                 .subject = try dupe(arena, try row.get([]const u8, 1)),
@@ -155,6 +157,7 @@ pub fn loadCalls(arena: Allocator, pool: *pg.Pool, graph_id: core.Id, links: []c
     var calls: std.ArrayList(score.LlmCall) = .empty;
     var result = try pool.query("SELECT entry_id::text, purpose, cost_usd::float8 FROM llm_call WHERE graph_id = $1 ORDER BY started_at, id", .{&graph_id.bytes});
     defer result.deinit();
+
     while (try result.next()) |row| {
         try calls.append(arena, .{
             .entry = if (try row.get(?[]const u8, 0)) |e| try linkedId(arena, links, e) else null,
@@ -162,6 +165,7 @@ pub fn loadCalls(arena: Allocator, pool: *pg.Pool, graph_id: core.Id, links: []c
             .cost_usd = try row.get(f64, 2),
         });
     }
+
     return calls.items;
 }
 
@@ -172,6 +176,7 @@ pub fn loadEntryViews(arena: Allocator, pool: *pg.Pool, graph_id: core.Id, links
         \\FROM entry WHERE graph_id = $1
     , .{&graph_id.bytes});
     defer result.deinit();
+
     while (try result.next()) |row| {
         const body = try std.json.parseFromSliceLeaky(core.EntryBody, arena, try row.get([]const u8, 5), .{ .allocate = .alloc_always, .ignore_unknown_fields = true });
         try views.put(arena, try linkedId(arena, links, try row.get([]const u8, 0)), .{
@@ -182,6 +187,7 @@ pub fn loadEntryViews(arena: Allocator, pool: *pg.Pool, graph_id: core.Id, links
             .body = body,
         });
     }
+
     return views;
 }
 
@@ -205,6 +211,7 @@ pub fn scanForSecrets(arena: Allocator, pool: *pg.Pool, graph_id: core.Id) ![]co
             });
         }
     }
+
     return texts.items;
 }
 
@@ -261,6 +268,7 @@ const fixture_sql =
 fn fillTemplate(arena: Allocator, io: std.Io, template: []const u8, ids: *std.StringHashMapUnmanaged([]const u8)) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
+
     while (i < template.len) {
         if (template[i] == '{') {
             if (std.mem.indexOfScalarPos(u8, template, i, '}')) |end| {
@@ -268,6 +276,7 @@ fn fillTemplate(arena: Allocator, io: std.Io, template: []const u8, ids: *std.St
                 const word = name.len > 0 and for (name) |c| {
                     if (!std.ascii.isAlphanumeric(c) and c != '_') break false;
                 } else true;
+
                 if (word) {
                     const gop = try ids.getOrPut(arena, name);
                     if (!gop.found_existing) gop.value_ptr.* = try idText(arena, core.Id.v7(io));
@@ -277,9 +286,11 @@ fn fillTemplate(arena: Allocator, io: std.Io, template: []const u8, ids: *std.St
                 }
             }
         }
+
         try out.append(arena, template[i]);
         i += 1;
     }
+
     return out.items;
 }
 
@@ -295,6 +306,7 @@ test "loads a hand-built graph from Postgres and scores it" {
     const graph_name = try std.fmt.allocPrint(arena, "eval-test-{s}", .{try idText(arena, core.Id.v7(io))});
     try ids.put(arena, "name", graph_name);
     const sql = try fillTemplate(arena, io, fixture_sql, &ids);
+
     {
         const conn = try s.pool.acquire();
         defer conn.release();
@@ -310,6 +322,7 @@ test "loads a hand-built graph from Postgres and scores it" {
     const links = [_]EntryLink{
         try link(&ids, "e01"), try link(&ids, "e03"), try link(&ids, "e05"), try link(&ids, "e06"), try link(&ids, "e18"),
     };
+
     const state = try loadGraphState(arena, s.pool, graph_id, &links);
 
     try std.testing.expectEqual(@as(usize, 7), state.entities.len);
@@ -323,6 +336,7 @@ test "loads a hand-built graph from Postgres and scores it" {
         if (std.mem.eql(u8, e.name, "karlseguin's driver")) merged = e;
         if (std.mem.eql(u8, e.name, "pg.zig")) pgzig = e;
     }
+
     try std.testing.expectEqualStrings(ids.get("e_pgzig").?, merged.?.merged_into.?);
     try std.testing.expectEqual(@as(usize, 1), pgzig.?.aliases.len);
     try std.testing.expectEqualStrings("pg-zig", pgzig.?.aliases[0]);
@@ -338,6 +352,7 @@ test "loads a hand-built graph from Postgres and scores it" {
     const hollis = state.facts[2];
     try std.testing.expectEqual(core.types.EndKind.changed, hollis.end_kind.?);
     try std.testing.expectEqual(try core.time.parseRfc3339("2026-11-20T17:00:00Z"), hollis.valid.upper.?);
+
     const ver = state.facts[1];
     try std.testing.expect(ver.valid.lower == null and ver.valid.upper == null);
     try std.testing.expect(ver.known.upper != null);
@@ -345,6 +360,7 @@ test "loads a hand-built graph from Postgres and scores it" {
 
     try std.testing.expectEqual(core.types.EntryStatus.extracted, state.entries[3].status);
     try std.testing.expectEqualStrings("e06", state.entries[3].eval_id);
+
     var extract_cost: f64 = 0;
     for (state.llm_calls) |c| if (c.purpose == .extract) {
         extract_cost += c.cost_usd;
@@ -357,13 +373,16 @@ test "loads a hand-built graph from Postgres and scores it" {
 
     const suite = try @import("fixtures.zig").loadShippedSuite(arena, io);
     const report = try score.scoreState(arena, &suite, &state);
+
     try std.testing.expectEqual(@as(u32, 2), report.metrics.secret_leaks.?);
     var entry_leak = false;
     for (report.findings) |msg| entry_leak = entry_leak or std.mem.indexOf(u8, msg, "in entry ") != null;
     try std.testing.expect(entry_leak);
+
     try std.testing.expect(report.metrics.entity_f1.? > 0);
     try std.testing.expect(report.metrics.calls_per_entry == null);
     try std.testing.expect(!report.metrics.passes());
+
     var recalled_uses = false;
     var recalled_hollis = false;
     for (report.findings) |msg| {

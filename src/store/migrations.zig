@@ -26,6 +26,7 @@ pub fn run(allocator: std.mem.Allocator, pool: *pg.Pool) !Report {
     try exec(conn, "SET client_min_messages TO warning");
     try exec(conn, "SELECT pg_advisory_lock(hashtextextended('graf:migrate', 0))");
     defer exec(conn, "SELECT pg_advisory_unlock(hashtextextended('graf:migrate', 0))") catch {};
+
     try exec(conn,
         \\CREATE TABLE IF NOT EXISTS schema_migrations (
         \\  version    int PRIMARY KEY,
@@ -52,6 +53,7 @@ pub fn run(allocator: std.mem.Allocator, pool: *pg.Pool) !Report {
         };
         try row.deinit();
     }
+
     return .{ .applied = applied, .total = all.len };
 }
 

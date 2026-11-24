@@ -71,15 +71,18 @@ pub fn handleMessage(arena: Allocator, handler: api.Handler, version: []const u8
         error.OutOfMemory => return error.OutOfMemory,
         else => return try errorResponse(arena, .null, parse_error, "Parse error"),
     };
+
     const msg = switch (parsed) {
         .object => |o| o,
         else => return try errorResponse(arena, .null, invalid_request, "Invalid request: expected a JSON-RPC object"),
     };
+
     const id = msg.get("id");
     const method = msg.get("method") orelse {
         if (msg.get("result") != null or msg.get("error") != null) return null;
         return try errorResponse(arena, id orelse .null, invalid_request, "Invalid request: missing method");
     };
+
     const jsonrpc = msg.get("jsonrpc") orelse Value.null;
     if (method != .string or jsonrpc != .string or !std.mem.eql(u8, jsonrpc.string, "2.0"))
         return try errorResponse(arena, id orelse .null, invalid_request, "Invalid request");
@@ -99,11 +102,13 @@ pub fn supportsVersion(version: []const u8) bool {
 pub fn handlePost(arena: Allocator, handler: api.Handler, version: []const u8, body: []const u8) !?[]const u8 {
     const trimmed = std.mem.trim(u8, body, " \t\r\n");
     if (trimmed.len == 0 or trimmed[0] != '[') return handleMessage(arena, handler, version, body);
+
     const parsed = std.json.parseFromSliceLeaky(Value, arena, trimmed, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return try errorResponse(arena, .null, parse_error, "Parse error"),
     };
     if (parsed.array.items.len == 0) return try errorResponse(arena, .null, invalid_request, "Invalid request: empty batch");
+
     var out: std.Io.Writer.Allocating = .init(arena);
     var replies: usize = 0;
     for (parsed.array.items) |message| {
@@ -113,6 +118,7 @@ pub fn handlePost(arena: Allocator, handler: api.Handler, version: []const u8, b
         try out.writer.writeAll(reply);
         replies += 1;
     }
+
     if (replies == 0) return null;
     try out.writer.writeByte(']');
     return out.written();
@@ -121,6 +127,7 @@ pub fn handlePost(arena: Allocator, handler: api.Handler, version: []const u8, b
 pub fn serveStdio(gpa: Allocator, handler: api.Handler, version: []const u8, in: *std.Io.Reader, out: *std.Io.Writer) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
+
     while (true) {
         _ = arena_state.reset(.retain_capacity);
         const arena = arena_state.allocator();
@@ -129,8 +136,10 @@ pub fn serveStdio(gpa: Allocator, handler: api.Handler, version: []const u8, in:
             error.WriteFailed => return error.OutOfMemory,
             error.ReadFailed => return error.ReadFailed,
         };
+
         const at_end = in.bufferedLen() == 0;
         if (!at_end) in.toss(1);
+
         const message = std.mem.trim(u8, line.written(), " \t\r");
         if (message.len > 0) {
             if (try handleMessage(arena, handler, version, message)) |response| {
@@ -139,6 +148,7 @@ pub fn serveStdio(gpa: Allocator, handler: api.Handler, version: []const u8, in:
                 try out.flush();
             }
         }
+
         if (at_end) return;
     }
 }
@@ -160,9 +170,11 @@ fn dispatch(arena: Allocator, handler: api.Handler, version: []const u8, method:
         if (params) |p| if (p == .object) if (p.object.get("protocolVersion")) |v| if (v == .string) {
             requested = v.string;
         };
+
         const negotiated = for (protocol_versions) |known| {
             if (std.mem.eql(u8, known, requested)) break known;
         } else protocol_versions[0];
+
         return .{ .result = try std.json.Stringify.valueAlloc(arena, .{
             .protocolVersion = negotiated,
             .capabilities = .{ .tools = .{ .listChanged = false } },
@@ -170,6 +182,7 @@ fn dispatch(arena: Allocator, handler: api.Handler, version: []const u8, method:
             .instructions = instructions,
         }, .{}) };
     }
+
     if (std.mem.eql(u8, method, "ping")) return .{ .result = "{}" };
     if (std.mem.eql(u8, method, "tools/list")) {
         const defs = try std.json.parseFromSliceLeaky(Value, arena, tools_json, .{});
@@ -184,6 +197,7 @@ fn callTool(arena: Allocator, handler: api.Handler, params: ?Value) !Outcome {
     if (p != .object) return fail(invalid_params, "Invalid params: expected an object");
     const name = p.object.get("name") orelse return fail(invalid_params, "Invalid params: missing tool name");
     if (name != .string) return fail(invalid_params, "Invalid params: tool name must be a string");
+
     const index = for (tool_names, 0..) |tool, i| {
         if (std.mem.eql(u8, tool, name.string)) break i;
     } else return fail(invalid_params, try std.fmt.allocPrint(arena, "Unknown tool: {s}", .{name.string}));
@@ -227,15 +241,18 @@ fn validate(arena: Allocator, schema: Value, arguments: Value) !?[]const u8 {
         if (!matchesProperty(property.object, entry.value_ptr.*))
             return try std.fmt.allocPrint(arena, "Invalid arguments: '{s}' must match {f}", .{ name, std.json.fmt(property, .{}) });
     }
+
     if (schema.object.get("required")) |required| {
         if (missingRequired(required, arguments)) |name|
             return try std.fmt.allocPrint(arena, "Invalid arguments: '{s}' is required", .{name});
     }
+
     if (schema.object.get("anyOf")) |alternatives| {
         for (alternatives.array.items) |alternative| {
             if (missingRequired(alternative.object.get("required").?, arguments) == null) break;
         } else return try std.fmt.allocPrint(arena, "Invalid arguments: need one of {f}", .{std.json.fmt(alternatives, .{})});
     }
+
     return null;
 }
 
@@ -255,12 +272,14 @@ fn matchesProperty(property: std.json.ObjectMap, value: Value) bool {
     else
         value == .bool;
     if (!type_ok) return false;
+
     if (property.get("enum")) |allowed| {
         for (allowed.array.items) |option| {
             if (option == .string and std.mem.eql(u8, option.string, value.string)) break;
             if (option == .integer and option.integer == value.integer) break;
         } else return false;
     }
+
     if (property.get("minimum")) |min| if (value.integer < min.integer) return false;
     if (property.get("maximum")) |max| if (value.integer > max.integer) return false;
     return true;
@@ -286,6 +305,7 @@ const FakeHandler = struct {
         const f: *FakeHandler = @ptrCast(@alignCast(ptr));
         try f.ops.append(testing.allocator, req.op);
         try f.bodies.append(testing.allocator, try testing.allocator.dupe(u8, req.body));
+
         if (std.mem.find(u8, req.body, "boom") != null) return error.StoreUnavailable;
         if (req.op == .forget) return api.errorReply(arena, 404, "no matching fact");
         return .{ .body = try std.fmt.allocPrint(arena, "{{\"text\":\"# {t}\\nok\"}}", .{req.op}) };
@@ -322,6 +342,7 @@ fn expectToolError(arena: Allocator, line: []const u8, id: i64, text_prefix: []c
 test "stdio session conformance" {
     var fake: FakeHandler = .{};
     defer fake.deinit();
+
     const input =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}
         \\{"jsonrpc":"2.0","method":"notifications/initialized"}
@@ -343,6 +364,7 @@ test "stdio session conformance" {
         \\{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}
         \\{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"memory_remember"}}
     ;
+
     var in: std.Io.Reader = .fixed(input);
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
@@ -354,6 +376,7 @@ test "stdio session conformance" {
 
     const output = out.written();
     try testing.expect(std.mem.endsWith(u8, output, "\n"));
+
     var lines: std.ArrayList([]const u8) = .empty;
     var it = std.mem.splitScalar(u8, output[0 .. output.len - 1], '\n');
     while (it.next()) |line| try lines.append(arena, line);
@@ -387,6 +410,7 @@ test "stdio session conformance" {
     try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":8,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}", lines.items[7]);
     try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}", lines.items[8]);
     try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":9,\"error\":{\"code\":-32602,\"message\":\"Unknown tool: memory_delete\"}}", lines.items[9]);
+
     try expectToolError(arena, lines.items[10], 10, "Invalid arguments: unknown argument 'colour'");
     try expectToolError(arena, lines.items[11], 11, "Invalid arguments: need one of");
     try expectToolError(arena, lines.items[12], 12, "Invalid arguments: 'max_tokens' must match");
@@ -404,12 +428,15 @@ test "stdio session conformance" {
 test "initialize falls back to the newest protocol version" {
     var fake: FakeHandler = .{};
     defer fake.deinit();
+
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const reply = (try handleMessage(arena, fake.handler(), "0", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"1999-01-01\"}}")).?;
     const v = try std.json.parseFromSliceLeaky(Value, arena, reply, .{});
     try testing.expectEqualStrings("2025-06-18", lookup(v, &.{ "result", "protocolVersion" }).string);
+
     try testing.expectEqual(null, try handleMessage(arena, fake.handler(), "0", "{\"jsonrpc\":\"2.0\",\"method\":\"unknown/notification\"}"));
     try testing.expectEqualStrings(
         "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"Invalid request: expected a JSON-RPC object\"}}",

@@ -53,6 +53,7 @@ pub const WriteError = std.Io.Writer.Error || error{OutOfMemory};
 pub fn writeRequest(arena: std.mem.Allocator, format: Wire, model: []const u8, req: Request, w: *std.Io.Writer) WriteError!void {
     var s: std.json.Stringify = .{ .writer = w };
     try s.beginObject();
+
     if (model.len > 0) {
         try s.objectField("model");
         try s.write(model);
@@ -61,6 +62,7 @@ pub fn writeRequest(arena: std.mem.Allocator, format: Wire, model: []const u8, r
         .generic => try writeGenericQuestions(arena, &s, req),
         .stateful => try writeStatefulQuestions(&s, req),
     }
+
     try s.endObject();
 }
 
@@ -75,6 +77,7 @@ fn writeGenericQuestions(arena: std.mem.Allocator, s: *std.json.Stringify, req: 
         var key_buf: [24]u8 = undefined;
         try s.objectField(std.fmt.bufPrint(&key_buf, "q{d}", .{i}) catch unreachable);
         try s.beginObject();
+
         switch (q) {
             .yes_no => |prompt| {
                 try s.objectField("type");
@@ -87,6 +90,7 @@ fn writeGenericQuestions(arena: std.mem.Allocator, s: *std.json.Stringify, req: 
                 try s.write("choice");
                 try s.objectField("prompt");
                 try s.write(try std.mem.concat(arena, u8, &.{ lead, c.prompt }));
+
                 try s.objectField("options");
                 try s.beginArray();
                 for (c.options) |o| {
@@ -108,12 +112,14 @@ fn writeStatefulQuestions(s: *std.json.Stringify, req: Request) std.Io.Writer.Er
         try s.write(f.text);
     }
     try s.endObject();
+
     try s.objectField("questions");
     try s.beginObject();
     for (req.questions, 0..) |q, i| {
         var key_buf: [24]u8 = undefined;
         try s.objectField(std.fmt.bufPrint(&key_buf, "q{d}", .{i}) catch unreachable);
         try s.beginObject();
+
         switch (q) {
             .yes_no => |prompt| {
                 try s.objectField("type");
@@ -126,6 +132,7 @@ fn writeStatefulQuestions(s: *std.json.Stringify, req: Request) std.Io.Writer.Er
                 try s.write("choice");
                 try s.objectField("instructions");
                 try s.write(c.prompt);
+
                 try s.objectField("criteria");
                 try s.beginObject();
                 for (c.options) |o| {
@@ -154,6 +161,7 @@ pub fn decodeResponse(arena: std.mem.Allocator, format: Wire, body: []const u8, 
     const root = try wire.parseObject(arena, body);
     const answers_v = root.get("answers") orelse return error.MalformedResponse;
     if (answers_v != .object) return error.MalformedResponse;
+
     const answers = try arena.alloc(Answer, questions.len);
     for (questions, answers, 0..) |q, *a, i| {
         var key_buf: [24]u8 = undefined;
@@ -163,11 +171,13 @@ pub fn decodeResponse(arena: std.mem.Allocator, format: Wire, body: []const u8, 
             .stateful => try statefulAnswer(arena, q, v),
         };
     }
+
     var out: Decoded = .{ .answers = answers };
     if (root.get("model")) |m| if (m == .string and m.string.len > 0) {
         out.model = m.string;
     };
     wire.readBodyCost(root, &out);
+
     if (root.get("usage")) |u| if (u == .object) {
         if (u.object.get("input_tokens")) |t| if (t == .integer) {
             out.usage.input_tokens = std.math.cast(u32, t.integer) orelse 0;
@@ -176,6 +186,7 @@ pub fn decodeResponse(arena: std.mem.Allocator, format: Wire, body: []const u8, 
             out.usage.output_tokens = std.math.cast(u32, t.integer) orelse 0;
         };
     };
+
     return out;
 }
 
@@ -195,6 +206,7 @@ fn statefulAnswer(arena: std.mem.Allocator, q: Question, v: std.json.Value) Deco
     if (v != .object) return error.MalformedResponse;
     const kind = v.object.get("type") orelse return error.MalformedResponse;
     if (kind != .string) return error.MalformedResponse;
+
     switch (q) {
         .yes_no => {
             if (!std.mem.eql(u8, kind.string, "noul")) return error.MalformedResponse;
@@ -226,6 +238,7 @@ test "generic request and response round trip" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var out: std.Io.Writer.Allocating = .init(arena);
     try writeRequest(arena, .generic, "decider-1", .{ .questions = &test_questions }, &out.writer);
     try std.testing.expectEqualStrings(
@@ -233,10 +246,12 @@ test "generic request and response round trip" {
             "\"q1\":{\"type\":\"choice\",\"prompt\":\"Which entity is meant?\",\"options\":[\"E1\",\"E2: the library\",\"neither\"]}}}",
         out.written(),
     );
+
     const d = try decodeResponse(arena, .generic, "{\"answers\":{\"q0\":0.91,\"q1\":[0.1,0.8,0.1]},\"usage\":{\"cost\":0.0001}}", &test_questions);
     try std.testing.expectEqual(@as(f64, 0.91), d.answers[0].yes_no);
     try std.testing.expectEqual(@as(f64, 0.8), d.answers[1].choice[1]);
     try std.testing.expectEqual(@as(?f64, 0.0001), d.body_cost);
+
     try std.testing.expectError(error.MissingAnswer, decodeResponse(arena, .generic, "{\"answers\":{\"q0\":0.5}}", &test_questions));
     try std.testing.expectError(error.AnswerOutOfRange, decodeResponse(arena, .generic, "{\"answers\":{\"q0\":1.5,\"q1\":[0,0,1]}}", &test_questions));
 }
@@ -245,6 +260,7 @@ test "generic requests repeat shared state in every prompt" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var out: std.Io.Writer.Allocating = .init(arena);
     const qs = [_]Question{ .{ .yes_no = "A?" }, .{ .yes_no = "B?" } };
     try writeRequest(arena, .generic, "", .{ .state = &.{.{ .name = "query", .text = "tide tables" }}, .questions = &qs }, &out.writer);
@@ -258,6 +274,7 @@ test "stateful request sends state once and typed questions" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var out: std.Io.Writer.Allocating = .init(arena);
     try writeRequest(arena, .stateful, "decider-1", .{ .state = &.{.{ .name = "entry", .text = "We moved off Go." }}, .questions = &test_questions }, &out.writer);
     try std.testing.expectEqualStrings(
@@ -266,6 +283,7 @@ test "stateful request sends state once and typed questions" {
             "\"q1\":{\"type\":\"choice\",\"instructions\":\"Which entity is meant?\",\"criteria\":{\"E1\":null,\"E2\":\"the library\",\"neither\":null}}}}",
         out.written(),
     );
+
     var empty: std.Io.Writer.Allocating = .init(arena);
     try writeRequest(arena, .stateful, "", .{ .questions = test_questions[0..1] }, &empty.writer);
     try std.testing.expectEqualStrings("{\"state\":{},\"questions\":{\"q0\":{\"type\":\"noul\",\"instructions\":\"Is F3 a duplicate of the new fact?\"}}}", empty.written());
@@ -275,10 +293,12 @@ test "stateful response maps noul and choice answers back to question order" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const body =
         \\{"model":"decider-1.2","answers":{"q1":{"type":"choice","choice":"E2","confidence":0.8,"probabilities":{"neither":0.05,"E2":0.85,"E1":0.1}},
         \\"q0":{"type":"noul","noul":0.87}},"usage":{"input_tokens":406,"output_tokens":59}}
     ;
+
     const d = try decodeResponse(arena, .stateful, body, &test_questions);
     try std.testing.expectEqual(@as(f64, 0.87), d.answers[0].yes_no);
     try std.testing.expectEqualSlices(f64, &.{ 0.1, 0.85, 0.05 }, d.answers[1].choice);
@@ -292,6 +312,7 @@ test "stateful responses with missing, mistyped, or out-of-range answers are rej
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const choice = "\"q1\":{\"type\":\"choice\",\"probabilities\":{\"E1\":0.1,\"E2\":0.8,\"neither\":0.1}}";
     try std.testing.expectError(error.MissingAnswer, decodeResponse(arena, .stateful, "{\"answers\":{" ++ choice ++ "}}", &test_questions));
     try std.testing.expectError(error.MalformedResponse, decodeResponse(arena, .stateful, "{\"answers\":{\"q0\":0.5," ++ choice ++ "}}", &test_questions));

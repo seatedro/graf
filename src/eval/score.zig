@@ -205,6 +205,7 @@ const Scorer = struct {
         const a = sc.arena;
         const golds = sc.suite.entities();
         const gold_names = try a.alloc([]const []const u8, golds.len);
+
         for (golds, 0..) |g, i| {
             const names = try a.alloc([]const u8, g.aliases.len + 1);
             names[0] = try match.normalize(a, g.name);
@@ -215,6 +216,7 @@ const Scorer = struct {
 
         const ents = sc.state.entities;
         const entity_names = try a.alloc([]const []const u8, ents.len);
+
         for (ents, 0..) |e, i| {
             try sc.entity_index.put(a, e.key, i);
             const names = try a.alloc([]const u8, e.aliases.len + 1);
@@ -230,24 +232,28 @@ const Scorer = struct {
         sc.label = try a.alloc(?usize, ents.len);
         sc.gold_set = try a.alloc([]bool, ents.len);
         const typed = try a.alloc(?usize, ents.len);
+
         for (ents, 0..) |e, i| {
             typed[i] = sc.typedLabel(i, e.type);
             sc.label[i] = null;
             sc.gold_set[i] = try a.alloc(bool, golds.len);
             @memset(sc.gold_set[i], false);
         }
+
         for (ents, 0..) |_, i| {
             const s = sc.survivor[i];
             for (golds, 0..) |_, g| {
                 if (sc.nameHit(i, g)) sc.gold_set[s][g] = true;
             }
         }
+
         for (ents, 0..) |_, i| {
             const s = sc.survivor[i];
             if (s == i) {
                 if (typed[i]) |g| sc.label[s] = g;
             }
         }
+
         for (ents, 0..) |_, i| {
             const s = sc.survivor[i];
             if (sc.label[s] == null) sc.label[s] = typed[i];
@@ -257,6 +263,7 @@ const Scorer = struct {
     fn resolve(sc: *Scorer, start: usize) usize {
         var cur = start;
         var steps: usize = 0;
+
         while (steps <= sc.state.entities.len) : (steps += 1) {
             const next_key = sc.state.entities[cur].merged_into orelse return cur;
             const next = sc.entity_index.get(next_key) orelse return cur;
@@ -271,6 +278,7 @@ const Scorer = struct {
             for (sc.suite.entities(), 0..) |g, gi| {
                 if (match.typesCompatible(t, g.type) and std.mem.eql(u8, sc.gold_names[gi][0], n)) return gi;
             }
+
             for (sc.suite.entities(), 0..) |g, gi| {
                 if (!match.typesCompatible(t, g.type)) continue;
                 for (sc.gold_names[gi][1..]) |alias| if (std.mem.eql(u8, alias, n)) return gi;
@@ -300,8 +308,10 @@ const Scorer = struct {
         const matched = try sc.arena.alloc(u32, golds.len);
         @memset(matched, 0);
         var fp: u32 = 0;
+
         for (sc.state.entities, 0..) |e, i| {
             if (!sc.isSurvivor(i)) continue;
+
             if (sc.label[i]) |g| {
                 matched[g] += 1;
                 if (matched[g] > 1) {
@@ -310,6 +320,7 @@ const Scorer = struct {
                 }
                 continue;
             }
+
             var collides = false;
             for (sc.gold_set[i]) |hit| collides = collides or hit;
             if (collides) {
@@ -317,10 +328,12 @@ const Scorer = struct {
                 try sc.note("entity: '{s}' ({s}) matches a gold name but not its type", .{ e.name, @tagName(e.type) });
             } else sc.detail.unlabeled_entities += 1;
         }
+
         var tp: u32 = 0;
         for (matched, 0..) |m, g| {
             if (m > 0) tp += 1 else try sc.note("entity: no surviving entity for {s} ('{s}')", .{ golds[g].id, golds[g].name });
         }
+
         const fn_: u32 = @intCast(golds.len - tp);
         sc.detail.entity_tp = tp;
         sc.detail.entity_fp = fp;
@@ -331,6 +344,7 @@ const Scorer = struct {
     fn survivorsLabeled(sc: *Scorer, g: usize) struct { count: u32, first: ?usize } {
         var count: u32 = 0;
         var first: ?usize = null;
+
         for (sc.state.entities, 0..) |_, i| {
             if (!sc.isSurvivor(i) or sc.label[i] != g) continue;
             count += 1;
@@ -343,6 +357,7 @@ const Scorer = struct {
         const golds = sc.suite.entities();
         var correct: u32 = 0;
         var pairs: u32 = 0;
+
         for (sc.suite.expected.expected_merges) |m| {
             pairs += 1;
             const g = sc.suite.entityIndex(m.must_resolve_to).?;
@@ -351,6 +366,7 @@ const Scorer = struct {
                 try sc.note("merge: {s} '{s}' -> {s}: {d} surviving entities, want 1", .{ m.entry, m.mention, m.must_resolve_to, found.count });
                 continue;
             }
+
             const target = found.first.?;
             const mention = try match.normalize(sc.arena, m.mention);
             var ok = true;
@@ -361,30 +377,37 @@ const Scorer = struct {
                     try sc.note("merge: {s} '{s}' landed in '{s}', not in {s}", .{ m.entry, m.mention, e.name, m.must_resolve_to });
                 }
             }
+
             if (ok) correct += 1;
         }
+
         var cross: u32 = 0;
         for (sc.state.entities, 0..) |e, i| {
             if (!sc.isSurvivor(i)) continue;
+
             var first_type: ?core.EntityType = null;
             var mixed = false;
             for (sc.gold_set[i], 0..) |hit, g| {
                 if (!hit) continue;
                 if (first_type) |t| mixed = mixed or t != golds[g].type else first_type = golds[g].type;
             }
+
             if (mixed) {
                 cross += 1;
                 try sc.note("merge: '{s}' merges gold entities of different types", .{e.name});
             }
         }
+
         for (sc.suite.expected.must_not_merge) |m| {
             pairs += 1;
             const ga = sc.suite.entityIndex(m.entity_a).?;
             const gb = sc.suite.entityIndex(m.entity_b).?;
+
             var merged = false;
             for (sc.state.entities, 0..) |_, i| {
                 if (sc.isSurvivor(i) and sc.gold_set[i][ga] and sc.gold_set[i][gb]) merged = true;
             }
+
             const present = sc.survivorsLabeled(ga).count > 0 and sc.survivorsLabeled(gb).count > 0;
             if (merged) {
                 try sc.note("merge: {s} and {s} must not merge", .{ m.entity_a, m.entity_b });
@@ -392,6 +415,7 @@ const Scorer = struct {
                 try sc.note("merge: {s} and {s} are not both present as distinct entities", .{ m.entity_a, m.entity_b });
             } else correct += 1;
         }
+
         sc.detail.merge_pairs = pairs;
         sc.detail.merges_correct = correct;
         sc.metrics.merge_accuracy = ratio(correct, pairs);
@@ -408,6 +432,7 @@ const Scorer = struct {
         const cp = try match.canonicalRelation(sc.arena, d.relation);
         const gp = try match.canonicalRelation(sc.arena, g.relation);
         if (!std.mem.eql(u8, cp.name, gp.name)) return 0;
+
         var subject = d.subject;
         var object = d.object;
         if (cp.inverse) {
@@ -418,10 +443,12 @@ const Scorer = struct {
             subject = o;
             object = .{ .entity = d.subject };
         }
+
         if (sc.entityLabel(subject) != sc.suite.entityIndex(g.subject)) return 0;
         if (g.qualifier) |q| {
             if (!std.mem.eql(u8, try match.normalize(sc.arena, q), try match.normalize(sc.arena, d.qualifier))) return 0;
         }
+
         if (g.object) |go| {
             const want = sc.suite.entityIndex(go) orelse return 0;
             switch (object) {
@@ -432,6 +459,7 @@ const Scorer = struct {
                 },
             }
         }
+
         const gv = g.object_value orelse return 0;
         switch (object) {
             .value => |v| return match.valueMatch(sc.arena, gv, v),
@@ -471,10 +499,12 @@ const Scorer = struct {
     fn patternHit(sc: *Scorer, d: Fact) !?usize {
         const cp = try match.canonicalRelation(sc.arena, d.relation);
         if (cp.inverse) return null;
+
         for (sc.patterns, 0..) |p, pi| {
             const pp = try match.canonicalRelation(sc.arena, p.relation);
             if (!std.mem.eql(u8, cp.name, pp.name)) continue;
             if (sc.entityLabel(d.subject) != p.subject) continue;
+
             const hit = switch (d.object) {
                 .value => |v| try match.valueMatch(sc.arena, p.object, v) > 0,
                 .entity => |k| blk: {
@@ -482,8 +512,10 @@ const Scorer = struct {
                     break :blk false;
                 },
             };
+
             if (hit) return pi;
         }
+
         return null;
     }
 
@@ -496,22 +528,26 @@ const Scorer = struct {
         const a = sc.arena;
         const facts = sc.state.facts;
         var patterns: std.ArrayList(fixtures.Pattern) = .empty;
+
         for (sc.suite.expected.entries.map.values()) |g| {
             for (g.must_not_contain_facts) |text| {
                 if (try fixtures.parsePattern(a, sc.suite, text)) |p| try patterns.append(a, p);
             }
         }
+
         sc.patterns = patterns.items;
         sc.fact_gold = try a.alloc(?usize, facts.len);
         sc.fact_entry = try a.alloc(?[]const u8, facts.len);
         sc.forgiven = try a.alloc(bool, facts.len);
         sc.trap = try a.alloc(bool, facts.len);
         sc.residual = try a.alloc(bool, facts.len);
+
         for (facts, 0..) |d, i| {
             try sc.fact_index.put(a, d.key, i);
             sc.fact_entry[i] = statingEntry(d);
             const forbidden = try sc.patternHit(d) != null;
             sc.forgiven[i] = retracted(d) and forbidden;
+
             var best: ?usize = null;
             var best_strength: u8 = 0;
             var best_pref = false;
@@ -525,6 +561,7 @@ const Scorer = struct {
                     best_pref = pref;
                 }
             }
+
             sc.fact_gold[i] = best;
             sc.trap[i] = !sc.forgiven[i] and (sc.fromSkipEntry(i) or (best == null and forbidden));
             sc.residual[i] = !sc.forgiven[i] and !sc.trap[i] and best == null and !retracted(d);
@@ -532,6 +569,7 @@ const Scorer = struct {
 
         const order = try a.alloc(usize, facts.len);
         for (order, 0..) |*o, i| o.* = i;
+
         const Ctx = struct {
             sc: *Scorer,
             fn lessThan(ctx: @This(), l: usize, r: usize) bool {
@@ -540,9 +578,11 @@ const Scorer = struct {
                 return if (ol != or_) ol < or_ else l < r;
             }
         };
+
         std.sort.block(usize, order, Ctx{ .sc = sc }, Ctx.lessThan);
         sc.claimed = try a.alloc(?usize, sc.suite.facts.len);
         @memset(sc.claimed, null);
+
         for (order) |i| {
             if (sc.forgiven[i] or sc.fromSkipEntry(i)) continue;
             const g = sc.fact_gold[i] orelse continue;
@@ -557,10 +597,12 @@ const Scorer = struct {
 
     fn scoreFacts(sc: *Scorer) !void {
         var traps: u32 = 0;
+
         for (sc.state.facts, 0..) |d, i| {
             if (sc.forgiven[i]) continue;
             sc.detail.facts_extracted += 1;
             const ep = sc.fact_entry[i] orelse "?";
+
             if (sc.trap[i]) {
                 traps += 1;
                 if (sc.fromSkipEntry(i)) {
@@ -568,10 +610,12 @@ const Scorer = struct {
                 } else try sc.note("fact: {s} wrote forbidden fact '{s}' and left it active", .{ ep, d.text });
                 continue;
             }
+
             if (sc.residual[i]) {
                 sc.detail.residual_facts += 1;
                 continue;
             }
+
             const g = sc.fact_gold[i] orelse continue;
             if (sc.claimed[g] != i) {
                 sc.detail.duplicate_facts += 1;
@@ -580,12 +624,14 @@ const Scorer = struct {
             }
             sc.detail.facts_matched += 1;
         }
+
         var items: u32 = 0;
         var found: u32 = 0;
         for (sc.suite.facts, 0..) |ref, g| {
             items += 1;
             if (sc.claimed[g] != null) found += 1 else try sc.note("fact: missing {s} from {s}", .{ ref.fact.id, ref.entry });
         }
+
         for (sc.suite.expected.entries.map.keys(), sc.suite.expected.entries.map.values()) |ep, gold| {
             for (gold.restated) |id| {
                 items += 1;
@@ -598,6 +644,7 @@ const Scorer = struct {
                 if (ok) found += 1 else try sc.note("fact: {s} did not restate {s}", .{ ep, id });
             }
         }
+
         sc.detail.gold_facts = @intCast(sc.suite.facts.len);
         sc.detail.gold_fact_items = items;
         sc.detail.gold_fact_items_found = found;
@@ -624,6 +671,7 @@ const Scorer = struct {
                 },
             });
         }
+
         return list.items;
     }
 
@@ -638,10 +686,12 @@ const Scorer = struct {
             sc.metrics.residual_faithfulness = 1;
             return list;
         }
+
         const judgments = sc.state.judgments orelse {
             try sc.note("judge: {d} residual facts were not judged; residual faithfulness is unmeasured", .{list.len});
             return list;
         };
+
         for (list) |*r| {
             for (judgments) |j| {
                 if (std.mem.eql(u8, j.fact, r.fact)) {
@@ -649,21 +699,25 @@ const Scorer = struct {
                     break;
                 }
             }
+
             const ep = r.entry orelse "?";
             const j = r.judgment orelse {
                 sc.detail.residual_unjudged += 1;
                 try sc.note("judge: no verdict for {s} residual '{s}'", .{ ep, r.text });
                 continue;
             };
+
             if (j.supported and j.durable) {
                 sc.detail.residual_faithful += 1;
                 continue;
             }
+
             if (!j.supported) sc.detail.residual_unsupported += 1;
             if (!j.durable) sc.detail.residual_transient += 1;
             const why = if (!j.supported and !j.durable) "unsupported and transient" else if (!j.supported) "unsupported" else "transient";
             try sc.note("judge: {s} residual '{s}' is {s}: {s}", .{ ep, r.text, why, j.reason });
         }
+
         sc.metrics.residual_faithfulness = ratio(sc.detail.residual_faithful, @intCast(list.len));
         return list;
     }
@@ -695,12 +749,15 @@ const Scorer = struct {
         const hit = try sc.arena.alloc(bool, golds.len);
         @memset(hit, false);
         var fp: u32 = 0;
+
         for (sc.state.facts, 0..) |d, i| {
             const kind = ended(d) orelse continue;
             if (sc.forgiven[i]) continue;
+
             const g = sc.fact_gold[i];
             if (g) |gi| {
                 if (sc.suite.facts[gi].valid_to != null and kind == .changed) continue;
+
                 var matched = false;
                 for (golds, 0..) |inv, k| {
                     if (inv.fact != gi) continue;
@@ -709,6 +766,7 @@ const Scorer = struct {
                         matched = true;
                     } else try sc.note("invalidation: {s} ended as {s}, want {s}", .{ sc.suite.facts[gi].fact.id, @tagName(kind), @tagName(inv.kind) });
                 }
+
                 if (matched) continue;
                 fp += 1;
                 if (sc.mustRemainActive(gi)) {
@@ -716,13 +774,16 @@ const Scorer = struct {
                 } else try sc.note("invalidation: {s} ended ({s}) without a gold invalidation", .{ sc.suite.facts[gi].fact.id, @tagName(kind) });
                 continue;
             }
+
             fp += 1;
             try sc.note("invalidation: unlabeled fact '{s}' ended ({s})", .{ d.text, @tagName(kind) });
         }
+
         var tp: u32 = 0;
         for (golds, hit) |inv, h| {
             if (h) tp += 1 else try sc.note("invalidation: {s} should end {s} {s}", .{ inv.entry, sc.suite.facts[inv.fact].fact.id, @tagName(inv.kind) });
         }
+
         const fn_: u32 = @intCast(golds.len - tp);
         sc.detail.invalidation_tp = tp;
         sc.detail.invalidation_fp = fp;
@@ -758,6 +819,7 @@ const Scorer = struct {
             try sc.temporalItem(g, .lower, ref.valid_from);
             try sc.temporalItem(g, .upper, ref.valid_to);
         }
+
         for (try sc.goldInvalidations()) |inv| try sc.temporalItem(inv.fact, .upper, inv.valid_to);
         sc.metrics.temporal_accuracy = ratio(sc.detail.temporal_correct, sc.detail.temporal_items);
     }
@@ -766,6 +828,7 @@ const Scorer = struct {
         const texts = sc.state.scanned orelse return;
         var seen: std.ArrayList([]const u8) = .empty;
         var leaks: u32 = 0;
+
         for (sc.suite.expected.entries.map.values()) |gold| {
             for (gold.forbidden_substrings_anywhere) |needle| {
                 if (contains(seen.items, needle)) continue;
@@ -778,6 +841,7 @@ const Scorer = struct {
                 }
             }
         }
+
         sc.metrics.secret_leaks = leaks;
     }
 
@@ -786,17 +850,21 @@ const Scorer = struct {
         var expected: u32 = 0;
         var found: u32 = 0;
         var violations: u32 = 0;
+
         for (sc.suite.expected.retrieval_queries) |q| {
             var hits: []const Hit = &.{};
             for (results) |r| {
                 if (std.mem.eql(u8, r.query, q.id)) hits = r.hits;
             }
+
             const top = hits[0..@min(hits.len, 5)];
+
             for (q.must_include) |id| {
                 expected += 1;
                 const g = sc.suite.factIndex(id).?;
                 if (sc.anyHitIs(top, g)) found += 1 else try sc.note("retrieval: {s} missing {s} from the top 5", .{ q.id, id });
             }
+
             for (q.must_exclude) |id| {
                 const g = sc.suite.factIndex(id).?;
                 if (sc.anyHitIs(top, g)) {
@@ -804,6 +872,7 @@ const Scorer = struct {
                     try sc.note("retrieval: {s} returned excluded {s}", .{ q.id, id });
                 }
             }
+
             for (q.must_exclude_substrings) |word| {
                 for (top) |h| {
                     if (!match.containsWord(sc.hitText(h), word)) continue;
@@ -813,6 +882,7 @@ const Scorer = struct {
                 }
             }
         }
+
         sc.detail.retrieval_expected = expected;
         sc.detail.retrieval_found = found;
         sc.detail.retrieval_exclusion_violations = violations;
@@ -842,15 +912,18 @@ const Scorer = struct {
                 .embed_entry, .embed_batch => sc.detail.embedding_calls += 1,
                 .rerank, .summarize, .embed_query, .judge => {},
             }
+
             switch (c.purpose) {
                 .rerank, .embed_query, .judge => {},
                 else => sc.detail.total_cost_usd += c.cost_usd,
             }
         }
+
         for (sc.state.judge_calls) |c| {
             sc.detail.judge_calls += 1;
             sc.detail.judge_cost_usd += c.cost_usd;
         }
+
         if (!all_terminal) return;
         const n: f64 = @floatFromInt(sc.suite.entries.len);
         const calls: f64 = @floatFromInt(sc.detail.extraction_calls + sc.detail.resolution_calls + sc.detail.repair_calls);
@@ -862,6 +935,7 @@ const Scorer = struct {
 pub fn scoreState(arena: Allocator, suite: *const Suite, state: *const GraphState) !Report {
     var sc: Scorer = .{ .arena = arena, .suite = suite, .state = state };
     sc.detail.suite_entries = @intCast(suite.entries.len);
+
     for (suite.entries) |ep| {
         for (state.entries) |se| {
             if (std.mem.eql(u8, se.eval_id, ep.id) and isTerminal(se.status)) {
@@ -870,11 +944,13 @@ pub fn scoreState(arena: Allocator, suite: *const Suite, state: *const GraphStat
             }
         }
     }
+
     const ingested = sc.detail.terminal_entries > 0;
     const all_terminal = sc.detail.terminal_entries == suite.entries.len;
 
     try sc.prepareEntities();
     try sc.prepareFacts();
+
     var residual_list: []const Residual = &.{};
     if (ingested) {
         try sc.scoreEntities();
@@ -885,12 +961,15 @@ pub fn scoreState(arena: Allocator, suite: *const Suite, state: *const GraphStat
         try sc.scoreTemporal();
     } else try sc.note("ingestion: no suite entry reached a terminal status; graph metrics are unmeasured", .{});
     if (!all_terminal and ingested) try sc.note("ingestion: {d} of {d} entries reached a terminal status; call and cost metrics are unmeasured", .{ sc.detail.terminal_entries, suite.entries.len });
+
     try sc.scoreSecrets();
     try sc.scoreRetrieval();
     sc.scoreLedger(all_terminal);
+
     if (state.crash_resume) |cr| {
         if (cr.trials > 0) sc.metrics.crash_resume_pass_rate = ratio(cr.passed, cr.trials);
     }
+
     return .{ .metrics = sc.metrics, .detail = sc.detail, .residuals = residual_list, .findings = sc.findings.items };
 }
 
@@ -911,6 +990,7 @@ pub fn goldState(arena: Allocator, suite: *const Suite) !GraphState {
         try evidence.append(arena, .{ .entry = ref.entry, .kind = .stated });
         var valid: core.Range = .{ .lower = ref.valid_from, .upper = ref.valid_to };
         var end_kind: ?EndKind = if (ref.valid_to != null) .changed else null;
+
         for (suite.expected.entries.map.keys(), suite.expected.entries.map.values()) |ep, gold| {
             if (contains(gold.restated, ref.fact.id)) try evidence.append(arena, .{ .entry = ep, .kind = .restated });
             for (gold.invalidations) |inv| {
@@ -919,6 +999,7 @@ pub fn goldState(arena: Allocator, suite: *const Suite) !GraphState {
                 end_kind = inv.end_kind;
             }
         }
+
         const object: Object = if (ref.fact.object) |o| .{ .entity = o } else .{ .value = ref.fact.object_value.? };
         try facts.append(arena, .{
             .key = ref.fact.id,
@@ -988,6 +1069,7 @@ const Fixture = struct {
         errdefer testing.allocator.destroy(f);
         f.arena_state = std.heap.ArenaAllocator.init(testing.allocator);
         errdefer f.arena_state.deinit();
+
         const arena = f.arena_state.allocator();
         f.suite = try fixtures.loadShippedSuite(arena, testing.io);
         f.state = try goldState(arena, &f.suite);
@@ -1044,7 +1126,9 @@ fn expectGate(report: Report, metric: []const u8, want: mod.Gate.Status) !void {
 test "the gold state passes every gate" {
     const f = try Fixture.init();
     defer f.deinit();
+
     const report = try f.score();
+
     for (report.findings) |msg| std.debug.print("finding: {s}\n", .{msg});
     try testing.expectEqual(@as(usize, 0), report.findings.len);
     try testing.expect(report.metrics.passes());
@@ -1066,8 +1150,10 @@ test "a state with nothing ingested is unmeasured, not passing" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const suite = try fixtures.loadShippedSuite(arena, testing.io);
     const report = try scoreState(arena, &suite, &.{});
+
     for (report.metrics.gateList()) |g| try testing.expectEqual(mod.Gate.Status.unmeasured, g.status());
     try testing.expect(!report.metrics.passes());
 }
@@ -1075,8 +1161,10 @@ test "a state with nothing ingested is unmeasured, not passing" {
 test "an unmerged duplicate entity costs entity precision and the expected merge" {
     const f = try Fixture.init();
     defer f.deinit();
+
     try f.addEntity(.{ .key = "dup", .name = "pg-zig", .type = .software });
     const report = try f.score();
+
     try testing.expectEqual(@as(u32, 1), report.detail.entity_fp);
     try testing.expectEqual(@as(u32, 5), report.detail.merges_correct);
     try expectGate(report, "merge_accuracy", .fail);
@@ -1084,6 +1172,7 @@ test "an unmerged duplicate entity costs entity precision and the expected merge
 
     f.entity("dup").merged_into = "ent_pgzig";
     const fixed = try f.score();
+
     try testing.expectEqual(@as(u32, 0), fixed.detail.entity_fp);
     try testing.expectEqual(@as(u32, 7), fixed.detail.merges_correct);
 }
@@ -1091,8 +1180,10 @@ test "an unmerged duplicate entity costs entity precision and the expected merge
 test "merging an organization with its tool is a cross-type merge" {
     const f = try Fixture.init();
     defer f.deinit();
+
     f.entity("ent_buoy").merged_into = "ent_brackwater";
     const report = try f.score();
+
     try testing.expectEqual(@as(u32, 1), report.metrics.cross_type_merges.?);
     try expectGate(report, "cross_type_merges", .fail);
     try testing.expect(Fixture.hasFinding(report, "ent_brackwater and ent_buoy must not merge"));
@@ -1102,18 +1193,22 @@ test "merging an organization with its tool is a cross-type merge" {
 test "an alias that swallows a different-type gold entity is a cross-type merge" {
     const f = try Fixture.init();
     defer f.deinit();
+
     f.entity("ent_brackwater").aliases = &.{"brackwater-buoy"};
     const report = try f.score();
+
     try testing.expectEqual(@as(u32, 1), report.metrics.cross_type_merges.?);
 }
 
 test "retracting a fact that changed fails invalidation" {
     const f = try Fixture.init();
     defer f.deinit();
+
     const hollis = f.fact("f_mooring_oncall_hollis");
     hollis.end_kind = .retracted;
     hollis.known.upper = hollis.valid.upper;
     const report = try f.score();
+
     try testing.expectEqual(@as(u32, 2), report.detail.invalidation_tp);
     try testing.expectEqual(@as(u32, 1), report.detail.invalidation_fp);
     try testing.expectEqual(@as(u32, 1), report.detail.invalidation_fn);
@@ -1124,13 +1219,16 @@ test "retracting a fact that changed fails invalidation" {
 test "a historical backfill that clobbers current state fails" {
     const f = try Fixture.init();
     defer f.deinit();
+
     const juno = f.fact("f_mooring_oncall_juno");
     juno.valid.upper = try core.time.parseRfc3339("2026-11-21T20:00:00Z");
     juno.end_kind = .changed;
+
     const tamsin = f.fact("f_mooring_oncall_tamsin");
     tamsin.valid.upper = null;
     tamsin.end_kind = null;
     const report = try f.score();
+
     try testing.expect(Fixture.hasFinding(report, "f_mooring_oncall_juno must remain active"));
     try testing.expectEqual(@as(u32, 1), report.detail.invalidation_fp);
     try expectGate(report, "temporal_accuracy", .fail);
@@ -1140,9 +1238,11 @@ test "a historical backfill that clobbers current state fails" {
 test "a leaked secret fails the secret gate" {
     const f = try Fixture.init();
     defer f.deinit();
+
     const leaked = [_]ScannedText{.{ .location = "fact.text", .text = "key is mr_live_7Qk2Vx9Lp4Rt8Wz3Hn6Jb1Ys5Dc0FgAe" }};
     f.state.scanned = try std.mem.concat(f.alloc(), ScannedText, &.{ f.state.scanned.?, &leaked });
     const report = try f.score();
+
     try testing.expectEqual(@as(u32, 2), report.metrics.secret_leaks.?);
     try expectGate(report, "secret_leaks", .fail);
     for (report.findings) |msg| try testing.expect(std.mem.indexOf(u8, msg, "7Qk2Vx9Lp4Rt8Wz3") == null);
@@ -1151,6 +1251,7 @@ test "a leaked secret fails the secret gate" {
 test "facts from a skip entry are trap facts" {
     const f = try Fixture.init();
     defer f.deinit();
+
     try f.addEntity(.{ .key = "neo", .name = "Neo4j", .type = .software });
     try f.addFact(.{
         .key = "bad",
@@ -1161,6 +1262,7 @@ test "facts from a skip entry are trap facts" {
         .evidence = &.{.{ .entry = "e14", .kind = .stated }},
     });
     const report = try f.score();
+
     try testing.expectEqual(@as(u32, 1), report.metrics.trap_facts.?);
     try testing.expectEqual(@as(u32, 0), report.detail.residual_facts);
     try testing.expect(Fixture.hasFinding(report, "skip entry e14 produced"));
@@ -1170,6 +1272,7 @@ test "facts from a skip entry are trap facts" {
 test "a refuted claim is forgiven only when it is retracted" {
     const f = try Fixture.init();
     defer f.deinit();
+
     try f.addEntity(.{ .key = "go", .name = "Go", .type = .software });
     try f.addFact(.{
         .key = "go-fact",
@@ -1182,6 +1285,7 @@ test "a refuted claim is forgiven only when it is retracted" {
         .evidence = &.{.{ .entry = "e07", .kind = .stated }},
     });
     const forgiven = try f.score();
+
     try testing.expectEqual(@as(u32, 0), forgiven.metrics.trap_facts.?);
     try testing.expectEqual(@as(u32, 0), forgiven.detail.residual_facts);
     try testing.expectEqual(@as(u32, 0), forgiven.detail.invalidation_fp);
@@ -1190,6 +1294,7 @@ test "a refuted claim is forgiven only when it is retracted" {
     go.end_kind = null;
     go.known.upper = null;
     const active = try f.score();
+
     try testing.expectEqual(@as(u32, 1), active.metrics.trap_facts.?);
     try testing.expectEqual(@as(u32, 0), active.detail.residual_facts);
     try testing.expect(Fixture.hasFinding(active, "forbidden fact 'Quayline uses Go'"));
@@ -1198,6 +1303,7 @@ test "a refuted claim is forgiven only when it is retracted" {
 test "a restatement that inserts a second row is a duplicate" {
     const f = try Fixture.init();
     defer f.deinit();
+
     try f.addFact(.{
         .key = "again",
         .subject = "ent_brinelog",
@@ -1207,10 +1313,12 @@ test "a restatement that inserts a second row is a duplicate" {
         .evidence = &.{.{ .entry = "e15", .kind = .stated }},
     });
     const report = try f.score();
+
     try testing.expectEqual(@as(u32, 1), report.detail.duplicate_facts);
     try testing.expect(Fixture.hasFinding(report, "duplicated f_brinelog_uses_pg"));
     try testing.expectApproxEqAbs(@as(f64, 31.0 / 32.0), report.metrics.labeled_precision.?, 1e-9);
     try expectGate(report, "labeled_precision", .pass);
+
     for (0..5) |n| try f.addFact(.{
         .key = try std.fmt.allocPrint(f.alloc(), "again-{d}", .{n}),
         .subject = "ent_brinelog",
@@ -1224,9 +1332,11 @@ test "a restatement that inserts a second row is a duplicate" {
 test "a valid_from three days off fails temporal grounding" {
     const f = try Fixture.init();
     defer f.deinit();
+
     const juno = f.fact("f_mooring_oncall_juno");
     juno.valid.lower = juno.valid.lower.? + 3 * std.time.us_per_day;
     const report = try f.score();
+
     try testing.expectEqual(@as(u32, 6), report.detail.temporal_correct);
     try expectGate(report, "temporal_accuracy", .fail);
 }
@@ -1234,13 +1344,16 @@ test "a valid_from three days off fails temporal grounding" {
 test "retrieval misses and excluded hits are counted" {
     const f = try Fixture.init();
     defer f.deinit();
+
     const results = @constCast(f.state.retrieval.?);
     results[0].hits = &.{ .{ .fact = "f_mooring_oncall_hollis" }, .{ .fact = "f_mooring_oncall_tamsin" } };
     results[5].hits = &.{ .{ .fact = "f_quayline_uses_elixir" }, .{ .fact = "f_quayline_uses_bandit", .text = "Quayline uses Bandit, not Cowboy" } };
     const report = try f.score();
+
     try testing.expectEqual(@as(u32, 12), report.detail.retrieval_found);
     try testing.expectEqual(@as(u32, 3), report.detail.retrieval_exclusion_violations.?);
     try expectGate(report, "retrieval_recall_at_5", .pass);
+
     f.state.retrieval = null;
     try expectGate(try f.score(), "retrieval_recall_at_5", .unmeasured);
 }
@@ -1248,8 +1361,10 @@ test "retrieval misses and excluded hits are counted" {
 test "calls and cost are unmeasured until every entry finishes" {
     const f = try Fixture.init();
     defer f.deinit();
+
     @constCast(f.state.entries)[3].status = .queued;
     const report = try f.score();
+
     try expectGate(report, "calls_per_entry", .unmeasured);
     try expectGate(report, "cost_per_entry_usd", .unmeasured);
     try expectGate(report, "entity_f1", .pass);
@@ -1305,11 +1420,13 @@ test "an unlabeled fact is a residual that only the judge can score" {
 test "a retracted unlabeled fact is neither a residual nor a trap" {
     const f = try Fixture.init();
     defer f.deinit();
+
     try addUnlabeled(f, "withdrawn", "brinelog is kept separate from Quayline");
     const d = f.fact("withdrawn");
     d.end_kind = .retracted;
     d.known = .{ .lower = 1, .upper = 2 };
     const report = try f.score();
+
     try testing.expectEqual(@as(u32, 0), report.detail.residual_facts);
     try testing.expectEqual(@as(u32, 0), report.metrics.trap_facts.?);
     try testing.expectEqual(@as(u32, 32), report.detail.facts_extracted);
@@ -1318,6 +1435,7 @@ test "a retracted unlabeled fact is neither a residual nor a trap" {
 test "shredding an entry into many facts breaks the density cap" {
     const f = try Fixture.init();
     defer f.deinit();
+
     var judgments: std.ArrayList(Judgment) = .empty;
     for (0..24) |n| {
         const key = try std.fmt.allocPrint(f.alloc(), "micro-{d}", .{n});
@@ -1326,6 +1444,7 @@ test "shredding an entry into many facts breaks the density cap" {
     }
     f.state.judgments = judgments.items;
     const report = try f.score();
+
     try testing.expectEqual(@as(f64, 1), report.metrics.residual_faithfulness.?);
     try testing.expectApproxEqAbs(@as(f64, 55.0 / 31.0), report.metrics.fact_density.?, 1e-9);
     try expectGate(report, "fact_density", .fail);
@@ -1334,10 +1453,12 @@ test "shredding an entry into many facts breaks the density cap" {
 test "judge calls stay out of the ingestion call and cost gates" {
     const f = try Fixture.init();
     defer f.deinit();
+
     const judge_calls = [_]LlmCall{ .{ .purpose = .judge, .cost_usd = 0.5 }, .{ .purpose = .repair, .cost_usd = 0.25 } };
     f.state.judge_calls = &judge_calls;
     f.state.llm_calls = try std.mem.concat(f.alloc(), LlmCall, &.{ f.state.llm_calls, &.{.{ .purpose = .judge, .cost_usd = 1 }} });
     const report = try f.score();
+
     try testing.expectApproxEqAbs(@as(f64, 1.9), report.metrics.calls_per_entry.?, 1e-9);
     try expectGate(report, "cost_per_entry_usd", .pass);
     try testing.expectEqual(@as(u32, 2), report.detail.judge_calls);

@@ -88,11 +88,14 @@ test "ensureGraph is idempotent and seeds the core relations once" {
     var s = try store.testing.open();
     defer s.close();
     const g = try store.testing.freshGraph(&s);
+
     var name_buf: [64]u8 = undefined;
     var row = (try s.pool.row("SELECT name FROM graph WHERE id = $1", .{@as([]const u8, &g.bytes)})).?;
     const name = try std.fmt.bufPrint(&name_buf, "{s}", .{try row.get([]const u8, 0)});
     try row.deinit();
+
     try testing.expect(g.eql(try s.ensureGraph(name)));
+
     const n = try scalarI64(&s, "SELECT count(*) FROM relation WHERE graph_id = $1 AND status = 'core'", .{@as([]const u8, &g.bytes)});
     try testing.expectEqual(@as(i64, core.ontology.core_relations.len), n);
     const opposed = try scalarI64(&s, "SELECT count(*) FROM relation WHERE graph_id = $1 AND name = 'chose' AND opposes = 'rejected'", .{@as([]const u8, &g.bytes)});
@@ -143,12 +146,14 @@ test "enqueue dedupes on content, advances the cursor, numbers the source and no
     defer arena.deinit();
     const cursor = try sink.loadCursor(arena.allocator(), &draft.source.?);
     try testing.expectEqualStrings("240", cursor.?);
+
     const unknown: core.SourceKey = .{ .harness = .codex, .external_id = "nope" };
     try testing.expect(try sink.loadCursor(arena.allocator(), &unknown) == null);
 
     const second = try enqueueNew(&s, g, note("sess-1", "graf pins Zig 0.17.1", 3_000));
     const seq = try scalarI64(&s, "SELECT seq_in_source::int8 FROM entry WHERE id = $1", .{@as([]const u8, &second.bytes)});
     try testing.expectEqual(@as(i64, 2), seq);
+
     const total = try scalarI64(&s, "SELECT count(*) FROM entry WHERE graph_id = $1", .{@as([]const u8, &g.bytes)});
     try testing.expectEqual(@as(i64, 2), total);
 }
@@ -214,6 +219,7 @@ test "a lost lease is reclaimed without repeating the extraction and fences the 
     try testing.expectError(error.LeaseLost, s.saveChangeSet(retry, &.{ .base_seq = 0 }));
     try testing.expect(try s.commit(retry, &.{ .base_seq = 0 }, null) == .fenced);
     try testing.expectEqualStrings("staged", try status(&s, entry_id));
+
     const res = try s.commit(resumed, &.{ .base_seq = 0 }, null);
     try testing.expectEqual(@as(i64, 1), res.committed.seq);
     try testing.expect(try s.commit(resumed, &.{ .base_seq = 0 }, null) == .fenced);
@@ -249,6 +255,7 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
     const en1 = try enqueueNew(&s, g, note("commit", "entry one", t0));
     const l1 = (try s.claim(a, g, "w")).?;
     try testing.expect(l1.entry_id.eql(en1));
+
     const cs1: core.ChangeSet = .{
         .base_seq = 0,
         .new_entities = &.{ graf, pgzig, dup, hollis },
@@ -266,6 +273,7 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
     try testing.expectEqual(@as(i64, 1), with_emb);
     try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM relation WHERE graph_id = $1 AND name = 'benchmarked_on' AND status = 'proposed'", .{gid}));
     try testing.expectEqual(@as(i64, 2), try scalarI64(&s, "SELECT count(*) FROM entity_mention WHERE entry_id = $1", .{@as([]const u8, &en1.bytes)}));
+
     {
         var row = (try s.pool.row(
             "SELECT emb::float4[], lower(valid), upper_inf(valid), upper_inf(known), object_id IS NOT NULL FROM fact WHERE id = $1",
@@ -291,9 +299,11 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
     const e5 = emb(6);
     const handoff = newFact(&s, g, graf.id, "has_oncall", .{ .entity = juno.id }, "Juno is on call for graf.", t0 + day, &e4);
     const supports = newFact(&s, g, pgzig.id, "supports_feature", .{ .value = "COPY" }, "pg.zig supports COPY.", t0 + day, &e5);
+
     const en2 = try enqueueNew(&s, g, note("commit", "entry two", t0 + day));
     const l2 = (try s.claim(a, g, "w")).?;
     try testing.expect(l2.entry_id.eql(en2));
+
     const cs2: core.ChangeSet = .{
         .base_seq = 1,
         .new_entities = &.{juno},
@@ -308,6 +318,7 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
         .evidence = &.{.{ .fact_id = uses.fact.id, .kind = .restated }},
         .warnings = &.{"from the pipeline"},
     };
+
     try s.recordCall(&.{ .id = Id.v7(s.io), .graph_id = g, .entry_id = en2, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .cost_usd = 0.0042, .cost_status = .priced, .latency_ms = 900, .started_at = core.time.now(s.io) });
     try stage(&s, l2, &cs2);
     try testing.expectEqual(@as(i64, 2), (try s.commit(l2, &cs2, null)).committed.seq);
@@ -324,6 +335,7 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
         defer row.deinit() catch {};
         try testing.expect(pgzig.id.eql(try store.idFromPg(try row.get([]const u8, 0))));
     }
+
     try testing.expectEqual(@as(i64, 2), try scalarI64(&s, "SELECT count(*) FROM fact WHERE subject_id = $1", .{@as([]const u8, &pgzig.id.bytes)}));
     try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM entity_alias WHERE entity_id = $1 AND norm = 'pgzig driver'", .{@as([]const u8, &pgzig.id.bytes)}));
     try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM merge_log WHERE graph_id = $1 AND seq = 2 AND $2::uuid = ANY(moved_facts)", .{ gid, @as([]const u8, &lacks.fact.id.bytes) }));
@@ -336,6 +348,7 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
         try testing.expect(handoff.fact.id.eql(try store.idFromPg(try row.get([]const u8, 2))));
         try testing.expect(try row.get(bool, 3));
     }
+
     {
         var row = (try s.pool.row("SELECT upper_inf(valid), confidence, upper_inf(known) FROM fact WHERE id = $1", .{@as([]const u8, &uses.fact.id.bytes)})).?;
         defer row.deinit() catch {};
@@ -343,6 +356,7 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
         try testing.expectApproxEqAbs(@as(f32, 0.93), try row.get(f32, 1), 1e-6);
         try testing.expect(try row.get(bool, 2));
     }
+
     {
         var row = (try s.pool.row("SELECT upper_inf(known), end_kind, upper_inf(valid) FROM fact WHERE id = $1", .{@as([]const u8, &lacks.fact.id.bytes)})).?;
         defer row.deinit() catch {};
@@ -350,7 +364,9 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
         try testing.expectEqualStrings("retracted", try row.get([]const u8, 1));
         try testing.expect(try row.get(bool, 2));
     }
+
     try testing.expectEqual(@as(i64, 2), try scalarI64(&s, "SELECT count(*) FROM fact_evidence WHERE fact_id = $1", .{@as([]const u8, &uses.fact.id.bytes)}));
+
     {
         var row = (try s.pool.row(
             \\SELECT status, commit_seq, cost_usd::float8, jsonb_array_length(warnings),
@@ -388,6 +404,7 @@ const RebaseProbe = struct {
         _ = conn;
         _ = cs;
         _ = base_seq;
+
         const p: *RebaseProbe = @ptrCast(@alignCast(ptr));
         _ = p.calls.fetchAdd(1, .seq_cst);
         p.seen_latest.store(latest_seq, .seq_cst);
@@ -420,10 +437,12 @@ test "two committers racing on one graph get consecutive seqs and the loser reba
     _ = try enqueueNew(&s, g, note("race-b", "b", 2_000));
     const la = (try s.claim(a, g, "a")).?;
     const lb = (try s.claim(a, g, "b")).?;
+
     const ea = entity(&s, "alpha", .concept);
     const eb = entity(&s, "beta", .concept);
     const csa: core.ChangeSet = .{ .base_seq = 0, .new_entities = &.{ea} };
     const csb: core.ChangeSet = .{ .base_seq = 0, .new_entities = &.{eb} };
+
     try stage(&s, la, &csa);
     try stage(&s, lb, &csb);
 
@@ -431,6 +450,7 @@ test "two committers racing on one graph get consecutive seqs and the loser reba
     var start: std.atomic.Value(bool) = .init(false);
     var ra: Racer = .{ .s = &s, .lease = la, .cs = &csa, .probe = &probe, .start = &start };
     var rb: Racer = .{ .s = &s, .lease = lb, .cs = &csb, .probe = &probe, .start = &start };
+
     const ta = try std.Thread.spawn(.{}, Racer.go, .{&ra});
     const tb = try std.Thread.spawn(.{}, Racer.go, .{&rb});
     start.store(true, .release);
@@ -452,15 +472,18 @@ const DedupRebase = struct {
 
     fn run(ptr: *anyopaque, conn: *pg.Conn, cs: *core.ChangeSet, base_seq: i64, latest_seq: i64) anyerror!void {
         const self: *DedupRebase = @ptrCast(@alignCast(ptr));
+
         var kept: std.ArrayList(core.ChangeSet.NewFact) = .empty;
         var restate: std.ArrayList(core.ChangeSet.Restatement) = .empty;
         var evidence: std.ArrayList(core.ChangeSet.Evidence) = .empty;
+
         for (cs.new_facts) |nf| {
             var row = try conn.row(
                 \\SELECT f.id, f.confidence FROM fact f JOIN commit_log c ON c.graph_id = f.graph_id AND f.id = ANY(c.touched_facts)
                 \\WHERE c.graph_id = $1 AND c.seq > $2 AND c.seq <= $3 AND f.subject_id = $4 AND f.relation = $5
                 \\  AND f.object_value = $6 AND upper_inf(f.valid) AND upper_inf(f.known)
             , .{ @as([]const u8, &self.graph.bytes), base_seq, latest_seq, @as([]const u8, &nf.fact.subject_id.bytes), nf.fact.relation, nf.fact.object.value });
+
             if (row) |*r| {
                 defer r.deinit() catch {};
                 const existing = try store.idFromPg(try r.get([]const u8, 0));
@@ -469,6 +492,7 @@ const DedupRebase = struct {
                 try evidence.append(self.arena, .{ .fact_id = existing, .kind = .restated });
             } else try kept.append(self.arena, nf);
         }
+
         cs.new_facts = kept.items;
         cs.restatements = restate.items;
         cs.evidence = evidence.items;
@@ -484,6 +508,7 @@ test "a rebase sees the commits it missed and its rewrite is what lands" {
     const a = arena.allocator();
 
     const subject = entity(&s, "graf", .project);
+
     _ = try enqueueNew(&s, g, note("seed", "seed", 500));
     const ls = (try s.claim(a, g, "seed")).?;
     const seed_cs: core.ChangeSet = .{ .base_seq = 0, .new_entities = &.{subject} };
@@ -499,6 +524,7 @@ test "a rebase sees the commits it missed and its rewrite is what lands" {
     _ = try enqueueNew(&s, g, note("y", "two", 2_000));
     const l1 = (try s.claim(a, g, "1")).?;
     const l2 = (try s.claim(a, g, "2")).?;
+
     const cs1: core.ChangeSet = .{ .base_seq = 1, .new_facts = &.{first}, .evidence = &.{.{ .fact_id = first.fact.id, .kind = .stated }} };
     const cs2: core.ChangeSet = .{ .base_seq = 1, .new_facts = &.{second}, .evidence = &.{.{ .fact_id = second.fact.id, .kind = .stated }} };
     try stage(&s, l1, &cs1);
@@ -512,6 +538,7 @@ test "a rebase sees the commits it missed and its rewrite is what lands" {
     const gid: []const u8 = &g.bytes;
     try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM fact WHERE graph_id = $1", .{gid}));
     try testing.expectEqual(@as(i64, 2), try scalarI64(&s, "SELECT count(*) FROM fact_evidence WHERE fact_id = $1", .{@as([]const u8, &first.fact.id.bytes)}));
+
     var row = (try s.pool.row(
         "SELECT confidence, (SELECT jsonb_array_length(change_set->'new_facts') FROM entry WHERE id = $2) FROM fact WHERE id = $1",
         .{ @as([]const u8, &first.fact.id.bytes), @as([]const u8, &l2.entry_id.bytes) },
@@ -532,10 +559,12 @@ test "commit rejects embeddings of the wrong width and leaves the entry staged" 
     const subject = entity(&s, "graf", .project);
     const short = [_]f32{ 0.1, 0.2 };
     const bad = newFact(&s, g, subject.id, "uses", .{ .value = "Zig" }, "graf uses Zig.", 1_000, &short);
+
     const entry_id = try enqueueNew(&s, g, note("bad", "bad", 1_000));
     const l = (try s.claim(a, g, "w")).?;
     const cs: core.ChangeSet = .{ .base_seq = 0, .new_entities = &.{subject}, .new_facts = &.{bad} };
     try stage(&s, l, &cs);
+
     try testing.expectError(error.InvalidEmbedding, s.commit(l, &cs, null));
     try testing.expectEqualStrings("staged", try status(&s, entry_id));
     try testing.expectEqual(@as(i64, 0), try scalarI64(&s, "SELECT count(*) FROM entity WHERE graph_id = $1", .{@as([]const u8, &g.bytes)}));
@@ -569,6 +598,7 @@ test "the ledger fills a missing graph id from the entry, then from the bound gr
     const ledger = s.ledger();
     try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .entry_id = entry_id, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = core.time.now(s.io) });
     try testing.expectError(error.PG, ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = core.time.now(s.io) }));
+
     _ = s.sink(g);
     try ledger.record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .purpose = .embed_query, .route = "embeddings", .model = "example-embed", .attempt = 1, .ok = true, .latency_ms = 10, .started_at = core.time.now(s.io) });
     try testing.expectEqual(@as(i64, 2), try scalarI64(&s, "SELECT count(*) FROM llm_call WHERE graph_id = $1", .{gid}));

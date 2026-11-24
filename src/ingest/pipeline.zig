@@ -107,6 +107,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             const fact_vecs = vecs[ents.len..][0..facts.len];
             const novel_vecs = vecs[ents.len + facts.len ..][0..novel.len];
             const missing_vecs = vecs[ents.len + facts.len + novel.len ..];
+
             if (missing.items.len > 0) {
                 var names: std.ArrayList([]const u8) = .empty;
                 for (missing.items, missing_vecs) |k, v| {
@@ -134,6 +135,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 .commit_time = core.time.now(d.io),
                 .io = d.io,
             }, checked, prefetched, p, .{ .entities = ent_vecs, .facts = fact_vecs, .relations = novel_vecs }, verdict);
+
             if (extra_warnings.items.len > 0) {
                 var all: std.ArrayList([]const u8) = .empty;
                 try all.appendSlice(arena, cs.warnings);
@@ -169,6 +171,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 .schema_name = "extract_result",
                 .schema_json = schema.extract_result,
             };
+
             const resp = d.model.structured(arena, req) catch |err| return .{ .outcome = try d.providerFailure(arena, lease, err, .extraction) };
 
             const first = try decodeChecked(arena, resp.json, body_text, entry.reference_time);
@@ -180,6 +183,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 const second = try decodeChecked(arena, repaired.json, body_text, entry.reference_time);
                 if (second.checked) |c| if (!c.needs_repair) return .{ .checked = c };
             }
+
             try d.backend.finish(lease, .{ .dead = "extraction output failed validation after one repair" });
             return .{ .outcome = .dead };
         }
@@ -208,6 +212,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
             if (d.model.decisionEnabled()) decision: {
                 const q = try resolve.decisionQuestions(arena, p, checked, prefetched);
                 if (q.asks.len == 0) break :decision;
+
                 const answers = d.model.decide(arena, .{
                     .purpose = .resolve,
                     .entry_id = lease.entry.id,
@@ -221,6 +226,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                     try warnings.append(arena, "decision backend answered the wrong number of questions; used the structured resolution call");
                     break :decision;
                 }
+
                 return .{ .verdict = try resolve.verdictFromAnswers(arena, p, q.questions, answers, .{
                     .duplicate = d.config.decision.dup_threshold,
                     .contradiction = d.config.decision.contradict_threshold,
@@ -235,6 +241,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 .schema_name = "resolve_result",
                 .schema_json = schema.resolve_result,
             };
+
             const resp = d.model.structured(arena, req) catch |err| {
                 if (try d.resolutionFallback(arena, lease, err)) |o| return .{ .outcome = o };
                 try warnings.append(arena, "resolution call failed; resolved deterministically");
@@ -246,12 +253,14 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 try warnings.append(arena, "resolution output invalid after one repair; resolved deterministically");
                 return .{ .verdict = try resolve.Verdict.none(arena, p) };
             }
+
             const repaired = d.model.repair(arena, req, resp.json, "the output did not match the resolution schema or named unknown labels") catch |err| {
                 if (try d.resolutionFallback(arena, lease, err)) |o| return .{ .outcome = o };
                 try warnings.append(arena, "resolution repair failed; resolved deterministically");
                 return .{ .verdict = try resolve.Verdict.none(arena, p) };
             };
             if (try interpretResolution(arena, p, checked, repaired.json, warnings)) |v| return .{ .verdict = v };
+
             try warnings.append(arena, "resolution output invalid after one repair; resolved deterministically");
             return .{ .verdict = try resolve.Verdict.none(arena, p) };
         }
@@ -290,6 +299,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 try d.backend.finish(lease, .{ .requeue = .{ .delay_ms = 0, .count_attempt = false, .reason = "no model is configured" } });
                 return err;
             }
+
             const f = d.failureOf(err) orelse return err;
             switch (f.disposition) {
                 .split => {
@@ -297,6 +307,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                         try d.backend.finish(lease, .{ .split = halves });
                         return .split;
                     };
+
                     try d.backend.finish(lease, .{ .dead = "context overflow on an entry too small to split" });
                     return .dead;
                 },
@@ -313,6 +324,7 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                         try d.backend.finish(lease, .{ .dead = "transient provider failures exhausted the retry budget" });
                         return .dead;
                     }
+
                     const delay: i64 = if (f.retry_after_ms) |ra| ra else @as(i64, 30_000) << @intCast(@max(lease.entry.attempts, 0));
                     try d.backend.finish(lease, .{ .requeue = .{ .delay_ms = delay, .count_attempt = true, .reason = "transient provider failure" } });
                     return .requeued;
@@ -334,12 +346,14 @@ fn prefetchRequest(arena: Allocator, checked: extract.Checked, ent_vecs: []const
         }
         norms[i] = list.items;
     }
+
     const facts = checked.result.facts;
     const subj = try arena.alloc(u32, facts.len);
     const obj = try arena.alloc(?u32, facts.len);
     const rels = try arena.alloc([]const u8, facts.len);
     const opp = try arena.alloc(?[]const u8, facts.len);
     const texts = try arena.alloc([]const u8, facts.len);
+
     for (facts, 0..) |f, j| {
         subj[j] = @intCast(resolve.entityIndex(checked, f.subject));
         obj[j] = if (f.object) |o| @intCast(resolve.entityIndex(checked, o)) else null;
@@ -347,6 +361,7 @@ fn prefetchRequest(arena: Allocator, checked: extract.Checked, ent_vecs: []const
         opp[j] = if (core.ontology.find(f.relation)) |rel| rel.opposes else null;
         texts[j] = f.text;
     }
+
     return .{
         .entity_norms = norms,
         .entity_embs = ent_vecs,
@@ -364,13 +379,16 @@ pub fn splitBody(arena: Allocator, body: core.EntryBody) Allocator.Error!?[2]cor
         const mid = body.turns.len / 2;
         return .{ .{ .turns = body.turns[0..mid], .text = body.text }, .{ .turns = body.turns[mid..] } };
     }
+
     const text = if (body.text) |t| t else if (body.turns.len == 1) body.turns[0].text else return null;
     if (text.len < 64) return null;
+
     var mid = text.len / 2;
     while (mid < text.len and text[mid] != ' ' and text[mid] != '\n') mid += 1;
     if (mid == text.len) mid = text.len / 2;
     while (mid > 0 and (text[mid] & 0xC0) == 0x80) mid -= 1;
     if (body.turns.len == 0) return .{ .{ .text = text[0..mid] }, .{ .text = text[mid..] } };
+
     const halves = try arena.alloc(core.Turn, 2);
     halves[0] = body.turns[0];
     halves[0].text = text[0..mid];

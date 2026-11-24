@@ -56,6 +56,7 @@ pub fn claimJob(conn: *pg.Conn, graph_id: Id, name: []const u8, interval_s: i32)
 
 pub fn runDailyPromotion(conn: *pg.Conn, graph_id: Id) !bool {
     if (!try claimJob(conn, graph_id, "relation_promotion", promotion_interval_s)) return false;
+
     var gbuf: [36]u8 = undefined;
     _ = try conn.exec(promote_sql, .{graph_id.toString(&gbuf)});
     return true;
@@ -97,9 +98,11 @@ pub fn refreshSummaries(comptime Model: type, arena: Allocator, conn: *pg.Conn, 
             .schema_name = "entity_summary",
             .schema_json = schema.strict(prompt.SummaryResult),
         }) catch break;
+
         const parsed = std.json.parseFromSliceLeaky(prompt.SummaryResult, arena, resp.json, .{ .allocate = .alloc_always }) catch continue;
         try saveSummary(conn, e.id, std.mem.trim(u8, parsed.summary, " \n"));
         done += 1;
     }
+
     return done;
 }

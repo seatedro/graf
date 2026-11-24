@@ -42,6 +42,7 @@ pub const RecallCache = struct {
             gop.value_ptr.* = s;
             if (c.sessions.count() > max_sessions) c.evictOldest(gpa, gop.key_ptr.*);
         }
+
         gop.value_ptr.*.last_used = now;
         return gop.value_ptr.*;
     }
@@ -57,6 +58,7 @@ pub const RecallCache = struct {
                 oldest = kv.key_ptr.*;
             }
         }
+
         const k = oldest orelse return;
         const kv = c.sessions.fetchRemove(k).?;
         destroy(gpa, kv.key, kv.value);
@@ -73,6 +75,7 @@ pub fn warm(e: *mod.Engine, session_id: []const u8, prompt: []const u8, project:
     c.mutex.lockUncancelable(e.io);
     defer c.mutex.unlock(e.io);
     const s = try c.session(e.gpa, session_id, core.time.now(e.io));
+
     _ = s.arena.reset(.retain_capacity);
     const a = s.arena.allocator();
     const copy = try a.alloc(Hit, top.len);
@@ -93,6 +96,7 @@ pub fn recall(e: *mod.Engine, arena: std.mem.Allocator, session_id: []const u8, 
     const header = "graf recall (facts from memory relevant to this prompt):\n";
     _ = budget.take(header.len);
     var picked: std.AutoArrayHashMapUnmanaged(core.Id, void) = .empty;
+
     for ([_][]const Hit{ instant.hits[0..@min(instant.hits.len, per_source)], s.warmed[0..@min(s.warmed.len, per_source)] }) |hits| {
         for (hits) |*h| {
             if (s.injected.contains(h.fact.id)) continue;
@@ -105,6 +109,7 @@ pub fn recall(e: *mod.Engine, arena: std.mem.Allocator, session_id: []const u8, 
             try picked.put(arena, h.fact.id, {});
         }
     }
+
     for (picked.keys()) |id| try s.injected.put(e.gpa, id, {});
     return out.written();
 }

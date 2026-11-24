@@ -18,6 +18,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
 
     const conn = try s.pool.acquire();
     defer conn.release();
+
     try conn.begin();
     var done = false;
     defer if (!done) conn.rollback() catch {};
@@ -63,6 +64,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
             id.* = &r.fact_id.bytes;
             c.* = r.confidence;
         }
+
         _ = try conn.exec(
             \\UPDATE fact f SET confidence = t.c
             \\FROM unnest($2::uuid[], $3::float4[]) AS t(id, c)
@@ -80,6 +82,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
             up.* = inv.valid_upper;
             by.* = if (inv.ended_by) |*e| &e.bytes else null;
         }
+
         const applied = try collectIds(a, conn,
             \\UPDATE fact f SET
             \\  valid = tstzrange(lower(f.valid), t.upper),
@@ -91,6 +94,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
             \\  AND (lower_inf(f.valid) OR t.upper >= lower(f.valid))
             \\RETURNING f.id
         , .{ gid, ids, uppers, ended_by });
+
         for (cs.invalidations) |inv| {
             if (containsId(applied, &inv.fact_id.bytes)) continue;
             var buf: [36]u8 = undefined;
@@ -108,6 +112,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
             k.* = @tagName(r.end_kind);
             by.* = if (r.ended_by) |*e| &e.bytes else null;
         }
+
         const applied = try collectIds(a, conn,
             \\UPDATE fact f SET known = tstzrange(lower(f.known), $2), end_kind = t.end_kind, ended_by = t.ended_by
             \\FROM unnest($3::uuid[], $4::text[], $5::uuid[]) AS t(id, end_kind, ended_by)
@@ -126,6 +131,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
             kind.* = @tagName(ev.kind);
             q.* = ev.quote;
         }
+
         _ = try conn.exec(
             \\INSERT INTO fact_evidence (fact_id, entry_id, kind, quote)
             \\SELECT t.fact_id, $1, t.kind, t.quote FROM unnest($2::uuid[], $3::text[], $4::text[]) AS t(fact_id, kind, quote)
@@ -153,6 +159,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
         const object_kinds = try a.alloc([]const u8, n);
         const statuses = try a.alloc([]const u8, n);
         const mapped = try a.alloc(?[]const u8, n);
+
         for (cs.new_relations, 0..) |relation, i| {
             names[i] = relation.name;
             descriptions[i] = relation.description;
@@ -162,6 +169,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
             statuses[i] = @tagName(relation.status);
             mapped[i] = relation.mapped_to;
         }
+
         _ = try conn.exec(
             \\INSERT INTO relation (graph_id, name, description, cardinality, opposes, object_kind, status, mapped_to)
             \\SELECT $1, t.* FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[])
@@ -213,6 +221,7 @@ fn insertEntities(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i6
         const descriptions = try a.alloc([]const u8, n);
         const offsets = try a.alloc(i32, n);
         var flat: std.ArrayList(f32) = .empty;
+
         for (cs.new_entities, 0..) |*e, i| {
             ids[i] = &e.id.bytes;
             names[i] = e.name;
@@ -220,11 +229,13 @@ fn insertEntities(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i6
             types[i] = @tagName(e.type);
             descriptions[i] = e.description;
             offsets[i] = 0;
+
             if (e.name_emb.len != 0) {
                 if (e.name_emb.len != dims) return error.InvalidEmbedding;
                 offsets[i] = @intCast(flat.items.len + 1);
                 try flat.appendSlice(a, e.name_emb);
             }
+
             try alias_norms.append(a, e.norm);
             try alias_ids.append(a, ids[i]);
             try alias_texts.append(a, e.name);
@@ -234,6 +245,7 @@ fn insertEntities(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i6
                 try alias_texts.append(a, alias);
             }
         }
+
         _ = try conn.exec(
             \\INSERT INTO entity (id, graph_id, name, norm, type, description, name_emb, created_seq, updated_seq)
             \\SELECT t.id, $1, t.name, t.norm, t.type, t.description,
@@ -286,6 +298,7 @@ fn applyMerge(s: *Store, a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, 
         \\)
         \\SELECT id FROM moved
     , .{ gid, @as([]const u8, &m.from.bytes), @as([]const u8, &m.into.bytes), seq, @as([]const u8, &log_id.bytes), m.reason });
+
     try touched_entities.append(a, &m.from.bytes);
     try touched_entities.append(a, &m.into.bytes);
     try touched_facts.appendSlice(a, moved);
@@ -293,6 +306,7 @@ fn applyMerge(s: *Store, a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, 
 
 fn insertFacts(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, commit_ts: i64, facts: []const core.ChangeSet.NewFact, touched: *std.ArrayList([]const u8)) !void {
     if (facts.len == 0) return;
+
     const n = facts.len;
     const ids = try a.alloc([]const u8, n);
     const subjects = try a.alloc([]const u8, n);
@@ -311,14 +325,17 @@ fn insertFacts(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, 
     const authors = try a.alloc([]const u8, n);
     const confidence = try a.alloc(f32, n);
     const flat = try a.alloc(f32, n * dims);
+
     for (facts, 0..) |*nf, i| {
         const f = &nf.fact;
         if (nf.emb.len != dims) return error.InvalidEmbedding;
         @memcpy(flat[i * dims ..][0..dims], nf.emb);
+
         ids[i] = &f.id.bytes;
         subjects[i] = &f.subject_id.bytes;
         relations[i] = f.relation;
         qualifiers[i] = f.qualifier;
+
         switch (f.object) {
             .entity => |*e| {
                 object_ids[i] = &e.bytes;
@@ -329,6 +346,7 @@ fn insertFacts(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, 
                 object_values[i] = v;
             },
         }
+
         texts[i] = f.text;
         rationales[i] = f.rationale;
         projects[i] = f.project;
@@ -340,6 +358,7 @@ fn insertFacts(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, 
         authors[i] = @tagName(f.author);
         confidence[i] = f.confidence;
     }
+
     _ = try conn.exec(
         \\INSERT INTO fact (id, graph_id, subject_id, relation, qualifier, object_id, object_value, text,
         \\  rationale, project, scope, valid, known, end_kind, ended_by, author, confidence, emb, created_seq)

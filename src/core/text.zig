@@ -3,12 +3,14 @@ const std = @import("std");
 pub fn normInto(out: []u8, s: []const u8) []u8 {
     var n: usize = 0;
     var pending_space = false;
+
     for (s) |c| {
         const keep = c >= 0x80 or std.ascii.isAlphanumeric(c);
         if (!keep) {
             pending_space = n > 0;
             continue;
         }
+
         if (pending_space) {
             out[n] = ' ';
             n += 1;
@@ -17,6 +19,7 @@ pub fn normInto(out: []u8, s: []const u8) []u8 {
         out[n] = std.ascii.toLower(c);
         n += 1;
     }
+
     return out[0..n];
 }
 

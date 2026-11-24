@@ -119,6 +119,7 @@ pub fn writeEscaped(w: *Io.Writer, value: []const u8) Io.Writer.Error!void {
 pub fn threadsTarget(arena: Allocator, project_id: []const u8, cursor: ?[]const u8, limit: u32) Allocator.Error![]const u8 {
     var out: Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
+
     w.writeAll("/threads?projectId=") catch return error.OutOfMemory;
     writeEscaped(w, project_id) catch return error.OutOfMemory;
     w.print("&limit={d}", .{limit}) catch return error.OutOfMemory;
@@ -126,12 +127,14 @@ pub fn threadsTarget(arena: Allocator, project_id: []const u8, cursor: ?[]const 
         w.writeAll("&cursor=") catch return error.OutOfMemory;
         writeEscaped(w, c) catch return error.OutOfMemory;
     }
+
     return out.written();
 }
 
 pub fn messagesTarget(arena: Allocator, thread_id: []const u8, after: ?[]const u8, limit: u32) Allocator.Error![]const u8 {
     var out: Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
+
     w.writeAll("/threads/") catch return error.OutOfMemory;
     writeEscaped(w, thread_id) catch return error.OutOfMemory;
     w.print("/messages?limit={d}", .{limit}) catch return error.OutOfMemory;
@@ -139,12 +142,14 @@ pub fn messagesTarget(arena: Allocator, thread_id: []const u8, after: ?[]const u
         w.writeAll("&after=") catch return error.OutOfMemory;
         writeEscaped(w, a) catch return error.OutOfMemory;
     }
+
     return out.written();
 }
 
 pub fn streamTarget(arena: Allocator, thread_id: []const u8) Allocator.Error![]const u8 {
     var out: Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
+
     w.writeAll("/threads/") catch return error.OutOfMemory;
     writeEscaped(w, thread_id) catch return error.OutOfMemory;
     w.writeAll("/stream") catch return error.OutOfMemory;
@@ -191,14 +196,17 @@ pub const Client = struct {
             .redirect_behavior = .unhandled,
         });
         defer req.deinit();
+
         try req.sendBodiless();
         var response = try req.receiveHead(&.{});
         diag.status = @backingInt(response.head.status);
+
         var header_retry: ?u32 = null;
         var it = response.head.iterateHeaders();
         while (it.next()) |h| if (std.ascii.eqlIgnoreCase(h.name, "retry-after")) {
             header_retry = std.fmt.parseInt(u32, std.mem.trim(u8, h.value, " "), 10) catch null;
         };
+
         if (response.head.content_encoding != .identity) return error.BadResponse;
         var transfer: [16 * 1024]u8 = undefined;
         const reader = response.reader(&transfer);
@@ -206,6 +214,7 @@ pub const Client = struct {
             error.ReadFailed => return response.bodyErr() orelse error.ReadFailed,
             else => |e| return e,
         };
+
         classify(diag.status) catch |err| {
             diag.retry_after_s = retryAfter(arena, header_retry, body);
             return err;
@@ -225,6 +234,7 @@ pub const Stream = struct {
 
     pub fn open(s: *Stream, c: *Client, arena: Allocator, thread_id: []const u8, last_event_id: ?[]const u8, diag: *Diag) !void {
         const url = try std.fmt.allocPrint(arena, "{s}{s}", .{ c.base_url, try streamTarget(arena, thread_id) });
+
         s.extra[0] = .{ .name = "accept", .value = "text/event-stream" };
         var extra_len: usize = 1;
         if (last_event_id) |id| {
@@ -233,6 +243,7 @@ pub const Stream = struct {
             s.extra[1] = .{ .name = "last-event-id", .value = s.id_buf[0..id.len] };
             extra_len = 2;
         }
+
         s.req = try c.http.request(.GET, try std.Uri.parse(url), .{
             .headers = c.headers(),
             .extra_headers = s.extra[0..extra_len],
@@ -240,14 +251,17 @@ pub const Stream = struct {
             .keep_alive = false,
         });
         errdefer s.req.deinit();
+
         try s.req.sendBodiless();
         s.response = try s.req.receiveHead(&.{});
         diag.status = @backingInt(s.response.head.status);
+
         var header_retry: ?u32 = null;
         var it = s.response.head.iterateHeaders();
         while (it.next()) |h| if (std.ascii.eqlIgnoreCase(h.name, "retry-after")) {
             header_retry = std.fmt.parseInt(u32, std.mem.trim(u8, h.value, " "), 10) catch null;
         };
+
         if (s.response.head.content_encoding != .identity) return error.BadResponse;
         s.reader = s.response.reader(&s.transfer);
         classify(diag.status) catch |err| {
@@ -255,6 +269,7 @@ pub const Stream = struct {
             diag.retry_after_s = retryAfter(arena, header_retry, body);
             return err;
         };
+
         s.line = .init(c.gpa);
     }
 
@@ -270,10 +285,12 @@ pub const Stream = struct {
             error.WriteFailed => return error.OutOfMemory,
             error.StreamTooLong => return error.StreamTooLong,
         };
+
         _ = s.reader.takeByte() catch |err| switch (err) {
             error.EndOfStream => return null,
             error.ReadFailed => return s.readError(),
         };
+
         return s.line.written();
     }
 
@@ -288,6 +305,7 @@ const testing = std.testing;
 
 test "backoff honors retry-after, grows exponentially to a cap, and waits long on auth failures" {
     const b: Backoff = .{ .base_ms = 1000, .max_ms = 60_000, .auth_ms = 300_000 };
+
     try testing.expectEqual(@as(u64, 7000), b.delay(error.RateLimited, 7, 0));
     try testing.expectEqual(@as(u64, 1000), b.delay(error.RateLimited, 0, 4));
     try testing.expectEqual(@as(u64, 4000), b.delay(error.RateLimited, null, 2));
@@ -313,6 +331,7 @@ test "targets escape their parameters" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
+
     try testing.expectEqualStrings("/threads?projectId=proj_1&limit=100&cursor=1700%3Ajam_9", try threadsTarget(a, "proj_1", "1700:jam_9", 100));
     try testing.expectEqualStrings("/threads?projectId=p%20q&limit=5", try threadsTarget(a, "p q", null, 5));
     try testing.expectEqualStrings("/threads/jam_1/messages?limit=50&after=01JZ", try messagesTarget(a, "jam_1", "01JZ", 50));

@@ -68,6 +68,7 @@ pub const Server = struct {
             l.deinit(s.io);
             s.tcp = null;
         };
+
         if (s.options.socket_path) |path| s.unix = try listenUnix(s.io, path);
     }
 
@@ -76,6 +77,7 @@ pub const Server = struct {
             s.listeners.cancel(s.io);
             s.connections.cancel(s.io);
         }
+
         if (s.tcp) |*l| try s.listeners.concurrent(s.io, acceptLoop, .{ s, l, .tcp });
         if (s.unix) |*l| try s.listeners.concurrent(s.io, acceptLoop, .{ s, l, .unix });
         try s.stopping.wait(s.io);
@@ -115,20 +117,25 @@ pub const Server = struct {
 
     fn serveConnection(s: *Server, stream: net.Stream, transport: Transport) void {
         defer stream.close(s.io);
+
         var recv_buffer: [16 * 1024]u8 = undefined;
         var send_buffer: [16 * 1024]u8 = undefined;
         var reader = stream.reader(s.io, &recv_buffer);
         var writer = stream.writer(s.io, &send_buffer);
         var http_server = std.http.Server.init(&reader.interface, &writer.interface);
+
         var arena_state = std.heap.ArenaAllocator.init(s.gpa);
         defer arena_state.deinit();
+
         while (true) {
             _ = arena_state.reset(.retain_capacity);
             var request = http_server.receiveHead() catch return;
             const keep_alive = request.head.keep_alive;
             const response = s.respondTo(arena_state.allocator(), &request, transport) catch return;
+
             var headers: [3]std.http.Header = undefined;
             var count: usize = 0;
+
             if (response.body.len > 0) {
                 headers[count] = .{ .name = "content-type", .value = "application/json" };
                 count += 1;
@@ -141,11 +148,13 @@ pub const Server = struct {
                 headers[count] = .{ .name = "www-authenticate", .value = "Bearer realm=\"graf\"" };
                 count += 1;
             }
+
             request.respond(response.body, .{
                 .status = response.status,
                 .keep_alive = !response.close,
                 .extra_headers = headers[0..count],
             }) catch return;
+
             if (response.close or !keep_alive) return;
         }
     }
@@ -154,10 +163,12 @@ pub const Server = struct {
         const target = try arena.dupe(u8, request.head.target);
         const path, const query = std.mem.cut(u8, target, "?") orelse .{ target, "" };
         if (!originAllowed(request)) return errorResponse(arena, .forbidden, "origin not allowed");
+
         const route = try resolve(arena, path);
         const authorized = transport == .unix or s.options.token.len == 0 or bearerMatches(request, s.options.token);
         if (!authorized and !(route != null and route.?.endpoint == .health))
             return errorResponse(arena, .unauthorized, "unauthorized");
+
         const found = route orelse return errorResponse(arena, .not_found, "not found");
         if (request.head.method != found.method) {
             var response = try errorResponse(arena, .method_not_allowed, "method not allowed");
@@ -174,6 +185,7 @@ pub const Server = struct {
                 if (header(request, "mcp-protocol-version")) |version| {
                     if (!mcp.supportsVersion(version)) return errorResponse(arena, .bad_request, "unsupported MCP-Protocol-Version");
                 }
+
                 const body = readBody(arena, request) catch |err| return bodyError(arena, err);
                 const reply = try mcp.handlePost(arena, s.handler, s.options.version, body) orelse
                     return .{ .status = .accepted };
@@ -190,8 +202,10 @@ pub const Server = struct {
                         break :body raw;
                     },
                 };
+
                 const reply = s.handler.handle(arena, .{ .op = op.op, .body = body, .session_id = op.session_id }) catch |err|
                     return errorResponse(arena, .internal_server_error, @errorName(err));
+
                 const status: std.http.Status = if (reply.status >= 100 and reply.status <= 599) @fromBackingInt(@intCast(reply.status)) else .internal_server_error;
                 return .{ .status = status, .body = reply.body };
             },
@@ -202,14 +216,17 @@ pub const Server = struct {
 fn listenUnix(io: Io, path: []const u8) !net.Server {
     const address = try net.UnixAddress.init(path);
     if (std.fs.path.dirname(path)) |dir| try Io.Dir.cwd().createDirPath(io, dir);
+
     if (address.connect(io)) |stream| {
         stream.close(io);
         return error.AddressInUse;
     } else |_| {}
+
     Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
+
     var server = try address.listen(io, .{});
     errdefer server.deinit(io);
     try Io.Dir.cwd().setFilePermissions(io, path, @fromBackingInt(0o600), .{});
@@ -218,9 +235,11 @@ fn listenUnix(io: Io, path: []const u8) !net.Server {
 
 fn resolve(arena: Allocator, path: []const u8) !?Route {
     for (fixed_routes) |r| if (std.mem.eql(u8, r.path, path)) return r.route;
+
     const rest = std.mem.cutPrefix(u8, path, "/v1/sessions/") orelse return null;
     const raw_id, const action = std.mem.cut(u8, rest, "/") orelse return null;
     if (raw_id.len == 0) return null;
+
     const op: api.Op, const method: std.http.Method = if (std.mem.eql(u8, action, "warm"))
         .{ .warm, .POST }
     else if (std.mem.eql(u8, action, "recall"))
@@ -284,6 +303,7 @@ fn bearerMatches(request: *const std.http.Server.Request, token: []const u8) boo
     const value = header(request, "authorization") orelse return false;
     const scheme, const credentials = std.mem.cut(u8, value, " ") orelse return false;
     if (!std.ascii.eqlIgnoreCase(scheme, "bearer")) return false;
+
     const Sha256 = std.crypto.hash.sha2.Sha256;
     var presented: [Sha256.digest_length]u8 = undefined;
     var expected: [Sha256.digest_length]u8 = undefined;
@@ -296,10 +316,12 @@ fn originAllowed(request: *const std.http.Server.Request) bool {
     const origin = header(request, "origin") orelse return true;
     const rest = std.mem.cutPrefix(u8, origin, "http://") orelse std.mem.cutPrefix(u8, origin, "https://") orelse return false;
     if (header(request, "host")) |host| if (std.ascii.eqlIgnoreCase(host, rest)) return true;
+
     const host = if (std.mem.startsWith(u8, rest, "["))
         rest[0 .. (std.mem.findScalar(u8, rest, ']') orelse return false) + 1]
     else
         rest[0 .. std.mem.findScalar(u8, rest, ':') orelse rest.len];
+
     for ([_][]const u8{ "localhost", "127.0.0.1", "[::1]" }) |allowed| {
         if (std.ascii.eqlIgnoreCase(host, allowed)) return true;
     }
@@ -338,6 +360,7 @@ pub const FakeHandler = struct {
         const f: *FakeHandler = @ptrCast(@alignCast(ptr));
         try f.mutex.lock(f.io);
         defer f.mutex.unlock(f.io);
+
         f.count += 1;
         f.last_op = req.op;
         f.last_body.clearRetainingCapacity();
@@ -345,6 +368,7 @@ pub const FakeHandler = struct {
         f.last_session.clearRetainingCapacity();
         f.last_had_session = req.session_id != null;
         if (req.session_id) |id| try f.last_session.appendSlice(testing.allocator, id);
+
         if (std.mem.find(u8, req.body, "explode") != null) return error.Boom;
         if (std.mem.find(u8, req.body, "missing") != null) return api.errorReply(arena, 404, "no such entity");
         return .{ .body = try std.fmt.allocPrint(arena, "{{\"text\":\"ok {t}\"}}", .{req.op}) };
@@ -355,10 +379,12 @@ fn rawExchange(io: Io, port: u16, bytes: []const u8) ![]u8 {
     var address: net.IpAddress = .{ .ip4 = .loopback(port) };
     const stream = try address.connect(io, .{ .mode = .stream });
     defer stream.close(io);
+
     var send_buffer: [1024]u8 = undefined;
     var writer = stream.writer(io, &send_buffer);
     try writer.interface.writeAll(bytes);
     try writer.interface.flush();
+
     var recv_buffer: [4096]u8 = undefined;
     var reader = stream.reader(io, &recv_buffer);
     return reader.interface.allocRemaining(testing.allocator, .limited(1 << 20));
@@ -374,6 +400,7 @@ test "http routes over tcp and unix socket" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const socket_path = try std.fmt.allocPrint(arena, ".zig-cache/tmp/{s}/state/graf.sock", .{tmp.sub_path});
+
     try tmp.dir.createDirPath(io, "state");
     try tmp.dir.writeFile(io, .{ .sub_path = "state/graf.sock", .data = "stale" });
 
@@ -437,11 +464,13 @@ test "http routes over tcp and unix socket" {
         try testing.expectEqual(404, (try c.request(arena, .POST, "/v1/sessions/abc/sleep", "{}")).status);
         try testing.expectEqual(405, (try c.request(arena, .GET, "/v1/search", null)).status);
         try testing.expectEqual(405, (try c.request(arena, .POST, "/v1/brief", "{}")).status);
+
         r = try c.request(arena, .POST, "/v1/search", "not json");
         try testing.expectEqual(400, r.status);
         try testing.expectEqualStrings("{\"error\":\"request body must be a JSON object\"}", r.body);
         try testing.expectEqual(400, (try c.request(arena, .POST, "/v1/search", "[1]")).status);
         try testing.expectEqual(400, (try c.request(arena, .POST, "/v1/remember", null)).status);
+
         try testing.expectEqual(count, fake.count);
 
         r = try c.request(arena, .POST, "/v1/search", "{\"query\":\"explode\"}");
@@ -456,9 +485,11 @@ test "http routes over tcp and unix socket" {
         const listed = try std.json.parseFromSliceLeaky(std.json.Value, arena, r.body, .{});
         try testing.expectEqual(1, listed.object.get("id").?.integer);
         try testing.expectEqual(4, listed.object.get("result").?.object.get("tools").?.array.items.len);
+
         r = try c.request(arena, .POST, "/mcp", "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
         try testing.expectEqual(202, r.status);
         try testing.expectEqualStrings("", r.body);
+
         r = try c.request(arena, .POST, "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_search\",\"arguments\":{\"query\":\"q\"}}}");
         try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"ok search\"}],\"isError\":false}}", r.body);
         try testing.expectEqual(405, (try c.request(arena, .GET, "/mcp", null)).status);
@@ -467,6 +498,7 @@ test "http routes over tcp and unix socket" {
     var anonymous: Client = .init(io, .{ .tcp = tcp_target }, "");
     var wrong: Client = .init(io, .{ .tcp = tcp_target }, "nope");
     const count = fake.count;
+
     try testing.expectEqual(401, (try anonymous.request(arena, .POST, "/v1/search", "{\"query\":\"x\"}")).status);
     try testing.expectEqual(401, (try anonymous.request(arena, .GET, "/v1/nope", null)).status);
     try testing.expectEqual(401, (try anonymous.request(arena, .POST, "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}")).status);
@@ -480,6 +512,7 @@ test "http routes over tcp and unix socket" {
         "POST /v1/search HTTP/1.1\r\nhost: x\r\nauthorization: Bearer s3cret\r\ncontent-length: 13\r\n\r\n{\"query\":\"k\"}" ++
         "GET /v1/health HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
     defer gpa.free(pipelined);
+
     try testing.expectEqual(3, std.mem.count(u8, pipelined, "HTTP/1.1 200 OK"));
     try testing.expect(std.mem.find(u8, pipelined, "{\"text\":\"ok search\"}") != null);
     try testing.expect(std.mem.find(u8, pipelined, "content-type: application/json") != null);
@@ -501,13 +534,17 @@ test "unix socket refuses to replace a live daemon" {
     const io = testing.io;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
+
     var buffer: [256]u8 = undefined;
     const socket_path = try std.fmt.bufPrint(&buffer, ".zig-cache/tmp/{s}/graf.sock", .{tmp.sub_path});
+
     var fake: FakeHandler = .{ .io = io };
     defer fake.deinit();
+
     var first = Server.init(testing.allocator, io, fake.handler(), .{ .listen = "", .socket_path = socket_path });
     try first.start();
     defer first.deinit();
+
     var second = Server.init(testing.allocator, io, fake.handler(), .{ .listen = "", .socket_path = socket_path });
     try testing.expectError(error.AddressInUse, second.start());
 }

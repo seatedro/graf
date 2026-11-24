@@ -39,12 +39,14 @@ pub fn members(arena: Allocator, text: []const u8, object: Span) Error![]Member 
     var list: std.ArrayList(Member) = .empty;
     var pos = skipWs(text, object.start + 1);
     if (text[pos] == '}') return list.items;
+
     while (true) {
         if (pos >= text.len or text[pos] != '"') return error.InvalidJson;
         const key_start = pos;
         const key_end = try stringEnd(text, pos);
         pos = skipWs(text, key_end);
         if (pos >= text.len or text[pos] != ':') return error.InvalidJson;
+
         const value_start = skipWs(text, pos + 1);
         const value_end = try valueEnd(text, value_start);
         try list.append(arena, .{
@@ -52,6 +54,7 @@ pub fn members(arena: Allocator, text: []const u8, object: Span) Error![]Member 
             .key_start = key_start,
             .value = .{ .start = value_start, .end = value_end },
         });
+
         pos = skipWs(text, value_end);
         if (pos >= text.len) return error.InvalidJson;
         if (text[pos] == '}') return list.items;
@@ -65,9 +68,11 @@ pub fn elements(arena: Allocator, text: []const u8, array: Span) Error![]Span {
     var list: std.ArrayList(Span) = .empty;
     var pos = skipWs(text, array.start + 1);
     if (text[pos] == ']') return list.items;
+
     while (true) {
         const end = try valueEnd(text, pos);
         try list.append(arena, .{ .start = pos, .end = end });
+
         pos = skipWs(text, end);
         if (pos >= text.len) return error.InvalidJson;
         if (text[pos] == ']') return list.items;
@@ -94,6 +99,7 @@ pub fn stringValue(arena: Allocator, text: []const u8, span: Span) Error!?[]cons
 pub fn insertMember(arena: Allocator, text: []const u8, object: Span, key: []const u8, value: anytype) Error![]const u8 {
     const existing = try members(arena, text, object);
     const key_json = try std.json.Stringify.valueAlloc(arena, key, .{});
+
     if (existing.len > 0) {
         const last = existing[existing.len - 1];
         if (lineIndent(text, last.key_start)) |indent| {
@@ -103,6 +109,7 @@ pub fn insertMember(arena: Allocator, text: []const u8, object: Span, key: []con
         const rendered = try std.json.Stringify.valueAlloc(arena, value, .{});
         return splice(arena, text, last.value.end, last.value.end, &.{ ", ", key_json, ": ", rendered });
     }
+
     const outer = leadingIndent(text, object.start);
     const inner = try std.mem.concat(arena, u8, &.{ outer, indentUnit(text) });
     const rendered = try render(arena, value, inner, indentUnit(text));
@@ -111,6 +118,7 @@ pub fn insertMember(arena: Allocator, text: []const u8, object: Span, key: []con
 
 pub fn appendElement(arena: Allocator, text: []const u8, array: Span, value: anytype) Error![]const u8 {
     const existing = try elements(arena, text, array);
+
     if (existing.len > 0) {
         const last = existing[existing.len - 1];
         if (lineIndent(text, last.start)) |indent| {
@@ -120,6 +128,7 @@ pub fn appendElement(arena: Allocator, text: []const u8, array: Span, value: any
         const rendered = try std.json.Stringify.valueAlloc(arena, value, .{});
         return splice(arena, text, last.end, last.end, &.{ ", ", rendered });
     }
+
     const outer = leadingIndent(text, array.start);
     const inner = try std.mem.concat(arena, u8, &.{ outer, indentUnit(text) });
     const rendered = try render(arena, value, inner, indentUnit(text));
@@ -139,8 +148,10 @@ pub fn render(arena: Allocator, value: anytype, indent: []const u8, unit: []cons
         8 => .indent_8,
         else => .indent_2,
     };
+
     const pretty = try std.json.Stringify.valueAlloc(arena, value, .{ .whitespace = whitespace });
     if (std.mem.indexOfScalar(u8, pretty, '\n') == null or indent.len == 0) return pretty;
+
     var out: std.ArrayList(u8) = .empty;
     for (pretty) |ch| {
         try out.append(arena, ch);
@@ -210,6 +221,7 @@ fn valueEnd(text: []const u8, start: usize) Error!usize {
             const close: u8 = if (text[start] == '{') '}' else ']';
             var pos = skipWs(text, start + 1);
             if (pos < text.len and text[pos] == close) return pos + 1;
+
             while (true) {
                 if (close == '}') {
                     if (pos >= text.len or text[pos] != '"') return error.InvalidJson;
@@ -217,6 +229,7 @@ fn valueEnd(text: []const u8, start: usize) Error!usize {
                     if (pos >= text.len or text[pos] != ':') return error.InvalidJson;
                     pos = skipWs(text, pos + 1);
                 }
+
                 pos = skipWs(text, try valueEnd(text, pos));
                 if (pos >= text.len) return error.InvalidJson;
                 if (text[pos] == close) return pos + 1;
@@ -271,14 +284,17 @@ test "append elements and replace values" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const text = "{\n  \"list\": [\n    {\"keep\": \"me\"}\n  ],\n  \"s\": \"old\\\"q\"\n}";
     const list = (try find(arena, text, try root(text), "list")).?;
     const appended = try appendElement(arena, text, list.value, .{ .n = 2 });
     try testing.expectEqualStrings("{\n  \"list\": [\n    {\"keep\": \"me\"},\n    {\n      \"n\": 2\n    }\n  ],\n  \"s\": \"old\\\"q\"\n}", appended);
+
     const s = (try find(arena, appended, try root(appended), "s")).?;
     try testing.expectEqualStrings("old\"q", (try stringValue(arena, appended, s.value)).?);
     const replaced = try replaceValue(arena, appended, s.value, "new");
     try testing.expect(std.mem.endsWith(u8, replaced, "\"s\": \"new\"\n}"));
+
     const empty = "[]";
     try testing.expectEqualStrings("[\n  1\n]", try appendElement(arena, empty, try root(empty), 1));
 }

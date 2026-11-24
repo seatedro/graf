@@ -68,6 +68,7 @@ const Mark = struct {
         const c = cursor orelse return m;
         if (c.len == 0) return m;
         if (c.len > max) return error.BadResponse;
+
         @memcpy(m.buf[0..c.len], c);
         m.len = @intCast(c.len);
         return m;
@@ -112,6 +113,7 @@ const Thread = struct {
 
 pub fn turnOf(arena: Allocator, scratch: Allocator, m: api.Message) Allocator.Error!?core.Turn {
     const ts = normalize.jsonTimestamp(.{ .string = m.createdAt });
+
     if (std.mem.eql(u8, m.source, "tool")) {
         const calls = try arena.alloc(core.ToolCall, 1);
         calls[0] = .{
@@ -120,12 +122,14 @@ pub fn turnOf(arena: Allocator, scratch: Allocator, m: api.Message) Allocator.Er
         };
         return .{ .role = .tool, .text = "", .tool_calls = calls, .ts = ts };
     }
+
     const role: core.types.Role = if (std.mem.eql(u8, m.source, "user"))
         .user
     else if (std.mem.eql(u8, m.source, "assistant"))
         .assistant
     else
         return null;
+
     const text = std.mem.trim(u8, m.text, " \t\r\n");
     if (text.len == 0) return null;
     return .{ .role = role, .text = try normalize.cleanBounded(arena, scratch, text, dialect.text_budget), .ts = ts };
@@ -136,10 +140,12 @@ pub fn projectOf(arena: Allocator, p: api.Project) Allocator.Error![]const u8 {
     for (p.repos) |r| {
         if (chosen == null or (std.mem.eql(u8, r.mode, "primary") and !std.mem.eql(u8, chosen.?.mode, "primary"))) chosen = r;
     }
+
     if (chosen) |r| {
         const url = try std.fmt.allocPrint(arena, "https://github.com/{s}", .{r.repoFullName});
         if (try project.normalizeRemote(arena, url)) |name| return name;
     }
+
     return std.fmt.allocPrint(arena, "capy/{s}", .{if (p.code.len > 0) p.code else p.id});
 }
 
@@ -184,15 +190,18 @@ pub const Source = struct {
         var arena: std.heap.ArenaAllocator = .init(gpa);
         errdefer arena.deinit();
         const state_dir = try state.dir(arena.allocator(), env);
+
         var opts = options;
         if (!opts.backfill and opts.since == null) {
             const now = Io.Timestamp.now(io, .real).toMicroseconds();
             opts.since = if (state_dir) |sd| try state.captureSince(io, sd, now) else now;
         }
         if (opts.backfill) opts.since = null;
+
         const cfg = &config.sources.capy;
         var client: api.Client = try .init(gpa, io, cfg.base_url, cfg.api_key);
         errdefer client.deinit();
+
         return .{
             .gpa = gpa,
             .io = io,
@@ -208,12 +217,14 @@ pub const Source = struct {
 
     pub fn deinit(s: *Source) void {
         s.streams.cancel(s.io);
+
         for (s.threads.values()) |t| {
             t.marks.deinit(s.gpa);
             t.window.deinit();
             t.keep.deinit();
             s.gpa.destroy(t);
         }
+
         s.threads.deinit(s.gpa);
         s.client.deinit();
         s.scratch.deinit();
@@ -235,11 +246,13 @@ pub const Source = struct {
     pub fn runOnce(s: *Source, now: core.Micros) !void {
         s.refreshPaused();
         try s.discover();
+
         for (s.threads.values()) |t| {
             if (t.excluded) continue;
             _ = try s.catchUp(t, now);
             t.dirty = false;
         }
+
         try s.tickAll(now);
     }
 
@@ -252,6 +265,7 @@ pub const Source = struct {
     fn step(s: *Source, now: core.Micros) !void {
         s.refreshPaused();
         if (s.isBlocked(now)) return s.tickAll(now);
+
         const every = @as(core.Micros, s.config.sources.capy.discover_every_s) * std.time.us_per_s;
         if (s.last_discovery == null or now - s.last_discovery.? >= every) {
             s.last_discovery = now;
@@ -261,6 +275,7 @@ pub const Source = struct {
                 else => log.warn("capy thread discovery failed: {t}", .{err}),
             };
         }
+
         var i: usize = 0;
         while (s.nextDue(&i, now)) |t| {
             const settled = s.catchUp(t, now) catch |err| switch (err) {
@@ -276,9 +291,11 @@ pub const Source = struct {
                     continue;
                 },
             };
+
             try s.mutex.lock(s.io);
             defer s.mutex.unlock(s.io);
             t.dirty = !settled;
+
             if (t.working and s.active_streams < s.config.sources.capy.max_streams) {
                 t.busy = true;
                 s.active_streams += 1;
@@ -288,12 +305,14 @@ pub const Source = struct {
                 };
             }
         }
+
         try s.tickAll(now);
     }
 
     fn nextDue(s: *Source, i: *usize, now: core.Micros) ?*Thread {
         s.mutex.lockUncancelable(s.io);
         defer s.mutex.unlock(s.io);
+
         const all = s.threads.values();
         while (i.* < all.len) {
             const t = all[i.*];
@@ -332,6 +351,7 @@ pub const Source = struct {
                     error.Canceled, error.OutOfMemory, error.Unauthorized, error.Forbidden, error.NotFound, error.BadRequest => return err,
                     else => {},
                 }
+
                 if (attempt + 1 >= s.options.max_attempts) return err;
                 const wait = s.options.backoff.delay(err, diag.retry_after_s, attempt);
                 s.noteBackoff(wait);
@@ -352,20 +372,25 @@ pub const Source = struct {
         var arena_state: std.heap.ArenaAllocator = .init(s.gpa);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
+
         const cfg = &s.config.sources.capy;
         const projects = try s.fetch(api.ProjectList, arena, "/projects");
+
         for (projects.items) |p| {
             if (cfg.projects.len > 0 and !(listed(cfg.projects, p.id) or listed(cfg.projects, p.code) or listed(cfg.projects, p.name))) continue;
             if (globbed(cfg.exclude_projects, p)) continue;
+
             const name = try projectOf(arena, p);
             var cursor: ?[]const u8 = null;
             while (true) {
                 const page = try s.fetch(api.ThreadPage, arena, try api.threadsTarget(arena, p.id, cursor, s.options.page_limit));
+
                 {
                     try s.mutex.lock(s.io);
                     defer s.mutex.unlock(s.io);
                     for (page.items) |th| try s.observe(name, th);
                 }
+
                 const next = page.cursor orelse break;
                 if (page.items.len == 0 or (cursor != null and std.mem.eql(u8, next, cursor.?))) break;
                 cursor = next;
@@ -377,6 +402,7 @@ pub const Source = struct {
         const cfg = &s.config.sources.capy;
         if (listed(cfg.exclude_threads, th.id)) return;
         if (cfg.statuses.len > 0 and !listed(cfg.statuses, th.status)) return;
+
         var hasher: std.hash.Wyhash = .init(0);
         hasher.update(th.status);
         hasher.update(&.{0});
@@ -390,9 +416,11 @@ pub const Source = struct {
                 const activity = normalize.jsonTimestamp(.{ .string = th.lastActivityAt orelse th.updatedAt });
                 if (activity) |ts| if (ts < since) return;
             }
+
             const t = try s.gpa.create(Thread);
             errdefer s.gpa.destroy(t);
             t.* = .{ .id = undefined, .project = undefined, .keep = .init(s.gpa), .window = .init(s.gpa), .segmenter = .{ .options = s.options.segment } };
+
             const keep = t.keep.allocator();
             t.id = try keep.dupe(u8, th.id);
             t.project = try keep.dupe(u8, name);
@@ -403,6 +431,7 @@ pub const Source = struct {
             if (t.excluded) s.stats.excluded_threads += 1;
             break :blk t;
         };
+
         t.working = std.mem.eql(u8, th.status, "working");
         if (th.lastModelId) |m| try t.setModel(m);
         if (t.seen != seen) {
@@ -413,9 +442,11 @@ pub const Source = struct {
 
     fn load(s: *Source, t: *Thread) !void {
         if (t.loaded) return;
+
         try s.mutex.lock(s.io);
         defer s.mutex.unlock(s.io);
         defer _ = s.scratch.reset(.retain_capacity);
+
         const key = t.sourceKey();
         if (try s.sink.loadCursor(s.scratch.allocator(), &key)) |text| if (Cursor.decode(s.scratch.allocator(), text)) |c| {
             t.mark = try Mark.at(c.after, c.skip);
@@ -426,12 +457,15 @@ pub const Source = struct {
 
     fn catchUp(s: *Source, t: *Thread, now: core.Micros) !bool {
         try s.load(t);
+
         while (true) {
             var arena_state: std.heap.ArenaAllocator = .init(s.gpa);
             defer arena_state.deinit();
             const arena = arena_state.allocator();
+
             const from = t.mark;
             const page = try s.fetch(api.MessagePage, arena, try api.messagesTarget(arena, t.id, from.after(), s.options.page_limit));
+
             try s.mutex.lock(s.io);
             defer s.mutex.unlock(s.io);
             var skip = from.skip;
@@ -442,6 +476,7 @@ pub const Source = struct {
                 }
                 try s.consume(t, m, null, now);
             }
+
             const next = page.cursor orelse return true;
             if (from.after()) |prev| if (std.mem.eql(u8, prev, next)) return false;
             t.mark = try Mark.at(next, 0);
@@ -452,6 +487,7 @@ pub const Source = struct {
         s.stats.messages += 1;
         const before = t.mark;
         if (event_id) |id| t.mark = try Mark.at(id, 0) else t.mark.skip += 1;
+
         defer _ = s.scratch.reset(.retain_capacity);
         const turn = try turnOf(t.window.allocator(), s.scratch.allocator(), m) orelse return;
         const too_old = if (s.options.since) |since| (turn.ts orelse now) < since else false;
@@ -459,8 +495,10 @@ pub const Source = struct {
             s.stats.dropped_turns += 1;
             return;
         }
+
         if (m.model) |model| try t.setModel(model);
         try t.marks.append(s.gpa, before);
+
         var sealed: std.ArrayList(segment.Window) = .empty;
         try t.segmenter.push(t.window.allocator(), .{ .turn = turn, .start = t.next }, &sealed);
         t.next += 1;
@@ -471,11 +509,13 @@ pub const Source = struct {
         if (windows.len > 0) {
             const arena = t.window.allocator();
             const open: Mark = if (t.segmenter.firstStart()) |first| t.marks.items[first - t.base] else t.mark;
+
             for (windows, 0..) |w, i| {
                 const resume_at = if (i + 1 < windows.len) t.marks.items[windows[i + 1].items[0].start - t.base] else open;
                 t.seq += 1;
                 const turns = try segment.turnsOf(arena, w);
                 const cursor: Cursor = .{ .after = resume_at.after(), .skip = resume_at.skip, .seq = t.seq };
+
                 try t.outbox.append(arena, .{
                     .source = t.sourceKey(),
                     .seq_in_source = t.seq,
@@ -487,10 +527,12 @@ pub const Source = struct {
                     .cursor = try cursor.encode(arena),
                 });
             }
+
             const keep_from = t.segmenter.firstStart() orelse t.next;
             t.marks.replaceRangeAssumeCapacity(0, @intCast(keep_from - t.base), &.{});
             t.base = keep_from;
         }
+
         s.drain(t);
         s.compact(t);
     }
@@ -498,12 +540,14 @@ pub const Source = struct {
     fn drain(s: *Source, t: *Thread) void {
         var sent: usize = 0;
         defer if (sent > 0) t.outbox.replaceRangeAssumeCapacity(0, sent, &.{});
+
         for (t.outbox.items) |*draft| {
             const outcome = s.sink.enqueue(draft) catch |err| {
                 s.stats.enqueue_errors += 1;
                 log.warn("enqueue for capy thread {s} failed: {t}", .{ t.id, err });
                 return;
             };
+
             switch (outcome) {
                 .queued => s.stats.entries += 1,
                 .duplicate => s.stats.duplicates += 1,
@@ -515,18 +559,21 @@ pub const Source = struct {
     fn compact(s: *Source, t: *Thread) void {
         _ = s;
         if (t.outbox.items.len > 0) return;
+
         if (t.segmenter.isEmpty()) {
             t.segmenter.clear();
             t.outbox = .empty;
             _ = t.window.reset(.retain_capacity);
             return;
         }
+
         if (t.window.queryCapacity() < t.segmenter.options.max_tokens * 64 + (4 << 20)) return;
         var fresh: std.heap.ArenaAllocator = .init(t.window.child_allocator);
         t.segmenter.rehome(fresh.allocator()) catch {
             fresh.deinit();
             return;
         };
+
         t.outbox = .empty;
         t.window.deinit();
         t.window = fresh;
@@ -535,6 +582,7 @@ pub const Source = struct {
     fn tickAll(s: *Source, now: core.Micros) !void {
         try s.mutex.lock(s.io);
         defer s.mutex.unlock(s.io);
+
         for (s.threads.values()) |t| {
             if (t.excluded) continue;
             var sealed: std.ArrayList(segment.Window) = .empty;
@@ -551,8 +599,10 @@ pub const Source = struct {
             s.active_streams -= 1;
             s.mutex.unlock(s.io);
         }
+
         var retry_ms = s.options.stream_retry_ms;
         var drops: u32 = 0;
+
         while (true) {
             const end = s.followOnce(t, &retry_ms, drops) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
@@ -561,16 +611,19 @@ pub const Source = struct {
                     break :blk End{ .dropped = retry_ms };
                 },
             };
+
             const wait = switch (end) {
                 .settled, .fatal => return,
                 .dropped => |ms| ms,
             };
+
             drops += 1;
             {
                 s.mutex.lockUncancelable(s.io);
                 defer s.mutex.unlock(s.io);
                 s.stats.stream_drops += 1;
             }
+
             if (drops > s.options.max_reconnects) return;
             try s.io.sleep(.fromMilliseconds(@intCast(wait)), .awake);
             _ = s.catchUp(t, Io.Timestamp.now(s.io, .real).toMicroseconds()) catch |err| switch (err) {
@@ -586,6 +639,7 @@ pub const Source = struct {
     fn followOnce(s: *Source, t: *Thread, retry_ms: *u64, attempt: u32) !End {
         var arena_state: std.heap.ArenaAllocator = .init(s.gpa);
         defer arena_state.deinit();
+
         const from = t.mark;
         var diag: api.Diag = .{};
         var stream: api.Stream = undefined;
@@ -606,26 +660,31 @@ pub const Source = struct {
             },
         };
         defer stream.close();
+
         {
             s.mutex.lockUncancelable(s.io);
             defer s.mutex.unlock(s.io);
             s.stats.streams_opened += 1;
         }
+
         var parser: sse.Parser = .init(s.gpa);
         defer parser.deinit();
         var frame: std.heap.ArenaAllocator = .init(s.gpa);
         defer frame.deinit();
         var skip = from.skip;
+
         while (try stream.nextLine()) |line| {
             const ev = try parser.feedLine(line) orelse continue;
             if (parser.retry_ms) |ms| retry_ms.* = ms;
             defer _ = frame.reset(.retain_capacity);
             const a = frame.allocator();
+
             if (std.mem.eql(u8, ev.name, "transcript")) {
                 if (skip > 0) {
                     skip -= 1;
                     continue;
                 }
+
                 const m = try api.decode(api.Message, a, ev.data);
                 try s.mutex.lock(s.io);
                 defer s.mutex.unlock(s.io);
@@ -649,6 +708,7 @@ pub const Source = struct {
                 return .{ .dropped = retry_ms.* };
             }
         }
+
         return .{ .dropped = retry_ms.* };
     }
 };

@@ -49,6 +49,7 @@ pub fn bodyText(arena: Allocator, body: core.EntryBody) Allocator.Error![]const 
             try out.appendSlice(arena, tc.result_preview);
         }
     }
+
     return out.items;
 }
 
@@ -90,11 +91,13 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
             try w.add("dropped duplicate entity ref {s}", .{e.ref});
             continue;
         }
+
         const n = try core.text.norm(arena, e.name);
         if (n.len == 0) {
             try w.add("dropped entity {s} whose name has no letters or digits", .{e.ref});
             continue;
         }
+
         var folded = false;
         for (entities.items, norms.items) |*kept, kept_norm| {
             if (std.mem.eql(u8, kept_norm, n) and rules.compatible(kept.type, e.type)) {
@@ -108,6 +111,7 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
                 break;
             }
         }
+
         if (folded) continue;
         try ref_map.put(arena, e.ref, e.ref);
         try entities.append(arena, e);
@@ -128,6 +132,7 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
             return null;
         }
     };
+
     const resolver: Resolver = .{ .map = &ref_map, .ents = entities.items, .norms = norms.items, .arena = arena };
 
     var facts: std.ArrayList(ExtractedFact) = .empty;
@@ -153,6 +158,7 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
             if (f.qualifier) |q| f.qualifier = if (trimmed(q).len == 0) null else trimmed(q);
             break :blk null;
         };
+
         if (reason) |r| {
             invalid += 1;
             try w.add("dropped fact {d}: {s}", .{ i, r });
@@ -165,6 +171,7 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
             try w.add("dropped fact {d}: valid_to is not RFC 3339", .{i});
             continue;
         };
+
         const ended_already = if (upper) |u| u <= reference_time else false;
         const lower: ?core.Micros = if (from_explicit)
             time.parseBound(f.valid_from) catch {
@@ -176,6 +183,7 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
             null
         else
             reference_time;
+
         if (upper) |u| if (lower) |l| if (u <= l) {
             try w.add("fact {d}: valid_to is not after valid_from; treating it as open", .{i});
             upper = null;
@@ -192,6 +200,7 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
     const n_facts = facts.items.len;
     const drop = try arena.alloc(bool, n_facts);
     @memset(drop, false);
+
     for (0..n_facts) |i| {
         for (0..n_facts) |j| {
             if (i == j or drop[j]) continue;
@@ -203,6 +212,7 @@ pub fn check(arena: Allocator, raw: ExtractResult, body_text: []const u8, refere
             }
         }
     }
+
     var kept_facts: std.ArrayList(ExtractedFact) = .empty;
     var kept_meta: std.ArrayList(FactMeta) = .empty;
     for (facts.items, meta.items, drop) |f, m, d| if (!d) {
@@ -268,12 +278,14 @@ fn collides(arena: Allocator, later: ExtractedFact, later_meta: FactMeta, earlie
         if (!rules.rangesOverlap(later_meta.valid, earlier_meta.valid)) return false;
         return sameObject(try objectOf(arena, later), try objectOf(arena, earlier));
     }
+
     const lo = try objectOf(arena, later);
     const eo = try objectOf(arena, earlier);
     const lq = later.qualifier orelse "";
     const eq = earlier.qualifier orelse "";
     const same_relation = std.mem.eql(u8, later.relation, earlier.relation);
     if (same_relation and std.mem.eql(u8, lq, eq) and sameObject(lo, eo)) return true;
+
     if (!rules.rangesOverlap(later_meta.valid, earlier_meta.valid)) return false;
     const rule = rules.ruleFor(later.relation, null);
     if (same_relation) switch (rule.cardinality) {
@@ -315,6 +327,7 @@ test "decode is strict about unknown fields" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const ok = try decode(arena, "{\"skip\":null,\"entities\":[],\"facts\":[],\"new_relations\":[]}");
     try testing.expect(ok.skip == null);
     try testing.expectError(error.UnknownField, decode(arena, "{\"skip\":null,\"entities\":[],\"facts\":[],\"new_relations\":[],\"extra\":1}"));
@@ -325,6 +338,7 @@ test "one bad fact is dropped and the rest survive without repair" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const body = "lantern uses brackwater relay. lantern lacks streaming.";
     const raw: ExtractResult = .{
         .skip = null,
@@ -339,6 +353,7 @@ test "one bad fact is dropped and the rest survive without repair" {
         },
         .new_relations = &.{},
     };
+
     const c = try check(arena, raw, body, ref_time);
     try testing.expectEqual(@as(usize, 3), c.result.facts.len);
     try testing.expectEqual(@as(usize, 3), c.invalid_facts);
@@ -352,6 +367,7 @@ test "more than half invalid asks for a repair" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const raw: ExtractResult = .{
         .skip = null,
         .entities = &.{ent("n1", "Lantern", .project)},
@@ -362,6 +378,7 @@ test "more than half invalid asks for a repair" {
         },
         .new_relations = &.{},
     };
+
     const c = try check(arena, raw, "uses zig", ref_time);
     try testing.expect(c.needs_repair);
 }
@@ -370,6 +387,7 @@ test "self-correction keeps only the later single-valued statement" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const body = "Set lantern's http_server to actix... wait no, scratch that. Lantern's http_server is axum.";
     var actix = fct("n1", "has_setting", null, "actix", "Set lantern's http_server to actix");
     actix.qualifier = "http_server";
@@ -381,6 +399,7 @@ test "self-correction keeps only the later single-valued statement" {
         .facts = &.{ axum, actix },
         .new_relations = &.{},
     };
+
     const c = try check(arena, raw, body, ref_time);
     try testing.expectEqual(@as(usize, 1), c.result.facts.len);
     try testing.expectEqualStrings("axum", c.result.facts[0].value.?);
@@ -391,6 +410,7 @@ test "self-correction drops an opposed earlier statement and an exact restatemen
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const body = "the driver lacks COPY. oh wait, it now supports COPY. yes it supports copy";
     const raw: ExtractResult = .{
         .skip = null,
@@ -402,6 +422,7 @@ test "self-correction drops an opposed earlier statement and an exact restatemen
         },
         .new_relations = &.{},
     };
+
     const c = try check(arena, raw, body, ref_time);
     try testing.expectEqual(@as(usize, 1), c.result.entities.len);
     try testing.expectEqual(@as(usize, 1), c.result.entities[0].aliases.len);
@@ -413,6 +434,7 @@ test "dated statements about different periods do not self-correct" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const body = "Priya was on call Nov 10 to Nov 17, then Hollis took over.";
     var priya = fct("n1", "has_oncall", "n2", null, "Priya was on call Nov 10 to Nov 17");
     priya.valid_from = "2026-11-10";
@@ -425,6 +447,7 @@ test "dated statements about different periods do not self-correct" {
         .facts = &.{ priya, hollis },
         .new_relations = &.{},
     };
+
     const c = try check(arena, raw, body, ref_time);
     try testing.expectEqual(@as(usize, 2), c.result.facts.len);
     try testing.expectEqual(try core.time.parseRfc3339("2026-11-17"), c.meta[0].valid.upper.?);
@@ -434,6 +457,7 @@ test "a stated end with no start is unbounded below and does not supersede the n
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var takes_over = fct("n1", "has_oncall", "n2", null, "Juno took over at 17:00");
     takes_over.valid_from = "2026-11-20T17:00:00Z";
     var rotated = fct("n1", "has_oncall", "n3", null, "Hollis rotated off");
@@ -446,6 +470,7 @@ test "a stated end with no start is unbounded below and does not supersede the n
         .facts = &.{ takes_over, rotated, leaving },
         .new_relations = &.{},
     };
+
     const c = try check(arena, raw, "Juno took over at 17:00. Hollis rotated off. Hollis owns it until Friday", try core.time.parseRfc3339("2026-11-20T18:00:00Z"));
     try testing.expectEqual(@as(usize, 3), c.result.facts.len);
     try testing.expect(c.meta[1].valid.lower == null);
@@ -457,6 +482,7 @@ test "bad dates drop the fact; an unknown start is unbounded" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var bad = fct("n1", "prefers", null, "zig", "prefers zig");
     bad.valid_from = "last tuesday";
     var always = fct("n1", "avoids", null, "python sidecars", "avoids python sidecars");
@@ -470,6 +496,7 @@ test "bad dates drop the fact; an unknown start is unbounded" {
         .facts = &.{ bad, always, backwards },
         .new_relations = &.{},
     };
+
     const c = try check(arena, raw, "prefers zig avoids python sidecars uses nix", ref_time);
     try testing.expectEqual(@as(usize, 2), c.result.facts.len);
     try testing.expect(c.meta[0].valid.lower == null);
@@ -480,8 +507,10 @@ test "skip and empty extractions are empty" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const skip = try check(arena, .{ .skip = "test output only", .entities = &.{}, .facts = &.{}, .new_relations = &.{} }, "", ref_time);
     try testing.expect(skip.isEmpty());
+
     const empty = try check(arena, .{ .skip = null, .entities = &.{}, .facts = &.{}, .new_relations = &.{} }, "", ref_time);
     try testing.expect(empty.isEmpty());
     try testing.expect(!empty.needs_repair);

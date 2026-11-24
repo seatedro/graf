@@ -124,17 +124,20 @@ pub const Suite = struct {
 pub fn parseEntries(arena: std.mem.Allocator, jsonl: []const u8) ![]const EvalEntry {
     var list: std.ArrayList(EvalEntry) = .empty;
     var lines = std.mem.splitScalar(u8, jsonl, '\n');
+
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
         if (line.len == 0) continue;
         try list.append(arena, try std.json.parseFromSliceLeaky(EvalEntry, arena, line, .{ .allocate = .alloc_always }));
     }
+
     return list.items;
 }
 
 pub fn parseSuite(arena: std.mem.Allocator, entries_jsonl: []const u8, expected_json: []const u8) !Suite {
     const entries = try parseEntries(arena, entries_jsonl);
     const expected = try std.json.parseFromSliceLeaky(Expected, arena, expected_json, .{ .allocate = .alloc_always });
+
     var facts: std.ArrayList(FactRef) = .empty;
     for (expected.entries.map.keys(), expected.entries.map.values()) |ep, g| {
         for (g.facts_added) |f| try facts.append(arena, .{
@@ -144,6 +147,7 @@ pub fn parseSuite(arena: std.mem.Allocator, entries_jsonl: []const u8, expected_
             .valid_to = if (f.valid_to) |v| core.time.parseRfc3339(v) catch null else null,
         });
     }
+
     return .{ .entries = entries, .expected = expected, .facts = facts.items };
 }
 
@@ -151,6 +155,7 @@ pub fn loadSuite(arena: std.mem.Allocator, io: std.Io, dir: []const u8) !Suite {
     const cwd = std.Io.Dir.cwd();
     const entries_path = try std.fs.path.join(arena, &.{ dir, "entries.jsonl" });
     const expected_path = try std.fs.path.join(arena, &.{ dir, "expected.json" });
+
     const entries = try cwd.readFileAlloc(io, entries_path, arena, .limited(16 << 20));
     const expected = try cwd.readFileAlloc(io, expected_path, arena, .limited(16 << 20));
     return parseSuite(arena, entries, expected);
@@ -165,10 +170,12 @@ pub const Pattern = struct {
 pub fn parsePattern(arena: std.mem.Allocator, suite: *const Suite, text: []const u8) !?Pattern {
     const norm = try match.normalize(arena, text);
     var best: ?struct { entity: usize, len: usize } = null;
+
     for (suite.entities(), 0..) |e, i| {
         var names: std.ArrayList([]const u8) = .empty;
         try names.append(arena, e.name);
         try names.appendSlice(arena, e.aliases);
+
         for (names.items) |name| {
             const n = try match.normalize(arena, name);
             if (n.len == 0 or n.len >= norm.len) continue;
@@ -176,6 +183,7 @@ pub fn parsePattern(arena: std.mem.Allocator, suite: *const Suite, text: []const
             if (best == null or n.len > best.?.len) best = .{ .entity = i, .len = n.len };
         }
     }
+
     const b = best orelse return null;
     const rest = norm[b.len + 1 ..];
     const space = std.mem.indexOfScalar(u8, rest, ' ') orelse return null;
@@ -196,16 +204,20 @@ pub fn validate(arena: std.mem.Allocator, suite: *const Suite) ![]const []const 
             if (prev.harness == ep.harness and std.mem.eql(u8, prev.source_id, ep.source_id) and prev.seq >= ep.seq)
                 try p(arena, &problems, "entry {s}: seq {d} does not follow {s} in source {s}", .{ ep.id, ep.seq, prev.id, ep.source_id });
         }
+
         _ = core.time.parseRfc3339(ep.reference_time) catch try p(arena, &problems, "entry {s}: bad reference_time {s}", .{ ep.id, ep.reference_time });
         if (ep.turns.len == 0) try p(arena, &problems, "entry {s}: no turns", .{ep.id});
         if (suite.gold(ep.id) == null) try p(arena, &problems, "entry {s}: no gold labels", .{ep.id});
     }
+
     for (suite.expected.entries.map.keys()) |id| {
         if (suite.entryIndex(id) == null) try p(arena, &problems, "gold entry {s}: not in entries.jsonl", .{id});
     }
+
     for (suite.entities(), 0..) |e, i| {
         for (suite.entities()[0..i]) |prev| if (std.mem.eql(u8, prev.id, e.id)) try p(arena, &problems, "entity {s}: duplicate id", .{e.id});
     }
+
     for (suite.facts, 0..) |f, i| {
         for (suite.facts[0..i]) |prev| if (std.mem.eql(u8, prev.fact.id, f.fact.id)) try p(arena, &problems, "fact {s}: duplicate id", .{f.fact.id});
         if (suite.entityIndex(f.fact.subject) == null) try p(arena, &problems, "fact {s}: unknown subject {s}", .{ f.fact.id, f.fact.subject });
@@ -214,32 +226,39 @@ pub fn validate(arena: std.mem.Allocator, suite: *const Suite) ![]const []const 
         if (f.fact.valid_from != null and f.valid_from == null) try p(arena, &problems, "fact {s}: bad valid_from", .{f.fact.id});
         if (f.fact.valid_to != null and f.valid_to == null) try p(arena, &problems, "fact {s}: bad valid_to", .{f.fact.id});
     }
+
     for (suite.expected.expected_merges) |m| {
         if (suite.entityIndex(m.must_resolve_to) == null) try p(arena, &problems, "merge {s}: unknown entity {s}", .{ m.mention, m.must_resolve_to });
         if (suite.entryIndex(m.entry) == null) try p(arena, &problems, "merge {s}: unknown entry {s}", .{ m.mention, m.entry });
     }
+
     for (suite.expected.must_not_merge) |m| {
         for ([_][]const u8{ m.entity_a, m.entity_b }) |id| {
             if (suite.entityIndex(id) == null) try p(arena, &problems, "must_not_merge: unknown entity {s}", .{id});
         }
     }
+
     for (suite.expected.entries.map.keys(), suite.expected.entries.map.values()) |ep, g| {
         if (g.skip and g.facts_added.len > 0) try p(arena, &problems, "entry {s}: skip entry lists facts", .{ep});
         for (g.restated) |id| if (suite.factIndex(id) == null) try p(arena, &problems, "entry {s}: restates unknown fact {s}", .{ ep, id });
         for (g.must_remain_active) |id| if (suite.factIndex(id) == null) try p(arena, &problems, "entry {s}: must_remain_active names unknown fact {s}", .{ ep, id });
+
         for (g.invalidations) |inv| {
             if (suite.factIndex(inv.fact_id) == null) try p(arena, &problems, "entry {s}: invalidates unknown fact {s}", .{ ep, inv.fact_id });
             if (inv.valid_to) |v| _ = core.time.parseRfc3339(v) catch try p(arena, &problems, "entry {s}: bad invalidation valid_to {s}", .{ ep, v });
         }
+
         for (g.must_not_contain_facts) |text| {
             if (try parsePattern(arena, suite, text) == null) try p(arena, &problems, "entry {s}: cannot parse must_not_contain_facts entry '{s}'", .{ ep, text });
         }
     }
+
     for (suite.expected.retrieval_queries) |q| {
         for (q.must_include) |id| if (suite.factIndex(id) == null) try p(arena, &problems, "query {s}: must_include names unknown fact {s}", .{ q.id, id });
         for (q.must_exclude) |id| if (suite.factIndex(id) == null) try p(arena, &problems, "query {s}: must_exclude names unknown fact {s}", .{ q.id, id });
         if (q.as_of) |v| _ = core.time.parseRfc3339(v) catch try p(arena, &problems, "query {s}: bad as_of {s}", .{ q.id, v });
     }
+
     return problems.items;
 }
 
@@ -261,6 +280,7 @@ test "the shipped suite loads and is referentially intact" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const suite = try loadShippedSuite(arena, std.testing.io);
     try std.testing.expectEqual(@as(usize, 20), suite.entries.len);
     try std.testing.expectEqual(@as(usize, 24), suite.entities().len);
@@ -269,9 +289,11 @@ test "the shipped suite loads and is referentially intact" {
     try std.testing.expectEqual(@as(usize, 31), suite.facts.len);
     try std.testing.expectEqual(@as(usize, 4), suite.expected.expected_merges.len);
     try std.testing.expectEqual(@as(usize, 3), suite.expected.must_not_merge.len);
+
     const problems = try validate(arena, &suite);
     for (problems) |msg| std.debug.print("suite problem: {s}\n", .{msg});
     try std.testing.expectEqual(@as(usize, 0), problems.len);
+
     try std.testing.expect(suite.isSkip("e04") and suite.isSkip("e14") and !suite.isSkip("e01"));
     try std.testing.expectEqual(core.Harness.@"claude-code", suite.entries[0].harness);
     try std.testing.expectEqual(core.types.EntryKind.note, suite.entries[11].kind);
@@ -281,6 +303,7 @@ test "validation reports dangling references" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const suite = try parseSuite(arena,
         \\{"id":"e01","seq":1,"harness":"cli","source_id":"s","reference_time":"2026-11-18T18:00:00Z","kind":"note","author":"user","turns":[{"role":"user","text":"x"}]}
         \\{"id":"e02","seq":1,"harness":"cli","source_id":"s","reference_time":"later","kind":"note","author":"user","turns":[{"role":"user","text":"y"}]}
@@ -289,8 +312,10 @@ test "validation reports dangling references" {
         \\ "entries":{"e01":{"facts_added":[{"id":"f1","subject":"a","relation":"uses","object":"b"}],"restated":["nope"],"must_not_contain_facts":["Nobody uses this"]}},
         \\ "retrieval_queries":[{"id":"q","query":"?","must_include":["f9"]}]}
     );
+
     const problems = try validate(arena, &suite);
     const want = [_][]const u8{ "does not follow", "bad reference_time", "e02: no gold labels", "unknown object b", "restates unknown fact nope", "cannot parse", "unknown fact f9" };
+
     for (want) |w| {
         var found = false;
         for (problems) |msg| found = found or std.mem.indexOf(u8, msg, w) != null;
@@ -303,8 +328,10 @@ test "must_not_contain patterns resolve their subject" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const suite = try loadShippedSuite(arena, std.testing.io);
     const pat = (try parsePattern(arena, &suite, "brinelog uses Apache AGE")).?;
+
     try std.testing.expectEqualStrings("ent_brinelog", suite.entities()[pat.subject].id);
     try std.testing.expectEqualStrings("uses", pat.relation);
     try std.testing.expectEqualStrings("apache age", pat.object);

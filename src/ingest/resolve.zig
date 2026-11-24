@@ -194,6 +194,7 @@ pub fn novelRelations(arena: Allocator, checked: extract.Checked, prefetch: Pref
         };
         if (!seen) try out.append(arena, f.relation);
     }
+
     return out.items;
 }
 
@@ -222,6 +223,7 @@ fn candidatesFor(arena: Allocator, prefetch: Prefetch, item: usize) Allocator.Er
         };
         try out.append(arena, c);
     }
+
     std.mem.sort(CandidateEntity, out.items, {}, byCosineDesc);
     return out.items;
 }
@@ -258,6 +260,7 @@ fn planEntity(arena: Allocator, e: ingest.ExtractedEntity, item: usize, prefetch
         const near = if (rules.compatible(e.type, c.type)) c.cosine >= rules.gray_cosine else c.cosine >= rules.gray_cross_type_cosine;
         if (near) try appendUnique(arena, &gray, c.id);
     }
+
     if (gray.items.len > 0) return .{ .decision = .ask, .gray = gray.items };
     return .{ .decision = .new };
 }
@@ -275,6 +278,7 @@ pub fn plan(arena: Allocator, checked: extract.Checked, prefetch: Prefetch) Allo
         for (entity_plans[i].gray) |g| {
             if (entity_labels.items.len < max_entity_labels) try appendUnique(arena, &entity_labels, g);
         }
+
         if (entity_plans[i].decision == .ask) {
             var kept: std.ArrayList(Id) = .empty;
             for (entity_plans[i].gray) |g| if (containsId(entity_labels.items, g)) try kept.append(arena, g);
@@ -294,6 +298,7 @@ pub fn plan(arena: Allocator, checked: extract.Checked, prefetch: Prefetch) Allo
             .ask => try subjects.appendSlice(arena, subj.gray),
             .new => {},
         }
+
         var object_known: ?Id = null;
         if (f.object) |o| switch (entity_plans[entityIndex(checked, o)].decision) {
             .existing => |id| object_known = id,
@@ -320,13 +325,16 @@ pub fn plan(arena: Allocator, checked: extract.Checked, prefetch: Prefetch) Allo
                     continue;
                 }
             }
+
             const kin = same_relation or (if (opposed) |o| std.mem.eql(u8, c.relation, o) else false);
             const related = (kin and (containsId(subjects.items, c.subject_id) or same_object_entity)) or
                 c.cosine >= rules.neighbour_cosine;
             if (related) try pool.append(arena, c);
         }
+
         if (restated) pool.clearRetainingCapacity();
         std.mem.sort(CandidateFact, pool.items, {}, byFactCosineDesc);
+
         var cands: std.ArrayList(Id) = .empty;
         for (pool.items) |c| {
             if (cands.items.len >= rules.neighbours_per_fact) break;
@@ -386,12 +394,14 @@ pub fn interpret(arena: Allocator, p: Plan, checked: extract.Checked, r: ingest.
             try warnings.append(arena, try std.fmt.allocPrint(arena, "resolution named unknown entity ref {s}", .{link.ref}));
             continue;
         };
+
         const label = link.existing orelse continue;
         const id = p.lookupEntityLabel(label) orelse {
             invalid += 1;
             try warnings.append(arena, try std.fmt.allocPrint(arena, "resolution named unknown entity label {s}", .{label}));
             continue;
         };
+
         if (!containsId(p.entities[i].gray, id)) {
             invalid += 1;
             try warnings.append(arena, try std.fmt.allocPrint(arena, "resolution linked {s} to {s}, which was not one of its candidates", .{ link.ref, label }));
@@ -407,6 +417,7 @@ pub fn interpret(arena: Allocator, p: Plan, checked: extract.Checked, r: ingest.
             try warnings.append(arena, try std.fmt.allocPrint(arena, "resolution named fact index {d}, out of range", .{fv.fact_index}));
             continue;
         }
+
         const j = fv.fact_index;
         const allowed = p.facts[j].candidates;
         if (fv.duplicate_of) |label| {
@@ -414,6 +425,7 @@ pub fn interpret(arena: Allocator, p: Plan, checked: extract.Checked, r: ingest.
                 if (containsId(allowed, id)) v.duplicates[j] = id else invalid += 1;
             } else invalid += 1;
         }
+
         var list: std.ArrayList(Verdict.Contradiction) = .empty;
         for (fv.contradicts) |c| {
             const id = p.lookupFactLabel(c.fact) orelse {
@@ -424,11 +436,13 @@ pub fn interpret(arena: Allocator, p: Plan, checked: extract.Checked, r: ingest.
                 invalid += 1;
                 continue;
             }
+
             const at = if (c.at) |s| (time.parseBound(s) catch null) else null;
             try list.append(arena, .{ .fact = id, .kind = c.kind, .at = at });
         }
         v.contradictions[j] = list.items;
     }
+
     return .{ .verdict = v, .warnings = warnings.items, .invalid = invalid, .total = total };
 }
 
@@ -458,6 +472,7 @@ pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, pr
     for (p.entities, 0..) |entry, i| {
         if (entry.decision != .ask) continue;
         const e = checked.result.entities[i];
+
         var targets: std.ArrayList(Id) = .empty;
         var options: std.ArrayList(llm.decision.Option) = .empty;
         for (entry.gray) |g| {
@@ -468,6 +483,7 @@ pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, pr
                 .description = try std.fmt.allocPrint(arena, "the existing \"{s}\" ({t})", .{ c.name, c.type }),
             });
         }
+
         if (targets.items.len == 0) continue;
         try options.append(arena, entity_none);
         try qs.append(arena, .{ .kind = .entity_link, .item = i, .targets = targets.items });
@@ -476,6 +492,7 @@ pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, pr
             .options = options.items,
         } });
     }
+
     for (p.facts, 0..) |fp, j| {
         const f = checked.result.facts[j];
         for (fp.candidates) |cid| {
@@ -487,6 +504,7 @@ pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, pr
             } });
         }
     }
+
     return .{ .questions = qs.items, .asks = asks.items };
 }
 
@@ -502,6 +520,7 @@ pub fn verdictFromAnswers(arena: Allocator, p: Plan, questions: []const Question
             .choice => |c| c,
             .yes_no => continue,
         };
+
         switch (q.kind) {
             .entity_link => {
                 if (probs.len != q.targets.len + 1) continue;
@@ -520,6 +539,7 @@ pub fn verdictFromAnswers(arena: Allocator, p: Plan, questions: []const Question
             },
         }
     }
+
     for (lists, 0..) |l, j| {
         if (v.duplicates[j]) |d| {
             var filtered: std.ArrayList(Verdict.Contradiction) = .empty;
@@ -527,6 +547,7 @@ pub fn verdictFromAnswers(arena: Allocator, p: Plan, questions: []const Question
             v.contradictions[j] = filtered.items;
         } else v.contradictions[j] = l.items;
     }
+
     return v;
 }
 
@@ -577,6 +598,7 @@ fn chooseRelation(
         }
         mapped = rules.collapseRelation(vectors.relations[idx], known.items);
     };
+
     const description = relationDescription(checked, name);
     const object_kind: core.types.ObjectKind = for (checked.result.new_relations) |p| {
         if (std.mem.eql(u8, p.name, name)) break p.object_kind;
@@ -589,6 +611,7 @@ fn chooseRelation(
         .status = .proposed,
         .mapped_to = mapped,
     });
+
     if (mapped) |m| {
         try warnings.append(arena, try std.fmt.allocPrint(arena, "relation {s} collapsed onto {s}", .{ name, m }));
         return .{ .name = m, .rule = prefetch.rule(m) };
@@ -624,12 +647,14 @@ pub fn build(
             .ask => verdict.links[i],
             .new => null,
         };
+
         if (existing) |id| {
             final[i] = id;
             const known_norm = if (findEntity(prefetch, id)) |c| c.norm else "";
             var names: std.ArrayList([]const u8) = .empty;
             try names.append(arena, e.name);
             try names.appendSlice(arena, e.aliases);
+
             for (names.items) |n| {
                 const nn = try core.text.norm(arena, n);
                 if (nn.len == 0 or std.mem.eql(u8, nn, known_norm)) continue;
@@ -639,6 +664,7 @@ pub fn build(
                 };
                 if (!dup) try new_aliases.append(arena, .{ .entity_id = id, .alias = n, .norm = nn });
             }
+
             for (entry.absorb) |from| {
                 var seen = false;
                 for (merges.items) |m| if (m.from.eql(from)) {
@@ -659,6 +685,7 @@ pub fn build(
                 .name_emb = if (i < vectors.entities.len) vectors.entities[i] else &.{},
             });
         }
+
         try appendUnique(arena, &mentions, final[i]);
     }
 
@@ -686,6 +713,7 @@ pub fn build(
         const relation = try chooseRelation(arena, f.relation, checked, prefetch, novel, vectors, &proposed, &warnings);
         const subject = final[entityIndex(checked, f.subject)];
         const object: core.types.FactObject = if (f.object) |o| .{ .entity = final[entityIndex(checked, o)] } else .{ .value = f.value.? };
+
         var valid = m.valid;
         if (f.time_basis == .reference) {
             for (verdict.contradictions[j]) |c| if (c.at) |at| {
@@ -693,6 +721,7 @@ pub fn build(
                 break;
             };
         }
+
         const key: rules.Key = .{
             .subject = subject,
             .relation = relation.name,
@@ -712,11 +741,13 @@ pub fn build(
                 break;
             }
         }
+
         if (restated == null) if (verdict.duplicates[j]) |dup| {
             for (olds.items, 0..) |o, k| if (o.fact.id.eql(dup) and !o.ended) {
                 restated = k;
             };
         };
+
         if (restated) |k| {
             const target = &olds.items[k].fact;
             var already = false;
@@ -727,6 +758,7 @@ pub fn build(
                 try restatements.append(arena, .{ .fact_id = target.id, .confidence = rules.restate(target.confidence) });
                 try evidence.append(arena, .{ .fact_id = target.id, .kind = .restated, .quote = f.quote });
             }
+
             const old = &olds.items[k];
             if (valid.upper) |end| if (!old.ended and old.fact.valid.upper == null) {
                 if (blast.admit()) {
@@ -774,6 +806,7 @@ pub fn build(
                 kind = vc.kind;
             };
             const k = kind orelse continue;
+
             var trial = o.fact;
             var trial_new = nf;
             switch (rules.resolveConflict(&trial, &trial_new, k, ctx.commit_time, ctx.entry.reference_time)) {

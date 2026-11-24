@@ -176,6 +176,7 @@ pub fn load(arena: Allocator, io: std.Io, env: *const Environ.Map, opts: LoadOpt
             else => |e| return e,
         }
     }
+
     applyEnv(&cfg, env);
     resolveInheritance(&cfg);
     try validateRates(&cfg, diag);
@@ -201,10 +202,12 @@ pub const Rate = struct {
 pub fn parseRate(text: []const u8) error{InvalidRate}!Rate {
     var it = std.mem.tokenizeAny(u8, text, " \t");
     var rate: Rate = .{ .model = it.next() orelse return error.InvalidRate, .input_per_mtok = -1, .output_per_mtok = -1 };
+
     while (it.next()) |pair| {
         const eq = std.mem.findScalar(u8, pair, '=') orelse return error.InvalidRate;
         const usd = std.fmt.parseFloat(f64, pair[eq + 1 ..]) catch return error.InvalidRate;
         if (!(usd >= 0) or !std.math.isFinite(usd)) return error.InvalidRate;
+
         const key = pair[0..eq];
         if (std.mem.eql(u8, key, "input")) {
             rate.input_per_mtok = usd;
@@ -216,6 +219,7 @@ pub fn parseRate(text: []const u8) error{InvalidRate}!Rate {
             rate.cache_write_per_mtok = usd;
         } else return error.InvalidRate;
     }
+
     if (rate.input_per_mtok < 0 or rate.output_per_mtok < 0) return error.InvalidRate;
     return rate;
 }
@@ -277,15 +281,18 @@ fn writeField(comptime T: type, comptime name: []const u8, value: T, w: *std.Io.
     if (comptime isSecret(name)) {
         return w.print("{s} = \"{s}\"\n", .{ name, if (value.len == 0) "" else "<set>" });
     }
+
     if (T == []const u8) {
         if (comptime std.mem.eql(u8, name, "url")) return w.print("{s} = \"{f}\"\n", .{ name, MaskedUrl{ .url = value } });
         return w.print("{s} = \"{s}\"\n", .{ name, value });
     }
+
     if (T == []const []const u8) {
         try w.print("{s} = [", .{name});
         for (value, 0..) |item, i| try w.print("{s}\"{s}\"", .{ if (i == 0) "" else ", ", item });
         return w.writeAll("]\n");
     }
+
     switch (@typeInfo(T)) {
         .@"enum" => try w.print("{s} = \"{s}\"\n", .{ name, @tagName(value) }),
         else => try w.print("{s} = {any}\n", .{ name, value }),
@@ -310,8 +317,10 @@ pub const MaskedUrl = struct {
 test "defaults match the spec" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
+
     var diag: toml.Diagnostic = .{};
     const cfg = try parse(arena_state.allocator(), "", &diag);
+
     try std.testing.expectEqual(@as(f64, 100.0), cfg.limits.daily_usd);
     try std.testing.expectEqual(@as(u32, 512), cfg.embed.dimensions);
     try std.testing.expectEqual(Route.@"openai-responses", cfg.llm.route);
@@ -323,6 +332,7 @@ test "file values, then env overrides, then inheritance" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const src =
         \\graph = "personal"
         \\[llm]
@@ -336,6 +346,7 @@ test "file values, then env overrides, then inheritance" {
         \\exclude_projects = ["github.com/brackwater/secret"]
         \\
     ;
+
     var diag: toml.Diagnostic = .{};
     var cfg: Config = .{};
     try toml.parseInto(Config, arena, src, &cfg, &diag);
@@ -347,6 +358,7 @@ test "file values, then env overrides, then inheritance" {
     try env.put("GRAF_GRAPH", "");
     try env.put("GRAF_EVAL_JUDGE_MODEL", "judge-model");
     try env.put("GRAF_EVAL_JUDGE_API_KEY", "jk-456");
+
     applyEnv(&cfg, &env);
     resolveInheritance(&cfg);
 
@@ -376,6 +388,7 @@ test "capy source section parses, takes env overrides and masks its key" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var diag: toml.Diagnostic = .{};
     var cfg = try parse(arena,
         \\[sources.capy]
@@ -385,6 +398,7 @@ test "capy source section parses, takes env overrides and masks its key" {
         \\discover_every_s = 30
         \\
     , &diag);
+
     try std.testing.expect(cfg.sources.capy.enabled);
     try std.testing.expect(!cfg.capyEnabled());
     try std.testing.expectEqual(@as(u32, 30), cfg.sources.capy.discover_every_s);
@@ -395,7 +409,9 @@ test "capy source section parses, takes env overrides and masks its key" {
     defer env.deinit();
     try env.put("GRAF_CAPY_API_KEY", "capy_k-789");
     try env.put("GRAF_CAPY_BASE_URL", "http://127.0.0.1:9/api/v1");
+
     applyEnv(&cfg, &env);
+
     try std.testing.expect(cfg.capyEnabled());
     try std.testing.expectEqualStrings("http://127.0.0.1:9/api/v1", cfg.sources.capy.base_url);
 
@@ -416,6 +432,7 @@ test "load reads the file named by GRAF_CONFIG and reports a missing explicit fi
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+
     try tmp.dir.writeFile(io, .{ .sub_path = "config.toml", .data = "[ingest]\nworkers = 2\n" });
     const dir_path = try tmp.dir.realPathFileAlloc(io, ".", arena);
     const file_path = try std.fs.path.join(arena, &.{ dir_path, "config.toml" });
@@ -423,6 +440,7 @@ test "load reads the file named by GRAF_CONFIG and reports a missing explicit fi
     var env = Environ.Map.init(std.testing.allocator);
     defer env.deinit();
     try env.put("GRAF_CONFIG", file_path);
+
     const loaded = try load(arena, io, &env, .{});
     try std.testing.expect(loaded.file_found);
     try std.testing.expectEqual(@as(u32, 2), loaded.config.ingest.workers);
@@ -433,6 +451,7 @@ test "load reads the file named by GRAF_CONFIG and reports a missing explicit fi
     var empty_env = Environ.Map.init(std.testing.allocator);
     defer empty_env.deinit();
     try empty_env.put("HOME", dir_path);
+
     const defaults = try load(arena, io, &empty_env, .{});
     try std.testing.expect(!defaults.file_found);
 }
@@ -440,6 +459,7 @@ test "load reads the file named by GRAF_CONFIG and reports a missing explicit fi
 test "per-route limits and the rate table" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
+
     var diag: toml.Diagnostic = .{};
     const cfg = try parse(arena_state.allocator(),
         \\[llm]
@@ -452,11 +472,13 @@ test "per-route limits and the rate table" {
         \\input_tpm = 50000
         \\
     , &diag);
+
     try std.testing.expectEqual(@as(u32, 500), cfg.llm.rpm);
     try std.testing.expectEqual(@as(u32, 200_000), cfg.llm.input_tpm);
     try std.testing.expectEqual(@as(u32, 3000), cfg.embed.rpm);
     try std.testing.expectEqual(@as(u32, 0), cfg.embed.input_tpm);
     try std.testing.expectEqual(@as(u32, 50_000), cfg.decision.input_tpm);
+
     const a = try parseRate(cfg.llm.rates[0]);
     try std.testing.expectEqualStrings("model-a", a.model);
     try std.testing.expectEqual(@as(f64, 10), a.output_per_mtok);
@@ -474,8 +496,10 @@ test "hub and edge settings come from the file and the environment" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var diag: toml.Diagnostic = .{};
     var cfg = try parse(arena, "[edge]\nupstream = \"https://hub.example.ts.net\"\ntimeout_ms = 2500\n", &diag);
+
     try std.testing.expectEqualStrings("https://hub.example.ts.net", cfg.edge.upstream);
     try std.testing.expectEqual(@as(u32, 2500), cfg.edge.timeout_ms);
     try std.testing.expectEqual(@as(u32, 10_000), (Config{}).edge.timeout_ms);
@@ -485,6 +509,7 @@ test "hub and edge settings come from the file and the environment" {
     try env.put("GRAF_SERVE_TOKEN", "serve-secret");
     try env.put("GRAF_UPSTREAM_URL", "https://other.example.ts.net");
     try env.put("GRAF_UPSTREAM_TOKEN", "edge-secret");
+
     applyEnv(&cfg, &env);
     try std.testing.expectEqualStrings("serve-secret", cfg.serve.token);
     try std.testing.expectEqualStrings("https://other.example.ts.net", cfg.edge.upstream);
@@ -500,6 +525,7 @@ test "hub and edge settings come from the file and the environment" {
 test "decision wire format and cost header inheritance" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
+
     var diag: toml.Diagnostic = .{};
     const cfg = try parse(arena_state.allocator(),
         \\[llm]
@@ -509,8 +535,10 @@ test "decision wire format and cost header inheritance" {
         \\wire = "stateful"
         \\
     , &diag);
+
     try std.testing.expectEqual(DecisionWire.stateful, cfg.decision.wire);
     try std.testing.expectEqualStrings("x-cost-usd", cfg.decision.cost_header);
+
     const defaults = try parse(arena_state.allocator(), "", &diag);
     try std.testing.expectEqual(DecisionWire.generic, defaults.decision.wire);
     try std.testing.expectError(error.InvalidConfig, parse(arena_state.allocator(), "[decision]\nwire = \"other\"\n", &diag));

@@ -115,6 +115,7 @@ pub fn lookup(e: *mod.Engine, arena: std.mem.Allocator, params: mod.EntityParams
         while (try result.next()) |row| try found.append(arena, try readEntity(arena, row, 0));
         if (found.items.len > 0) break;
     }
+
     if (found.items.len == 0) return error.EntityNotFound;
     const root = found.items[0];
 
@@ -151,11 +152,13 @@ pub fn lookup(e: *mod.Engine, arena: std.mem.Allocator, params: mod.EntityParams
                 try neighbors.append(arena, .{ .entity = try readEntity(arena, row, 0) });
                 current = &neighbors.items[neighbors.items.len - 1];
             }
+
             if (try row.get(?[]const u8, 8) != null) {
                 var r = Shifted(@TypeOf(row)){ .row = row, .by = 8 };
                 try current_facts.append(arena, try db.readHit(arena, &r));
             }
         }
+
         if (current) |c| c.facts = current_facts.items;
     }
 
@@ -203,6 +206,7 @@ const candidates_sql =
 
 pub fn forget(e: *mod.Engine, arena: std.mem.Allocator, target: ForgetTarget) !ForgetResult {
     if (target.fact_id == null and (target.query == null or target.query.?.len == 0)) return error.MissingForgetTarget;
+
     const conn = try e.store.pool.acquire();
     defer conn.release();
 
@@ -216,6 +220,7 @@ pub fn forget(e: *mod.Engine, arena: std.mem.Allocator, target: ForgetTarget) !F
         defer result.deinit();
         while (try result.next()) |row| try matches.append(arena, try db.readHit(arena, row));
     }
+
     if (matches.items.len == 0) return .{};
     if (matches.items.len > 1) return .{ .candidates = matches.items };
 
@@ -226,6 +231,7 @@ pub fn forget(e: *mod.Engine, arena: std.mem.Allocator, target: ForgetTarget) !F
         .forget = hit.fact.id.toString(&fact_hex),
         .at = core.time.now(e.io),
     }, .{});
+
     var hash: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(note, &hash, .{});
     const entry_id = core.Id.v7(e.io);
@@ -233,6 +239,7 @@ pub fn forget(e: *mod.Engine, arena: std.mem.Allocator, target: ForgetTarget) !F
 
     try conn.begin();
     errdefer conn.rollback() catch {};
+
     const updated = try db.exec(conn,
         \\UPDATE fact SET known = tstzrange(lower(known), greatest(now(), lower(known) + interval '1 microsecond')), end_kind = 'forgotten'
         \\WHERE graph_id = $1 AND id = $2 AND upper_inf(known)
@@ -241,6 +248,7 @@ pub fn forget(e: *mod.Engine, arena: std.mem.Allocator, target: ForgetTarget) !F
         try conn.rollback();
         return .{};
     }
+
     _ = try db.exec(conn,
         \\INSERT INTO entry (id, graph_id, kind, project, author, body, content_hash, reference_time, status)
         \\VALUES ($1, $2, 'note', $3, 'user', $4::jsonb, $5, now(), 'committed')
@@ -250,6 +258,7 @@ pub fn forget(e: *mod.Engine, arena: std.mem.Allocator, target: ForgetTarget) !F
         "INSERT INTO fact_evidence (fact_id, entry_id, kind, quote) VALUES ($1, $2, 'forgotten', $3)",
         .{ &hit.fact.id.bytes, &entry_id.bytes, quote },
     );
+
     _ = try db.exec(conn, "NOTIFY graf_commit", .{});
     try conn.commit();
 

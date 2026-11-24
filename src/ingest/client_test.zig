@@ -45,6 +45,7 @@ fn embeddingsOk(comptime n: usize, comptime width: usize) Replay.Step {
             for (0..width) |k| vec = vec ++ (if (k > 0) "," else "") ++ (if (k == i % width) "1.0" else "0.0");
             data = data ++ (if (i > 0) "," else "") ++ std.fmt.comptimePrint("{{\"object\":\"embedding\",\"embedding\":[{s}],\"index\":{d}}}", .{ vec, i });
         }
+
         return .{ .capture = "HTTP/1.1 200 OK\ncontent-type: application/json\n\n" ++
             "{\"object\":\"list\",\"data\":[" ++ data ++ "],\"model\":\"example-embedding-model\",\"usage\":{\"prompt_tokens\":10,\"total_tokens\":10}}" };
     }
@@ -65,6 +66,7 @@ const Harness = struct {
             .llm = .{ .base_url = "https://llm.example.test/v1", .api_key = "test-key", .route = .@"openai-responses", .model = "example-model" },
             .embed = .{ .base_url = "https://llm.example.test/v1", .api_key = "test-key", .model = "example-embedding-model", .dimensions = dims },
         };
+
         h.replay = .init(testing.allocator, steps);
         h.client = .init(testing.allocator, testing.io, &h.cfg, null);
         h.client.transport = h.replay.transport();
@@ -94,6 +96,7 @@ test "an entry runs through the real client into the committed graph" {
     defer h.deinit();
 
     const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), "brackwater/monorepo", turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
+
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(core.types.EntryStatus.committed, h.backend.row(entry).status);
     try testing.expectEqual(@as(usize, 2), h.backend.entities.items.len);
@@ -112,6 +115,7 @@ test "a context overflow from the provider splits the entry" {
         .{ .role = .user, .text = "first half of a very long session" },
         .{ .role = .assistant, .text = "second half of a very long session" },
     });
+
     try testing.expectEqual(ingest.Outcome.split, try h.step());
     try testing.expectEqual(core.types.EntryStatus.split, h.backend.row(entry).status);
     try testing.expectEqual(@as(usize, 1), h.replay.sent.items.len);
@@ -138,6 +142,7 @@ test "an entry commits through the store into Postgres" {
         .body = .{ .turns = turns("Relay lives under infra/relay. Hollis is currently on call for Relay.") },
         .reference_time = at("2026-11-19T22:00:00Z"),
     };
+
     const entry = switch (try s.enqueue(graph, &draft)) {
         .queued => |id| id,
         .duplicate => return error.UnexpectedDuplicate,
@@ -146,6 +151,7 @@ test "an entry commits through the store into Postgres" {
     var backend: postgres.PgBackend = .{ .store = &s, .graph_id = graph, .io = testing.io };
     const lease = (try backend.claim(arena)) orelse return error.NothingQueued;
     try testing.expect(lease.entry_id.eql(entry));
+
     var d: PgDriver = .{ .backend = &backend, .model = &h.model, .config = &h.cfg, .graph_id = graph, .io = testing.io };
     try testing.expectEqual(ingest.Outcome.committed, try d.process(arena, lease));
     try testing.expectEqual(@as(usize, 0), h.replay.remaining());
@@ -156,6 +162,7 @@ test "an entry commits through the store into Postgres" {
     var ebuf: [36]u8 = undefined;
     const g = graph.toString(&gbuf);
     const Counts = struct { status: []const u8, entities: i64, facts: i64, evidence: i64, commits: i64, relay_since_summary: i64 };
+
     const got = try postgres.jsonRow(Counts, arena, conn,
         \\SELECT json_build_object(
         \\  'status', (SELECT status FROM entry WHERE id = $2::uuid),
@@ -166,6 +173,7 @@ test "an entry commits through the store into Postgres" {
         \\  'relay_since_summary', (SELECT facts_since_summary FROM entity WHERE graph_id = $1::uuid AND norm = 'relay')
         \\)::text
     , .{ g, entry.toString(&ebuf) });
+
     try testing.expectEqualStrings("committed", got.status);
     try testing.expectEqual(@as(i64, 2), got.entities);
     try testing.expectEqual(@as(i64, 2), got.facts);

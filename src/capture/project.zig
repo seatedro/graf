@@ -9,10 +9,12 @@ pub fn derive(arena: Allocator, io: std.Io, cwd: []const u8) Allocator.Error![]c
     const clean = try std.fs.path.resolveAlloc(arena, &.{cwd});
     const root = try gitRoot(arena, io, clean) orelse return clean;
     const config_path = try gitConfigPath(arena, io, root) orelse return clean;
+
     const text = Dir.cwd().readFileAlloc(io, config_path, arena, .limited(max_git_file_bytes)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return clean,
     };
+
     const url = try remoteUrl(arena, text) orelse return clean;
     return try normalizeRemote(arena, url) orelse clean;
 }
@@ -58,6 +60,7 @@ pub fn remoteUrl(arena: Allocator, config_text: []const u8) Allocator.Error!?[]c
     var first: ?[]const u8 = null;
     var section_remote: ?[]const u8 = null;
     var lines = std.mem.splitScalar(u8, config_text, '\n');
+
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
         if (line.len == 0 or line[0] == '#' or line[0] == ';') continue;
@@ -65,6 +68,7 @@ pub fn remoteUrl(arena: Allocator, config_text: []const u8) Allocator.Error!?[]c
             section_remote = parseRemoteHeader(line);
             continue;
         }
+
         const remote = section_remote orelse continue;
         const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, line[0..eq], " \t"), "url")) continue;
@@ -73,6 +77,7 @@ pub fn remoteUrl(arena: Allocator, config_text: []const u8) Allocator.Error!?[]c
         if (std.mem.eql(u8, remote, "origin")) return value;
         if (first == null) first = value;
     }
+
     return first;
 }
 
@@ -91,6 +96,7 @@ fn configValue(arena: Allocator, raw: []const u8) Allocator.Error![]const u8 {
     var in_quotes = false;
     var i: usize = 0;
     const text = std.mem.trim(u8, raw, " \t");
+
     while (i < text.len) : (i += 1) {
         const c = text[i];
         switch (c) {
@@ -107,6 +113,7 @@ fn configValue(arena: Allocator, raw: []const u8) Allocator.Error![]const u8 {
             else => try out.append(arena, c),
         }
     }
+
     return std.mem.trim(u8, out.items, " \t");
 }
 
@@ -114,6 +121,7 @@ pub fn normalizeRemote(arena: Allocator, url_in: []const u8) Allocator.Error!?[]
     const url = std.mem.trim(u8, url_in, " \t\r\n");
     var host: []const u8 = undefined;
     var path: []const u8 = undefined;
+
     if (std.mem.indexOf(u8, url, "://")) |scheme_end| {
         if (std.ascii.eqlIgnoreCase(url[0..scheme_end], "file")) return null;
         const rest = url[scheme_end + 3 ..];
@@ -130,11 +138,13 @@ pub fn normalizeRemote(arena: Allocator, url_in: []const u8) Allocator.Error!?[]
         host = authority;
         path = url[colon + 1 ..];
     }
+
     if (std.mem.indexOfAny(u8, path, "?#")) |cut| path = path[0..cut];
     path = std.mem.trim(u8, path, "/");
     if (std.mem.endsWith(u8, path, ".git")) path = path[0 .. path.len - 4];
     path = std.mem.trimEnd(u8, path, "/");
     if (host.len == 0 or path.len == 0) return null;
+
     const lower = try std.ascii.allocLowerString(arena, host);
     return try std.fmt.allocPrint(arena, "{s}/{s}", .{ lower, path });
 }
@@ -182,6 +192,7 @@ pub fn globMatch(pattern: []const u8, text: []const u8) bool {
     var t: usize = 0;
     var star: ?usize = null;
     var resume_at: usize = 0;
+
     while (t < text.len) {
         if (p < pattern.len and pattern[p] == '*') {
             star = p;
@@ -196,6 +207,7 @@ pub fn globMatch(pattern: []const u8, text: []const u8) bool {
             t = resume_at;
         } else return false;
     }
+
     while (p < pattern.len and pattern[p] == '*') p += 1;
     return p == pattern.len;
 }
@@ -207,6 +219,7 @@ fn expandPath(arena: Allocator, entry: []const u8, home: ?[]const u8) Allocator.
         const h = home orelse return null;
         path = try std.mem.concat(arena, u8, &.{ h, entry[1..] });
     }
+
     if (!std.fs.path.isAbsolute(path)) return null;
     return try std.fs.path.resolveAlloc(arena, &.{path});
 }
@@ -223,6 +236,7 @@ test "normalizeRemote handles scp, https, ssh with port, and credentials" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const cases = [_][2][]const u8{
         .{ "git@github.com:brackwater/widgets.git", "github.com/brackwater/widgets" },
         .{ "https://github.com/brackwater/widgets", "github.com/brackwater/widgets" },
@@ -233,11 +247,13 @@ test "normalizeRemote handles scp, https, ssh with port, and credentials" {
         .{ "https://git.example.test:8443/group/sub/widgets.git/", "git.example.test/group/sub/widgets" },
         .{ "git.example.test:brackwater/widgets", "git.example.test/brackwater/widgets" },
     };
+
     for (cases) |c| {
         const got = (try normalizeRemote(arena, c[0])) orelse return error.TestUnexpectedResult;
         try testing.expectEqualStrings(c[1], got);
         try testing.expect(std.mem.indexOf(u8, got, "tok-123") == null);
     }
+
     try testing.expect((try normalizeRemote(arena, "/srv/repos/widgets.git")) == null);
     try testing.expect((try normalizeRemote(arena, "file:///srv/repos/widgets.git")) == null);
 }
@@ -246,6 +262,7 @@ test "remoteUrl prefers origin, else the first remote" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const with_origin =
         \\[core]
         \\    bare = false
@@ -257,6 +274,7 @@ test "remoteUrl prefers origin, else the first remote" {
         \\
     ;
     try testing.expectEqualStrings("git@git.example.test:brackwater/widgets.git", (try remoteUrl(arena, with_origin)).?);
+
     const without_origin =
         \\[remote "fork"]
         \\    URL = https://git.example.test/fork/widgets
@@ -352,6 +370,7 @@ test "isExcluded: projects, paths component-wise, tilde, grafignore" {
 
     cfg.capture.exclude_projects = &.{};
     cfg.capture.exclude_paths = &.{};
+
     try f.write("open/.git/config", "");
     try f.write("open/src/x.txt", "");
     try testing.expect(!try isExcluded(arena, io, &cfg, .{ .cwd = try f.path("open/src") }));

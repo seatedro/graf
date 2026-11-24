@@ -19,6 +19,7 @@ fn monthNumber(word: []const u8) ?u32 {
 pub fn parseLooseDate(s: []const u8) ?core.Micros {
     const trimmed = std.mem.trim(u8, s, " \t");
     if (core.time.parseRfc3339(trimmed)) |t| return t else |_| {}
+
     var words: [3][]const u8 = undefined;
     var n: usize = 0;
     var it = std.mem.tokenizeAny(u8, trimmed, " ,");
@@ -27,16 +28,20 @@ pub fn parseLooseDate(s: []const u8) ?core.Micros {
         words[n] = w;
         n += 1;
     }
+
     if (n != 3) return null;
     const year = std.fmt.parseInt(i64, words[2], 10) catch return null;
+
     if (monthNumber(words[0])) |m| {
         const day = std.fmt.parseInt(u32, words[1], 10) catch return null;
         return dateMicros(year, m, day);
     }
+
     if (monthNumber(words[1])) |m| {
         const day = std.fmt.parseInt(u32, words[0], 10) catch return null;
         return dateMicros(year, m, day);
     }
+
     return null;
 }
 
@@ -46,6 +51,7 @@ pub fn withinOneDay(a: core.Micros, b: core.Micros) bool {
 
 test "loose dates accept the forms extraction produces" {
     const want = try core.time.parseRfc3339("2026-12-03");
+
     try std.testing.expectEqual(want, parseLooseDate("December 3, 2026").?);
     try std.testing.expectEqual(want, parseLooseDate("3 Dec 2026").?);
     try std.testing.expectEqual(want, parseLooseDate(" 2026-12-03 ").?);

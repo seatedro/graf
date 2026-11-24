@@ -17,12 +17,14 @@ pub fn hashEmbed(out: []f32, s: []const u8) void {
         const h = std.hash.Wyhash.hash(7, lower);
         out[h % out.len] += if (h & (1 << 40) != 0) 1 else -1;
     }
+
     var n: f32 = 0;
     for (out) |x| n += x * x;
     if (n == 0) {
         out[0] = 1;
         return;
     }
+
     const inv = 1 / @sqrt(n);
     for (out) |*x| x.* *= inv;
 }
@@ -119,17 +121,20 @@ pub const Seeder = struct {
         const id = core.Id.v7(sd.io);
         var emb: [dims]f32 = undefined;
         hashEmbed(&emb, name);
+
         try sd.exec(
             \\INSERT INTO entity (id, graph_id, name, norm, type, description, summary, name_emb, created_seq, updated_seq)
             \\VALUES ($1, $2, $3, $4, $5, $6, $7, $8::float4[]::halfvec(512), 0, 0)
         , .{ &id.bytes, &sd.graph.bytes, name, norm, typ, description, if (std.mem.eql(u8, typ, "project")) description else "", @as([]const f32, &emb) });
         try sd.exec("INSERT INTO entity_alias (graph_id, norm, entity_id, alias) VALUES ($1, $2, $3, $4)", .{ &sd.graph.bytes, norm, &id.bytes, name });
+
         for (aliases) |a| {
             var buf: [1024]u8 = undefined;
             var fba = std.heap.FixedBufferAllocator.init(&buf);
             const n = try core.text.norm(fba.allocator(), a);
             try sd.exec("INSERT INTO entity_alias (graph_id, norm, entity_id, alias) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING", .{ &sd.graph.bytes, n, &id.bytes, a });
         }
+
         return id;
     }
 
@@ -137,6 +142,7 @@ pub const Seeder = struct {
         const id = core.Id.v7(sd.io);
         var emb: [dims]f32 = undefined;
         hashEmbed(&emb, f.text);
+
         try sd.exec(
             \\INSERT INTO fact (id, graph_id, subject_id, relation, object_id, object_value, text, rationale, project, scope,
             \\  valid, known, end_kind, author, confidence, emb, created_seq)
@@ -149,6 +155,7 @@ pub const Seeder = struct {
             f.recorded,                                             f.superseded,           f.end_kind,       f.author,
             f.confidence,                                           @as([]const f32, &emb),
         });
+
         sd.seq += 1;
         const source_id = core.Id.v7(sd.io);
         const entry_id = core.Id.v7(sd.io);
@@ -156,12 +163,14 @@ pub const Seeder = struct {
         const ext = try std.fmt.bufPrint(&ext_buf, "session-{d}", .{sd.seq});
         var hash: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(&id.bytes, &hash, .{});
+
         try sd.exec("INSERT INTO source (id, graph_id, harness, external_id, project) VALUES ($1, $2, $3, $4, $5)", .{ &source_id.bytes, &sd.graph.bytes, f.harness, ext, f.project });
         try sd.exec(
             \\INSERT INTO entry (id, graph_id, source_id, kind, project, author, body, content_hash, reference_time, status)
             \\VALUES ($1, $2, $3, 'note', $4, 'user', '{}'::jsonb, $5, $6::timestamptz, 'committed')
         , .{ &entry_id.bytes, &sd.graph.bytes, &source_id.bytes, f.project, @as([]const u8, &hash), f.recorded });
         try sd.exec("INSERT INTO fact_evidence (fact_id, entry_id, kind) VALUES ($1, $2, 'stated')", .{ &id.bytes, &entry_id.bytes });
+
         return id;
     }
 };
@@ -183,6 +192,7 @@ pub fn seed(s: *store.Store, io: std.Io) !Seed {
         .alice = try sd.entity("alice", "alice", "person", "The user", &.{}),
         .tabs = try sd.entity("tabs", "tabs", "concept", "Indentation with tab characters", &.{}),
     };
+
     r.f_graf_uses_pg = try sd.fact(.{ .subject = r.graf, .relation = "uses", .object = r.postgres, .text = "graf uses Postgres 17 with pgvector for storage.", .project = "graf", .valid_from = now - 30 * day, .recorded = now - 30 * day });
     r.f_pgzig_lacks_copy = try sd.fact(.{ .subject = r.pgzig, .relation = "lacks_feature", .value = "COPY", .text = "pg.zig lacks COPY support.", .project = "graf", .scope = "global", .valid_from = now - 25 * day, .valid_to = now - 5 * day, .end_kind = "changed", .recorded = now - 25 * day, .confidence = 0.8, .harness = "codex" });
     r.f_pgzig_supports_copy = try sd.fact(.{ .subject = r.pgzig, .relation = "supports_feature", .value = "COPY", .text = "pg.zig supports COPY since its latest release.", .project = "graf", .scope = "global", .valid_from = now - 5 * day, .recorded = now - 5 * day, .confidence = 0.85 });
@@ -192,6 +202,7 @@ pub fn seed(s: *store.Store, io: std.Io) !Seed {
     r.f_graf_status = try sd.fact(.{ .subject = r.graf, .relation = "has_status", .value = "beta", .text = "graf is in beta.", .project = "graf", .valid_from = now - 2 * day, .recorded = now - 2 * day });
     r.f_graf_chose_pg = try sd.fact(.{ .subject = r.graf, .relation = "chose", .object = r.postgres, .text = "graf chose Postgres over a graph database.", .rationale = "pgvector and range types cover the temporal graph", .project = "graf", .valid_from = now - 3 * day, .recorded = now - 3 * day });
     r.f_graf_pg18 = try sd.fact(.{ .subject = r.graf, .relation = "has_version", .value = "Postgres 18", .text = "graf moves to Postgres 18.", .project = "graf", .valid_from = now + 10 * day, .recorded = now - 1 * day });
+
     return r;
 }
 
@@ -204,6 +215,7 @@ pub fn cleanup(s: *store.Store, graph: core.Id) void {
             "DELETE FROM " ++ t ++ " WHERE graph_id = $1";
         _ = s.pool.exec(sql, .{&graph.bytes}) catch {};
     }
+
     _ = s.pool.exec("DELETE FROM graph WHERE id = $1", .{&graph.bytes}) catch {};
 }
 
@@ -285,6 +297,7 @@ test "search boosts the caller's project and scopes to it" {
     const graf = try f.engine.search(arena, .{ .query = q, .project = "graf" });
     try std.testing.expect(!contains(graf.hits, sd.f_quayline_uses_pg));
     try std.testing.expect(indexOf(graf.hits, sd.f_graf_uses_pg).? < 2);
+
     const in_all = all_graf.hits[indexOf(all_graf.hits, sd.f_graf_uses_pg).?];
     const in_graf = graf.hits[indexOf(graf.hits, sd.f_graf_uses_pg).?];
     try std.testing.expect(in_graf.score > in_all.score * 1.1);
@@ -324,6 +337,7 @@ test "search falls back to deterministic order when the reranker is slow" {
     const elapsed_ms = @divFloor(start.durationTo(std.Io.Timestamp.now(std.testing.io, .awake)).nanoseconds, std.time.ns_per_ms);
     try std.testing.expect(!slow.reranked);
     try std.testing.expect(elapsed_ms < 1_500);
+
     f.engine.reranker = null;
     const plain = try f.engine.search(arena, .{ .query = q, .project = "graf" });
     try std.testing.expectEqual(plain.hits.len, slow.hits.len);
@@ -337,6 +351,7 @@ test "search without an embedder uses the lexical and entity arms" {
     f.engine.embedder = null;
     const res = try f.engine.search(f.arena.allocator(), .{ .query = "tell me about pg-zig", .project = "graf" });
     try std.testing.expect(contains(res.hits, f.seed.f_pgzig_supports_copy));
+
     var out: std.Io.Writer.Allocating = .init(f.arena.allocator());
     try mod.render(&res, .{ .query = "tell me about pg-zig", .project = "graf" }, &out.writer);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "### pg.zig (software)") != null);
@@ -354,6 +369,7 @@ test "entity resolves aliases and walks two hops" {
     try std.testing.expect(contains(pg.facts, sd.f_graf_uses_pg));
     try std.testing.expect(contains(pg.facts, sd.f_quayline_uses_pg));
     try std.testing.expect(!contains(pg.facts, sd.f_graf_pg18));
+
     var found_status = false;
     for (pg.neighbors) |n| if (n.entity.id.eql(sd.graf)) {
         found_status = contains(n.facts, sd.f_graf_status);
@@ -366,6 +382,7 @@ test "entity resolves aliases and walks two hops" {
     var id_buf: [36]u8 = undefined;
     const by_id = try f.engine.entity(arena, .{ .name_or_id = sd.pgzig.toString(&id_buf), .include_history = true });
     try std.testing.expect(contains(by_id.facts, sd.f_pgzig_lacks_copy));
+
     const fuzzy = try f.engine.entity(arena, .{ .name_or_id = "pg zig drivr" });
     try std.testing.expect(fuzzy.entity.entity.id.eql(sd.pgzig));
     try std.testing.expectError(error.EntityNotFound, f.engine.entity(arena, .{ .name_or_id = "nothing like this" }));
@@ -389,8 +406,10 @@ test "forget closes system time and asks before forgetting several facts" {
     const one = try f.engine.forget(arena, .{ .query = "tabs over spaces", .reason = "no longer true" });
     try std.testing.expectEqual(@as(usize, 1), one.forgotten.len);
     try std.testing.expect(one.forgotten[0].fact.id.eql(sd.f_alice_prefers_tabs));
+
     const after = try f.engine.search(arena, .{ .query = "alice prefers tabs", .project = "graf" });
     try std.testing.expect(!contains(after.hits, sd.f_alice_prefers_tabs));
+
     const again = try f.engine.forget(arena, .{ .fact_id = sd.f_alice_prefers_tabs });
     try std.testing.expectEqual(@as(usize, 0), again.forgotten.len);
 
@@ -410,6 +429,7 @@ test "brief is deterministic, bounded and fast" {
     const cold_start = std.Io.Timestamp.now(io, .awake);
     const b = try f.engine.brief(arena, "graf");
     const cold_ms = @divFloor(cold_start.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds, std.time.ns_per_ms);
+
     try std.testing.expect(cold_ms < 150);
     try std.testing.expect(render.estimateTokens(b.len) <= mod.brief_tokens);
     try std.testing.expect(std.mem.indexOf(u8, b, "### Standing preferences\n- [current | conf 0.90] alice prefers tabs") != null);
@@ -428,6 +448,7 @@ test "brief is deterministic, bounded and fast" {
         s.* = t0.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds;
         try std.testing.expectEqualStrings(b, again);
     }
+
     std.mem.sort(i96, &samples, {}, std.sort.asc(i96));
     try std.testing.expect(samples[samples.len * 99 / 100] < 150 * std.time.ns_per_ms);
 
@@ -438,6 +459,7 @@ test "brief is deterministic, bounded and fast" {
     _ = try f.engine.forget(arena, .{ .fact_id = f.seed.f_alice_prefers_tabs });
     try f.engine.refreshBriefs();
     try std.testing.expect(std.mem.indexOf(u8, try f.engine.brief(arena, "graf"), "tabs") == null);
+
     const unknown = try f.engine.brief(arena, "unknown-project");
     try std.testing.expect(std.mem.indexOf(u8, unknown, "### Project") == null);
     try std.testing.expect(std.mem.indexOf(u8, unknown, "graf uses") == null);
@@ -456,8 +478,10 @@ test "recall merges the warmed cache and never repeats a fact" {
     try std.testing.expect(std.mem.indexOf(u8, first, "pg.zig supports COPY") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "graf uses Postgres 17") != null);
     try std.testing.expect(render.estimateTokens(first.len) <= mod.recall_tokens);
+
     const second = try f.engine.recall(arena, "s1", "is pg-zig able to do COPY", "graf");
     try std.testing.expect(std.mem.indexOf(u8, second, "pg.zig supports COPY") == null);
+
     const other = try f.engine.recall(arena, "s2", "is pg-zig able to do COPY", "graf");
     try std.testing.expect(std.mem.indexOf(u8, other, "pg.zig supports COPY") != null);
     try std.testing.expectEqualStrings("", try f.engine.recall(arena, "s3", "zzzz qqqq", "graf"));
@@ -479,6 +503,7 @@ const StatefulDecider = struct {
         const body = std.json.parseFromSliceLeaky(std.json.Value, arena, req.body, .{}) catch
             return .{ .failure = .{ .err = error.BadRequest, .sent = true } };
         try d.queries.append(std.testing.allocator, try std.testing.allocator.dupe(u8, body.object.get("state").?.object.get("query").?.string));
+
         var out: std.Io.Writer.Allocating = .init(arena);
         const w = &out.writer;
         w.writeAll("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"answers\":{") catch return error.OutOfMemory;
@@ -490,6 +515,7 @@ const StatefulDecider = struct {
             w.print("{s}\"{s}\":{{\"type\":\"noul\",\"noul\":{d}}}", .{ if (first) "" else ",", q.key_ptr.*, p }) catch return error.OutOfMemory;
             first = false;
         }
+
         w.writeAll("},\"usage\":{\"input_tokens\":120,\"output_tokens\":4}}") catch return error.OutOfMemory;
         return .{ .response = llm.transport.parseCapture(arena, out.written(), req.capture) catch return .{ .failure = .{ .err = error.BadCapture, .sent = true } } };
     }
@@ -529,6 +555,7 @@ test "search reranks through a stateful decision endpoint and falls back when it
     const elapsed_ms = @divFloor(start.durationTo(std.Io.Timestamp.now(std.testing.io, .awake)).nanoseconds, std.time.ns_per_ms);
     try std.testing.expect(!slow.reranked);
     try std.testing.expect(elapsed_ms < 1_500);
+
     f.engine.reranker = null;
     const plain = try f.engine.search(arena, .{ .query = q, .project = "graf" });
     try std.testing.expectEqual(plain.hits.len, slow.hits.len);

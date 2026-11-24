@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
+
         for (m.deps) |dep| {
             const imported = registry.get(dep) orelse
                 std.debug.panic("module '{s}' depends on '{s}', which must be listed before it", .{ m.name, dep });
@@ -50,6 +51,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "surface", .module = registry.get("surface").? }},
         }),
     });
+
     b.installArtifact(exe);
     test_step.dependOn(&exe.step);
 

@@ -33,6 +33,7 @@ pub const Args = struct {
 
 pub fn parseArgs(args: []const []const u8) error{Usage}!Args {
     if (args.len == 0 or !std.mem.eql(u8, args[0], "run")) return error.Usage;
+
     var out: Args = .{};
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -41,9 +42,11 @@ pub fn parseArgs(args: []const []const u8) error{Usage}!Args {
             out.json = true;
             continue;
         }
+
         if (i + 1 >= args.len) return error.Usage;
         const value = args[i + 1];
         i += 1;
+
         if (std.mem.eql(u8, flag, "--suite")) {
             out.run.suite_dir = value;
         } else if (std.mem.eql(u8, flag, "--graph")) {
@@ -56,6 +59,7 @@ pub fn parseArgs(args: []const []const u8) error{Usage}!Args {
             out.judge.route = value;
         } else return error.Usage;
     }
+
     return out;
 }
 
@@ -72,6 +76,7 @@ pub fn main(
         try out.writeAll(usage);
         return 0;
     };
+
     var parsed = parseArgs(args) catch {
         try err.writeAll(usage);
         return 2;
@@ -82,15 +87,18 @@ pub fn main(
         try err.print("graf eval: cannot load suite from {s}: {s}\n", .{ parsed.run.suite_dir, @errorName(e) });
         return 2;
     };
+
     const problems = try fixtures.validate(arena, &suite);
     if (problems.len > 0) {
         for (problems) |p| try err.print("graf eval: {s}\n", .{p});
         return 2;
     }
+
     if (config.database.url.len == 0) {
         try err.writeAll("graf eval: set database.url or GRAF_DATABASE_URL\n");
         return 2;
     }
+
     const setup = judge.setup(arena, config, parsed.judge) catch |e| switch (e) {
         error.InvalidRoute => {
             try err.writeAll("graf eval: the judge route must be openai-responses, anthropic-messages, or openai-chat\n");
@@ -98,6 +106,7 @@ pub fn main(
         },
         else => |other| return other,
     };
+
     if (setup.warning) |w| try err.print("graf eval: warning: {s}\n", .{w});
     parsed.run.judge = setup;
 
@@ -136,12 +145,15 @@ pub fn writeScorecard(report: score.Report, w: *Writer) !void {
     try w.print("graf eval: graph {s}, {d} of {d} entries finished\n", .{ report.graph orelse "(none)", d.terminal_entries, d.suite_entries });
     try w.print("judge: {s}\n\n", .{report.judge orelse "not used"});
     try w.print("{s:<24} {s:<7} {s:>10}  {s:<11} {s}\n", .{ "metric", "scored", "value", "gate", "result" });
+
     var failing: u32 = 0;
     const list = report.metrics.gateList();
+
     for (list) |g| {
         var value_buf: [32]u8 = undefined;
         var limit_buf: [32]u8 = undefined;
         var gate_buf: [40]u8 = undefined;
+
         const value = if (g.value) |v| formatValue(&value_buf, g.unit, v) else "-";
         const limit = formatValue(&limit_buf, if (g.unit == .ratio) .calls else g.unit, g.limit);
         const gate = std.fmt.bufPrint(&gate_buf, "{s} {s}", .{ if (g.bound == .at_least) ">=" else "<=", limit }) catch "?";
@@ -168,6 +180,7 @@ pub fn writeScorecard(report: score.Report, w: *Writer) !void {
         try w.print("\nfindings ({d})\n", .{report.findings.len});
         for (report.findings) |f| try w.print("  - {s}\n", .{f});
     }
+
     if (failing == 0) {
         try w.print("\nresult: PASS ({d} of {d} gates)\n", .{ list.len, list.len });
     } else try w.print("\nresult: FAIL ({d} of {d} gates failed or unmeasured)\n", .{ failing, list.len });
@@ -185,6 +198,7 @@ const JsonGate = struct {
 pub fn writeJson(report: score.Report, w: *Writer) !void {
     var gates: [mod.Metrics.gate_count]JsonGate = undefined;
     for (report.metrics.gateList(), &gates) |g, *j| j.* = .{ .metric = g.metric, .scoring = g.scoring, .value = g.value, .bound = g.bound, .limit = g.limit, .status = g.status() };
+
     try std.json.Stringify.value(.{
         .graph = report.graph,
         .judge = report.judge,
@@ -207,9 +221,11 @@ test "arguments parse into run options" {
     try testing.expectEqualStrings("g1", a.run.graph.?);
     try testing.expectEqualStrings("zig-out/bin/graf", a.run.serve_bin.?);
     try testing.expect(a.json);
+
     const d = try parseArgs(&.{"run"});
     try testing.expectEqualStrings("evals", d.run.suite_dir);
     try testing.expect(d.run.graph == null and !d.json);
+
     try testing.expectError(error.Usage, parseArgs(&.{}));
     try testing.expectError(error.Usage, parseArgs(&.{ "run", "--suite" }));
     try testing.expectError(error.Usage, parseArgs(&.{ "run", "--bogus", "1" }));
@@ -220,18 +236,22 @@ test "main rejects bad usage and a missing database without touching the network
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var env = std.process.Environ.Map.init(arena);
     const config: core.Config = .{};
     var out_buf: [4096]u8 = undefined;
     var err_buf: [4096]u8 = undefined;
     var out: Writer = .fixed(&out_buf);
     var err: Writer = .fixed(&err_buf);
+
     try testing.expectEqual(@as(u8, 2), try main(arena, testing.io, &config, &env, &.{"nope"}, &out, &err));
     try testing.expect(std.mem.indexOf(u8, err.buffered(), "usage: graf eval run") != null);
+
     err.end = 0;
     const dir = try fixtures.shippedSuiteDir(arena, testing.io);
     try testing.expectEqual(@as(u8, 2), try main(arena, testing.io, &config, &env, &.{ "run", "--suite", dir }, &out, &err));
     try testing.expect(std.mem.indexOf(u8, err.buffered(), "GRAF_DATABASE_URL") != null);
+
     try testing.expectEqual(@as(u8, 0), try main(arena, testing.io, &config, &env, &.{"--help"}, &out, &err));
 }
 
@@ -269,12 +289,15 @@ test "the json report round-trips" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const suite = try fixtures.loadShippedSuite(arena, testing.io);
     const report = try score.scoreState(arena, &suite, &.{});
     var buf: std.Io.Writer.Allocating = .init(arena);
     try writeJson(report, &buf.writer);
+
     const Parsed = struct { passes: bool, gates: []const JsonGate, findings: []const []const u8 };
     const parsed = try std.json.parseFromSliceLeaky(Parsed, arena, buf.written(), .{ .ignore_unknown_fields = true });
+
     try testing.expect(!parsed.passes);
     try testing.expectEqual(@as(usize, mod.Metrics.gate_count), parsed.gates.len);
     try testing.expectEqual(mod.Gate.Status.unmeasured, parsed.gates[0].status);

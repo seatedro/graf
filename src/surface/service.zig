@@ -146,7 +146,9 @@ pub const Service = struct {
             .harness = in.harness,
             .max_tokens = clampTokens(in.max_tokens orelse 1500),
         };
+
         const result = try s.engine.search(arena, params);
+
         var text: Io.Writer.Allocating = .init(arena);
         try retrieve.render(&result, params, &text.writer);
         return ok(arena, .{ .text = text.written(), .reranked = result.reranked, .facts = try facts(arena, result.hits) });
@@ -170,7 +172,9 @@ pub const Service = struct {
             .include_retracted = in.include_retracted,
             .max_tokens = clampTokens(in.max_tokens orelse 1500),
         };
+
         const result = try s.engine.entity(arena, params);
+
         var text: Io.Writer.Allocating = .init(arena);
         try retrieve.renderEntity(&result, params, &text.writer);
         return ok(arena, .{ .text = text.written(), .id = result.entity.entity.id, .name = result.entity.entity.name, .type = result.entity.entity.type, .facts = try facts(arena, result.facts) });
@@ -187,6 +191,7 @@ pub const Service = struct {
     fn remember(s: *Service, arena: Allocator, in: RememberInput) !api.Reply {
         const sink = s.sink orelse return error.NoEntrySink;
         if (std.mem.trim(u8, in.text, " \t\r\n").len == 0) return error.EmptyText;
+
         const draft: core.EntryDraft = .{
             .kind = .note,
             .project = if (in.scope == .global) null else in.project,
@@ -194,10 +199,12 @@ pub const Service = struct {
             .body = .{ .text = in.text },
             .reference_time = try optTime(in.valid_from) orelse core.time.now(s.io),
         };
+
         const id = switch (try sink.enqueue(&draft)) {
             .duplicate => return ok(arena, .{ .text = "Already remembered: an identical note is in memory.", .duplicate = true }),
             .queued => |id| id,
         };
+
         if (in.wait) {
             const deadline = Io.Clock.Timestamp.fromNow(s.io, .{ .raw = .fromMilliseconds(remember_wait_ms), .clock = .awake });
             while (true) {
@@ -208,10 +215,12 @@ pub const Service = struct {
                     .dead => return api.errorReply(arena, 500, "the note could not be processed; see graf doctor"),
                     else => {},
                 }
+
                 if (deadline.durationFromNow(s.io).raw.nanoseconds <= 0) break;
                 try s.io.sleep(.fromMilliseconds(100), .awake);
             }
         }
+
         return ok(arena, .{ .text = try std.fmt.allocPrint(arena, "Queued as entry {f}; it will be in memory shortly.", .{id}), .entry_id = id, .status = core.types.EntryStatus.queued });
     }
 
@@ -219,6 +228,7 @@ pub const Service = struct {
         var text: Io.Writer.Allocating = .init(arena);
         const w = &text.writer;
         try w.print("Remembered (entry {f}).\n", .{id});
+
         const groups = [_]struct { []const u8, []const retrieve.Hit }{ .{ "New", o.stated }, .{ "Restated", o.restated }, .{ "Ended", o.ended } };
         for (groups) |g| for (g[1]) |h| try w.print("- {s}: {s} (fact {f})\n", .{ g[0], h.fact.text, h.fact.id });
         if (o.stated.len + o.restated.len == 0) try w.writeAll("No new facts were extracted.\n");
@@ -234,6 +244,7 @@ pub const Service = struct {
     fn forget(s: *Service, arena: Allocator, in: ForgetInput) !api.Reply {
         const fact_id: ?core.Id = if (in.fact_id) |f| try core.Id.parse(f) else null;
         const result = try s.engine.forget(arena, .{ .fact_id = fact_id, .query = in.query, .reason = in.reason });
+
         var text: Io.Writer.Allocating = .init(arena);
         const w = &text.writer;
         if (result.forgotten.len > 0) {
@@ -244,6 +255,7 @@ pub const Service = struct {
         } else {
             try w.writeAll("No current fact matches; nothing was forgotten.\n");
         }
+
         return ok(arena, .{ .text = text.written(), .forgotten = try facts(arena, result.forgotten), .candidates = try facts(arena, result.candidates) });
     }
 
@@ -283,6 +295,7 @@ pub const Service = struct {
 
     fn warm(s: *Service, session_id: []const u8, in: PromptInput) !api.Reply {
         const prompt = in.prompt orelse return .{ .status = 202, .body = "{\"accepted\":false}" };
+
         const job = try s.gpa.create(WarmJob);
         errdefer s.gpa.destroy(job);
         job.* = .{
@@ -290,9 +303,11 @@ pub const Service = struct {
             .prompt = try s.gpa.dupe(u8, prompt),
             .project = if (in.project) |p| try s.gpa.dupe(u8, p) else null,
         };
+
         s.background.concurrent(s.io, warmTask, .{ s, job }) catch {
             warmTask(s, job) catch {};
         };
+
         return .{ .status = 202, .body = "{\"accepted\":true}" };
     }
 
@@ -303,6 +318,7 @@ pub const Service = struct {
             if (job.project) |p| s.gpa.free(p);
             s.gpa.destroy(job);
         }
+
         s.engine.warm(job.session_id, job.prompt, job.project orelse "*") catch |err| {
             if (err == error.Canceled) return error.Canceled;
             log.warn("warming session recall failed: {s}", .{@errorName(err)});
@@ -329,9 +345,11 @@ pub const DefaultProject = struct {
             .search, .remember, .brief, .warm, .recall => {},
             else => return d.inner.handle(arena, req),
         }
+
         var value = std.json.parseFromSliceLeaky(std.json.Value, arena, req.body, .{}) catch return d.inner.handle(arena, req);
         if (value != .object or value.object.contains("project")) return d.inner.handle(arena, req);
         if (req.op == .remember) if (value.object.get("scope")) |sc| if (sc == .string and std.mem.eql(u8, sc.string, "global")) return d.inner.handle(arena, req);
+
         try value.object.put(arena, "project", .{ .string = d.project });
         var patched = req;
         patched.body = try std.json.Stringify.valueAlloc(arena, value, .{});

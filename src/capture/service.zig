@@ -44,6 +44,7 @@ pub const Capture = struct {
         var arena: std.heap.ArenaAllocator = .init(gpa);
         errdefer arena.deinit();
         const a = arena.allocator();
+
         const home = env.get("HOME");
         const state_dir = try state.dir(a, env);
         const roots = options.roots orelse blk: {
@@ -52,16 +53,19 @@ pub const Capture = struct {
             for (default_roots, list) |d, *r| r.* = .{ .harness = d[0], .path = try std.fs.path.join(a, &.{ h, d[1] }) };
             break :blk list;
         };
+
         const now = Io.Timestamp.now(io, .real).toMicroseconds();
         var tailer_options = options.tailer;
         if (tailer_options.home == null) tailer_options.home = if (home) |h| try a.dupe(u8, h) else null;
         if (!options.backfill and tailer_options.since == null) {
             tailer_options.since = options.since orelse if (state_dir) |sd| try state.captureSince(io, sd, now) else now;
         }
+
         const tailers = try gpa.alloc(tailer_mod.Tailer, roots.len);
         for (roots, tailers) |r, *t| t.* = .init(gpa, io, r.harness, try a.dupe(u8, r.path), sink, config, tailer_options);
         var watcher: watch.Watcher = .init(gpa);
         for (tailers) |*t| watcher.watchTree(io, t.root) catch {};
+
         return .{
             .gpa = gpa,
             .io = io,
@@ -119,6 +123,7 @@ pub const Capture = struct {
             }
             for (c.tailers) |*t| try t.tick(now);
         }
+
         for (c.tailers) |*t| {
             for (t.recent.items) |path| c.watcher.watchFile(path) catch {};
             t.recent.clearRetainingCapacity();
@@ -128,6 +133,7 @@ pub const Capture = struct {
     pub fn flush(c: *Capture, harness: core.Harness, transcript_path: []const u8) !bool {
         try c.mutex.lock(c.io);
         defer c.mutex.unlock(c.io);
+
         const now = Io.Timestamp.now(c.io, .real).toMicroseconds();
         for (c.tailers) |*t| {
             if (t.harness != harness) continue;
@@ -152,6 +158,7 @@ pub const Capture = struct {
     pub fn stats(c: *Capture) tailer_mod.Stats {
         c.mutex.lockUncancelable(c.io);
         defer c.mutex.unlock(c.io);
+
         var total: tailer_mod.Stats = .{};
         for (c.tailers) |*t| inline for (@typeInfo(tailer_mod.Stats).@"struct".field_names) |name| {
             @field(total, name) += @field(t.stats, name);
@@ -169,6 +176,7 @@ test "capture tails every configured root and answers hook flushes" {
     const arena = arena_state.allocator();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+
     try tmp.dir.createDirPath(io, "claude/proj");
     try tmp.dir.createDirPath(io, "codex/2026/11/21");
     const base = try tmp.dir.realPathFileAlloc(io, ".", arena);
@@ -187,6 +195,7 @@ test "capture tails every configured root and answers hook flushes" {
 
     const t0: core.Micros = 1_795_194_000_000_000;
     const minute = std.time.us_per_min;
+
     try c.step(t0);
     try tmp.dir.writeFile(io, .{ .sub_path = "claude/proj/s.jsonl", .data = @embedFile("testdata/claude-code/session.jsonl") });
     try tmp.dir.writeFile(io, .{ .sub_path = "codex/2026/11/21/rollout-2026-11-21T09-00-00-x.jsonl", .data = @embedFile("testdata/codex/rollout.jsonl") });
@@ -194,6 +203,7 @@ test "capture tails every configured root and answers hook flushes" {
     try c.step(t0 + minute);
     try c.step(t0 + 2 * minute);
     try c.step(t0 + 26 * 60 * minute);
+
     const s = c.stats();
     try testing.expectEqual(@as(usize, 2), s.files);
     try testing.expectEqual(@as(usize, 2), sink.entries.items.len);
@@ -211,6 +221,7 @@ test "spooled flushes replay into the matching tailer" {
     const arena = arena_state.allocator();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+
     try tmp.dir.createDirPath(io, "claude/proj");
     try tmp.dir.createDirPath(io, "state/graf");
     const base = try tmp.dir.realPathFileAlloc(io, ".", arena);
@@ -228,6 +239,7 @@ test "spooled flushes replay into the matching tailer" {
     const config: core.Config = .{};
     var c: Capture = try .init(testing.allocator, io, &env, &config, sink.entrySink(), .{ .roots = &roots, .backfill = true });
     defer c.deinit();
+
     try testing.expectEqual(@as(usize, 1), try c.replaySpool());
     try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
     try testing.expectEqual(@as(usize, 0), try c.replaySpool());

@@ -77,12 +77,14 @@ test "entries flow through extraction, resolution and commit into the expected g
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     var hollis_fact: ?core.Fact = null;
     var juno_fact: ?core.Fact = null;
     for (h.backend.facts.items) |f| {
         if (std.mem.eql(u8, f.fact.text, "Hollis is on call for Relay.")) hollis_fact = f.fact;
         if (std.mem.eql(u8, f.fact.text, "Juno is on call for Relay.")) juno_fact = f.fact;
     }
+
     try testing.expectEqual(@as(?core.Micros, at("2026-11-20T17:00:00Z")), hollis_fact.?.valid.upper);
     try testing.expectEqual(core.types.EndKind.changed, hollis_fact.?.end_kind.?);
     try testing.expect(hollis_fact.?.known.upper == null);
@@ -108,9 +110,11 @@ test "entries flow through extraction, resolution and commit into the expected g
 test "a crash after extraction resumes without paying for extraction again" {
     var h = try Harness.init();
     defer h.deinit();
+
     const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
     try h.model.push(.{ .json = relay_hollis });
     h.backend.crash_after_extraction = true;
+
     try testing.expectError(error.SimulatedCrash, h.step());
     try testing.expectEqual(core.types.EntryStatus.extracted, h.backend.row(entry).status);
     try testing.expectEqual(@as(u32, 1), h.model.count(.extract));
@@ -125,13 +129,16 @@ test "a crash after extraction resumes without paying for extraction again" {
 test "a lost lease fences the commit" {
     var h = try Harness.init();
     defer h.deinit();
+
     _ = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
     try h.model.push(.{ .json = relay_hollis });
+
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     var lease = h.backend.claim().?;
     lease.token += 100;
     var d = h.driver();
+
     try testing.expectError(error.LeaseLost, d.process(arena_state.allocator(), lease));
     try testing.expectEqual(@as(usize, 0), h.backend.facts.items.len);
 }
@@ -139,16 +146,20 @@ test "a lost lease fences the commit" {
 test "provider failures requeue, kill, or split the entry" {
     var h = try Harness.init();
     defer h.deinit();
+
     const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
 
     try h.model.push(.{ .fail = .requeue });
     try testing.expectEqual(ingest.Outcome.requeued, try h.step());
     try testing.expectEqual(core.types.EntryStatus.queued, h.backend.row(entry).status);
+
     try h.model.push(.{ .fail = .pause_route });
     try testing.expectEqual(ingest.Outcome.requeued, try h.step());
     try testing.expectEqual(@as(i32, 1), h.backend.row(entry).attempts);
+
     try h.model.push(.{ .fail = .requeue });
     try testing.expectEqual(ingest.Outcome.requeued, try h.step());
+
     try h.model.push(.{ .fail = .requeue });
     try testing.expectEqual(ingest.Outcome.dead, try h.step());
     try testing.expectEqual(core.types.EntryStatus.dead, h.backend.row(entry).status);
@@ -157,6 +168,7 @@ test "provider failures requeue, kill, or split the entry" {
         .{ .role = .user, .text = "first half of a very long session" },
         .{ .role = .assistant, .text = "second half of a very long session" },
     });
+
     try h.model.push(.{ .fail = .split });
     try testing.expectEqual(ingest.Outcome.split, try h.step());
     try testing.expectEqual(core.types.EntryStatus.split, h.backend.row(long).status);
@@ -165,6 +177,7 @@ test "provider failures requeue, kill, or split the entry" {
 
     var h2 = try Harness.init();
     defer h2.deinit();
+
     const rejected = try h2.backend.add("session-c", at("2026-11-19T23:30:00Z"), null, turns("hi"));
     try h2.model.push(.{ .fail = .dead });
     try testing.expectEqual(ingest.Outcome.dead, try h2.step());
@@ -174,9 +187,11 @@ test "provider failures requeue, kill, or split the entry" {
 test "malformed extraction output gets one repair, then the entry dies" {
     var h = try Harness.init();
     defer h.deinit();
+
     const ok = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
     try h.model.push(.{ .json = "```json\n{\"skip\": null}\n```" });
     try h.model.push(.{ .json = relay_hollis });
+
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(@as(u32, 1), h.model.count(.repair));
     try testing.expectEqual(core.types.EntryStatus.committed, h.backend.row(ok).status);
@@ -184,6 +199,7 @@ test "malformed extraction output gets one repair, then the entry dies" {
     const bad = try h.backend.add("session-b", at("2026-11-19T23:00:00Z"), null, turns("something"));
     try h.model.push(.{ .json = "not json" });
     try h.model.push(.{ .json = "still not json" });
+
     try testing.expectEqual(ingest.Outcome.dead, try h.step());
     try testing.expectEqual(core.types.EntryStatus.dead, h.backend.row(bad).status);
 }
@@ -191,15 +207,19 @@ test "malformed extraction output gets one repair, then the entry dies" {
 test "an unusable resolution answer falls back to the deterministic rules" {
     var h = try Harness.init();
     defer h.deinit();
+
     _ = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
     _ = try h.backend.add("session-b", at("2026-11-20T18:00:00Z"), null, turns("Heads up: Juno took over on call for Relay starting today at 17:00 UTC."));
+
     try h.model.push(.{ .json = relay_hollis });
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
+
     try h.model.push(.{ .json = relay_juno });
     try h.model.push(.{ .json = "{\"entity_links\":[{\"ref\":\"n9\",\"existing\":\"E7\"}],\"fact_verdicts\":[]}" });
     try h.model.push(.{ .json = "garbage" });
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(@as(u32, 1), h.model.count(.repair));
+
     var ended: usize = 0;
     for (h.backend.facts.items) |f| if (f.fact.end_kind == .changed) {
         ended += 1;
@@ -210,8 +230,10 @@ test "an unusable resolution answer falls back to the deterministic rules" {
 test "a missing model configuration hands the entry back untouched and surfaces the error" {
     var h = try Harness.init();
     defer h.deinit();
+
     const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay."));
     try h.model.push(.{ .raise = error.ModelNotConfigured });
+
     try testing.expectError(error.ModelNotConfigured, h.step());
     try testing.expectEqual(core.types.EntryStatus.queued, h.backend.row(entry).status);
     try testing.expectEqual(@as(i32, 0), h.backend.row(entry).attempts);
@@ -221,8 +243,10 @@ test "the decision model resolves with the entry as shared state, and a failing 
     var h = try Harness.init();
     defer h.deinit();
     h.model.decision_enabled = true;
+
     _ = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
     _ = try h.backend.add("session-b", at("2026-11-20T18:00:00Z"), null, turns("Heads up: Juno took over on call for Relay starting today at 17:00 UTC."));
+
     try h.model.push(.{ .json = relay_hollis });
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(@as(usize, 0), h.model.decisions.items.len);
@@ -232,6 +256,7 @@ test "the decision model resolves with the entry as shared state, and a failing 
     try testing.expectEqual(ingest.Outcome.committed, try h.step());
     try testing.expectEqual(@as(u32, 0), h.model.count(.resolve));
     try testing.expectEqual(@as(usize, 1), h.model.decisions.items.len);
+
     const sent = h.model.decisions.items[0];
     try testing.expectEqual(core.types.LlmPurpose.resolve, sent.purpose);
     try testing.expectEqual(@as(usize, 1), sent.state.len);
@@ -239,6 +264,7 @@ test "the decision model resolves with the entry as shared state, and a failing 
     try testing.expect(std.mem.indexOf(u8, sent.state[0].text, "Juno took over on call") != null);
     try testing.expectEqual(@as(usize, 1), sent.questions.len);
     try testing.expect(std.mem.indexOf(u8, sent.questions[0].choice.prompt, "Juno took over") == null);
+
     var retracted: usize = 0;
     for (h.backend.facts.items) |f| if (f.fact.end_kind == .retracted) {
         retracted += 1;
@@ -248,10 +274,13 @@ test "the decision model resolves with the entry as shared state, and a failing 
     var g = try Harness.init();
     defer g.deinit();
     g.model.decision_enabled = true;
+
     _ = try g.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Hollis is currently on call for Relay."));
     _ = try g.backend.add("session-b", at("2026-11-20T18:00:00Z"), null, turns("Heads up: Juno took over on call for Relay starting today at 17:00 UTC."));
+
     try g.model.push(.{ .json = relay_hollis });
     try testing.expectEqual(ingest.Outcome.committed, try g.step());
+
     try g.model.push(.{ .json = relay_juno });
     try g.model.push(.{ .json = "{\"entity_links\":[],\"fact_verdicts\":[{\"fact_index\":0,\"duplicate_of\":null,\"contradicts\":[{\"fact\":\"F1\",\"kind\":\"changed\",\"at\":null}]}]}" });
     try testing.expectEqual(ingest.Outcome.committed, try g.step());

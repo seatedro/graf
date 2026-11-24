@@ -33,12 +33,14 @@ fn redactPass(arena: Allocator, text: []const u8) Allocator.Error![]const u8 {
     var out: Output = .{ .arena = arena, .text = text };
     var m: usize = 0;
     var i: usize = 0;
+
     while (i < spans.len) {
         const kind = spans[i].kind;
         var cur = spans[i].start;
         var end = spans[i].end;
         i += 1;
         while (i < spans.len and spans[i].start < end) : (i += 1) end = @max(end, spans[i].end);
+
         while (cur < end) {
             while (m < markers.len and markers[m].end <= cur) m += 1;
             if (m < markers.len and markers[m].start < end) {
@@ -50,6 +52,7 @@ fn redactPass(arena: Allocator, text: []const u8) Allocator.Error![]const u8 {
             }
         }
     }
+
     return out.finish();
 }
 
@@ -90,6 +93,7 @@ fn findMarkers(arena: Allocator, text: []const u8) Allocator.Error![]const Range
             i = tag_start;
         }
     }
+
     return markers.items;
 }
 
@@ -142,6 +146,7 @@ fn scanPem(s: *Scanner) Allocator.Error!void {
             i = label_start;
             continue;
         }
+
         const end = findPemEnd(t, j + 5, t[label_start..j]) orelse t.len;
         try s.add(b, end, .pem);
         i = end;
@@ -210,6 +215,7 @@ fn scanTokens(s: *Scanner) Allocator.Error!void {
             i += 1;
             continue;
         }
+
         if (matchApiKey(s, i)) |end| {
             try s.add(i, end, .api_key);
             i = end;
@@ -233,6 +239,7 @@ fn matchApiKey(s: *Scanner, i: usize) ?usize {
         const end = switch (p.body) {
             inline else => |chars| s.bodyEnd(chars, body_start),
         };
+
         const body = t[body_start..end];
         if (body.len < p.min_body) continue;
         if (p.random_body and (end <= s.plain_body_end or !looksRandom(body))) {
@@ -241,6 +248,7 @@ fn matchApiKey(s: *Scanner, i: usize) ?usize {
         }
         return end;
     }
+
     return null;
 }
 
@@ -274,10 +282,12 @@ fn matchAuthScheme(t: []const u8, i: usize) ?Range {
     const word_end = i + @as(usize, if (bearer) 6 else 5);
     const start = skipBlanks(t, word_end);
     if (start == word_end) return null;
+
     const end = if (bearer) runEnd(t, start, isBearerChar) else runEnd(t, start, isBase64Char);
     const tok = t[start..end];
     if (tok.len < 8) return null;
     if (tok.len >= 20 and bearer) return .{ .start = start, .end = end };
+
     var digit = false;
     var inner_upper = false;
     var symbol = false;
@@ -286,6 +296,7 @@ fn matchAuthScheme(t: []const u8, i: usize) ?Range {
         if (k > 0 and std.ascii.isUpper(c)) inner_upper = true;
         if (c == '+' or c == '/' or c == '=' or (bearer and (c == '.' or c == '_' or c == '~'))) symbol = true;
     }
+
     if (!(digit or inner_upper or symbol)) return null;
     return .{ .start = start, .end = end };
 }
@@ -301,11 +312,13 @@ fn scanUrlCredentials(s: *Scanner) Allocator.Error!void {
     while (std.mem.indexOfPos(u8, t, i, "://")) |p| {
         i = p + 3;
         if (p == 0 or !std.ascii.isAlphanumeric(t[p - 1])) continue;
+
         var end = i;
         var at: ?usize = null;
         while (end < t.len and !isAuthorityStop(t[end])) : (end += 1) {
             if (t[end] == '@') at = end;
         }
+
         const a = at orelse continue;
         const colon = std.mem.indexOfScalar(u8, t[i..a], ':') orelse continue;
         const start = i + colon + 1;
@@ -358,6 +371,7 @@ fn scanAssignments(s: *Scanner) Allocator.Error!void {
             i += 1;
             continue;
         }
+
         const key_start = i;
         const key_end = runEnd(t, i, isKeyChar);
         i = key_end;
@@ -383,6 +397,7 @@ fn isSecretKey(raw: []const u8) bool {
         if (inList(&benign_segments, seg_lower)) return false;
         if (inList(&secret_segments, seg_lower)) secret = true;
     }
+
     return secret;
 }
 
@@ -398,6 +413,7 @@ fn hasSecretWord(lower: []const u8) bool {
             return true;
         }
     }
+
     return false;
 }
 
@@ -415,6 +431,7 @@ const SegmentIterator = struct {
         const k = it.key;
         while (it.pos < k.len and !std.ascii.isAlphanumeric(k[it.pos])) it.pos += 1;
         if (it.pos >= k.len) return null;
+
         const start = it.pos;
         it.pos += 1;
         while (it.pos < k.len and std.ascii.isAlphanumeric(k[it.pos])) : (it.pos += 1) {
@@ -434,6 +451,7 @@ fn matchAssignment(s: *Scanner, key_start: usize, key_end: usize) Allocator.Erro
     } else if (j + 1 < t.len and t[j] == '\\' and isQuote(t[j + 1])) {
         j += 2;
     }
+
     j = skipMarkdownBold(t, j);
     const sep = skipBlanks(t, j);
     const blank_before = sep != j;
@@ -464,6 +482,7 @@ fn matchAssignment(s: *Scanner, key_start: usize, key_end: usize) Allocator.Erro
             mode = .flag;
         },
     }
+
     const value_at = skipMarkdownBold(t, skipBlanks(t, j));
     const glued = value_at == j;
     if (!glued and mode == .tight) mode = .loose;
@@ -491,6 +510,7 @@ fn matchAssignment(s: *Scanner, key_start: usize, key_end: usize) Allocator.Erro
         vs = j;
         ve = valueEnd(t, vs);
     }
+
     ve = @min(ve, t.len);
     const value = t[vs..ve];
 
@@ -509,6 +529,7 @@ fn matchAssignment(s: *Scanner, key_start: usize, key_end: usize) Allocator.Erro
         if (looksLikeCode(t, vs, ve)) return ve;
         if (!looksSecretish(value)) return ve;
     }
+
     try s.add(vs, ve, .assignment);
     return ve;
 }
@@ -550,6 +571,7 @@ fn isPlaceholder(v: []const u8) bool {
     if (std.mem.startsWith(u8, v, "{{")) return true;
     if (v.len >= 2 and v[0] == '<' and v[v.len - 1] == '>') return true;
     if (v.len >= 2 and v[0] == '%' and v[v.len - 1] == '%') return true;
+
     for (v) |c| switch (c) {
         '*', 'x', 'X', '.', '-', '#' => {},
         else => return false,
@@ -562,6 +584,7 @@ fn isTrivial(v: []const u8) bool {
         var buf: [9]u8 = undefined;
         if (inList(&trivial_values, std.ascii.lowerString(&buf, v))) return true;
     }
+
     if (std.mem.indexOf(u8, v, "://") != null or std.mem.startsWith(u8, v, "//")) return true;
     var digit = false;
     for (v) |c| switch (c) {
@@ -578,6 +601,7 @@ fn looksLikeCode(t: []const u8, vs: usize, ve: usize) bool {
         '&', '*', '?', '!' => return true,
         else => {},
     }
+
     if (ve < t.len and (t[ve] == '(' or t[ve] == '[' or t[ve] == '<')) return true;
     var dotted = false;
     for (v) |c| {
@@ -586,6 +610,7 @@ fn looksLikeCode(t: []const u8, vs: usize, ve: usize) bool {
         } else if (!(std.ascii.isAlphabetic(c) or c == '_' or c == '$')) return false;
     }
     if (dotted) return true;
+
     if (v.len <= 96) {
         var name_buf: [96]u8 = undefined;
         if (hasSecretWord(std.ascii.lowerString(&name_buf, v))) return true;
@@ -594,6 +619,7 @@ fn looksLikeCode(t: []const u8, vs: usize, ve: usize) bool {
         var buf: [12]u8 = undefined;
         if (inList(&type_words, std.ascii.lowerString(&buf, v))) return true;
     }
+
     const after = skipBlanks(t, ve);
     if (after < t.len) switch (t[after]) {
         ',', ';', ')', '=', '|', '{', '}' => return true,
@@ -605,6 +631,7 @@ fn looksLikeCode(t: []const u8, vs: usize, ve: usize) bool {
 fn looksSecretish(v: []const u8) bool {
     if (v.len >= 8) return true;
     if (v.len < 4) return false;
+
     var upper = false;
     var lower = false;
     for (v) |c| {
@@ -624,6 +651,7 @@ fn scanHighEntropy(s: *Scanner) Allocator.Error!void {
             i += 1;
             continue;
         }
+
         var end = runEnd(t, i, isEntropyChar);
         var pad: usize = 0;
         while (end + pad < t.len and pad < 2 and t[end + pad] == '=') pad += 1;
@@ -682,6 +710,7 @@ fn isHighEntropy(run: []const u8) bool {
     const v = std.mem.trimEnd(u8, run, "=");
     if (isUuid(v)) return false;
     const hex = if (std.mem.startsWith(u8, v, "0x")) v[2..] else v;
+
     var hex_digit = false;
     var hex_alpha = false;
     var all_hex = true;
@@ -712,6 +741,7 @@ fn isHighEntropy(run: []const u8) bool {
         }
         if (c == '-' or c == '_' or c == '/') seps += 1;
     }
+
     const classes = @as(u8, @intFromBool(upper > 0)) + @intFromBool(lower > 0) + @intFromBool(digit > 0);
     if (classes < 2) return false;
     const cap = std.math.log2(@as(f64, @floatFromInt(@min(v.len, 64))));
@@ -751,6 +781,7 @@ fn wordiness(v: []const u8) usize {
             k += 1;
             continue;
         }
+
         const start = k;
         var vowel = false;
         while (k < v.len and std.ascii.isLower(v[k])) : (k += 1) {
@@ -759,11 +790,13 @@ fn wordiness(v: []const u8) usize {
                 else => {},
             }
         }
+
         if (k - start >= 3 and vowel) {
             total += k - start;
             if (start > 0 and std.ascii.isUpper(v[start - 1])) total += 1;
         }
     }
+
     return total;
 }
 
@@ -830,6 +863,7 @@ pub fn redactBody(arena: Allocator, body: types.EntryBody) Allocator.Error!types
         };
         dst.* = .{ .role = src.role, .text = try redact(arena, src.text), .tool_calls = calls, .ts = src.ts };
     }
+
     return .{ .turns = turns, .text = if (body.text) |text| try redact(arena, text) else null };
 }
 
@@ -843,6 +877,7 @@ test "redactDraft clears every string in the body and is stable on redacted inpu
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const secret = try std.mem.concat(arena, u8, &.{ "gh" ++ "p_", "a1B2c3D4e5F6g7H8", "i9J0k1L2m3N4o5P6q7R8" });
     const note = try std.fmt.allocPrint(arena, "remember GITHUB_TOKEN={s}", .{secret});
     const turns = [_]types.Turn{.{
@@ -851,10 +886,13 @@ test "redactDraft clears every string in the body and is stable on redacted inpu
         .tool_calls = &.{.{ .name = "Bash", .args_preview = secret, .result_preview = note }},
     }};
     const draft: types.EntryDraft = .{ .kind = .turns, .author = .agent, .body = .{ .turns = &turns, .text = note }, .reference_time = 0 };
+
     const once = try redactDraft(arena, draft);
     const json = try std.json.Stringify.valueAlloc(arena, once.body, .{});
+
     try std.testing.expect(std.mem.indexOf(u8, json, "a1B2c3D4e5F6g7H8") == null);
     try std.testing.expect(std.mem.indexOf(u8, json, "[REDACTED:") != null);
+
     const twice = try redactDraft(arena, once);
     try std.testing.expectEqualStrings(json, try std.json.Stringify.valueAlloc(arena, twice.body, .{}));
 }

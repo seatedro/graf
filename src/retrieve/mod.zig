@@ -104,6 +104,7 @@ pub const LlmBackend = struct {
         for (candidates, questions) |c, *q| q.* = .{
             .yes_no = try std.fmt.allocPrint(arena, "Memory: {s}\nIs this memory relevant to answering the query?", .{c}),
         };
+
         const answers = try b.client.decide(arena, .{ .purpose = .rerank, .state = &.{.{ .name = "query", .text = query }}, .questions = questions });
         const out = try arena.alloc(f64, answers.len);
         for (answers, out) |a, *o| o.* = switch (a) {

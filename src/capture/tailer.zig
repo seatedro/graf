@@ -95,6 +95,7 @@ pub const Tailer = struct {
     pub fn deinit(t: *Tailer) void {
         var it = t.files.valueIterator();
         while (it.next()) |f| t.destroyFile(f.*);
+
         t.files.deinit(t.gpa);
         t.recent.deinit(t.gpa);
         t.scratch.deinit();
@@ -108,12 +109,14 @@ pub const Tailer = struct {
             else => |e| return e,
         };
         defer dir.close(t.io);
+
         var walker = try dir.walk(t.gpa);
         defer walker.deinit();
         var seen: std.StringHashMapUnmanaged(void) = .empty;
         defer seen.deinit(t.gpa);
         var paths: std.heap.ArenaAllocator = .init(t.gpa);
         defer paths.deinit();
+
         while (try walker.next(t.io)) |entry| {
             if (entry.kind != .file or !matches(t.harness, entry.basename)) continue;
             const full = try std.fs.path.join(paths.allocator(), &.{ t.root, entry.path });
@@ -124,11 +127,13 @@ pub const Tailer = struct {
             }
             try t.pollPath(full, now);
         }
+
         var stale: std.ArrayList([]const u8) = .empty;
         defer stale.deinit(t.gpa);
         var it = t.files.iterator();
         while (it.next()) |e| if (!seen.contains(e.key_ptr.*) and e.value_ptr.*.outbox.items.len == 0) try stale.append(t.gpa, e.key_ptr.*);
         for (stale.items) |path| t.forget(path);
+
         try t.tick(now);
     }
 
@@ -136,6 +141,7 @@ pub const Tailer = struct {
         const f = try t.fileFor(path);
         try t.drainOutbox(f);
         if (f.excluded == true) return;
+
         const file = Io.Dir.cwd().openFile(t.io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 if (f.outbox.items.len == 0) t.forget(path);
@@ -144,14 +150,17 @@ pub const Tailer = struct {
             else => |e| return e,
         };
         defer file.close(t.io);
+
         const st = try file.stat(t.io);
         var inode_buf: [40]u8 = undefined;
         const inode = std.fmt.bufPrint(&inode_buf, "{d}", .{st.inode}) catch unreachable;
+
         if (!f.loaded) {
             try t.load(f, file, st, inode);
         } else if (!std.mem.eql(u8, inode, f.inode) or st.size < f.read_off) {
             try t.restart(f, inode);
         }
+
         f.seen_size = st.size;
         f.seen_mtime = st.mtime.nanoseconds;
         if (f.read_off < st.size) try t.recent.append(t.gpa, f.path);
@@ -165,8 +174,10 @@ pub const Tailer = struct {
             const f = fp.*;
             try t.drainOutbox(f);
             if (f.excluded == true or !f.loaded) continue;
+
             var items: std.ArrayList(dialect.Item) = .empty;
             const s = f.sink(t.scratch.allocator(), &items);
+
             if (f.parser.pendingTs()) |ts| {
                 if (now - ts >= t.options.abandon_step_after) {
                     try f.parser.flushAll(s);
@@ -174,10 +185,12 @@ pub const Tailer = struct {
                     try f.parser.flushResolved(s);
                 }
             }
+
             try t.absorb(f, items.items, f.read_off, now);
             var sealed: std.ArrayList(segment.Window) = .empty;
             try f.segmenter.tick(f.window.allocator(), now, &sealed);
             try t.sealAll(f, sealed.items, f.read_off, now);
+
             _ = t.scratch.reset(.retain_capacity);
             t.compact(f);
         }
@@ -187,15 +200,19 @@ pub const Tailer = struct {
         if (!std.mem.startsWith(u8, path, t.root)) return false;
         const base = std.fs.path.basename(path);
         if (!matches(t.harness, base)) return false;
+
         try t.pollPath(path, now);
         const f = t.files.get(path) orelse return true;
         if (f.excluded == true or !f.loaded) return true;
+
         var items: std.ArrayList(dialect.Item) = .empty;
         try f.parser.flushResolved(f.sink(t.scratch.allocator(), &items));
         try t.absorb(f, items.items, f.read_off, now);
+
         var sealed: std.ArrayList(segment.Window) = .empty;
         try f.segmenter.hook(f.window.allocator(), &sealed);
         try t.sealAll(f, sealed.items, f.read_off, now);
+
         _ = t.scratch.reset(.retain_capacity);
         t.compact(f);
         return true;
@@ -213,6 +230,7 @@ pub const Tailer = struct {
 
     fn fileFor(t: *Tailer, path: []const u8) !*TailFile {
         if (t.files.get(path)) |f| return f;
+
         const f = try t.gpa.create(TailFile);
         errdefer t.gpa.destroy(f);
         f.* = .{
@@ -222,6 +240,7 @@ pub const Tailer = struct {
             .parser = undefined,
             .segmenter = .{ .options = t.options.segment },
         };
+
         f.path = try f.keep.allocator().dupe(u8, path);
         f.parser = .init(t.harness, f.keep.allocator());
         try t.files.put(t.gpa, f.path, f);
@@ -231,10 +250,12 @@ pub const Tailer = struct {
 
     fn forget(t: *Tailer, path: []const u8) void {
         const kv = t.files.fetchRemove(path) orelse return;
+
         var i: usize = 0;
         while (i < t.recent.items.len) {
             if (t.recent.items[i].ptr == kv.value.path.ptr) _ = t.recent.swapRemove(i) else i += 1;
         }
+
         if (kv.value.excluded == true) t.stats.excluded_files -= 1;
         t.stats.files -= 1;
         t.destroyFile(kv.value);
@@ -251,6 +272,7 @@ pub const Tailer = struct {
         f.inode = try keep.dupe(u8, inode);
         const key = t.sourceKey(f);
         const stored = try t.sink.loadCursor(t.scratch.allocator(), &key);
+
         if (stored) |text| if (Cursor.decode(t.scratch.allocator(), text)) |c| {
             f.seq = c.seq;
             if (try t.cursorStillValid(file, st, inode, c)) {
@@ -261,9 +283,11 @@ pub const Tailer = struct {
                 t.stats.resets += 1;
             }
         };
+
         if (stored == null) if (t.options.since) |since| {
             if (@divTrunc(st.mtime.nanoseconds, std.time.ns_per_us) < since) f.read_off = st.size;
         };
+
         if (f.read_off > 0) try t.primeMeta(f, file);
         if (t.harness == .fx and f.parser.meta.cwd == null) try t.fxSessionMeta(f);
         f.loaded = true;
@@ -273,6 +297,7 @@ pub const Tailer = struct {
     fn cursorStillValid(t: *Tailer, file: Io.File, st: Io.File.Stat, inode: []const u8, c: Cursor) !bool {
         if (c.inode.len > 0 and !std.mem.eql(u8, c.inode, inode)) return false;
         if (st.size < c.offset) return false;
+
         if (c.head_len > 0) {
             if (st.size < c.head_len) return false;
             const prefix = try t.scratch.allocator().alloc(u8, @intCast(c.head_len));
@@ -280,6 +305,7 @@ pub const Tailer = struct {
             const fp = try cursor_mod.fingerprint(t.scratch.allocator(), prefix[0..n]);
             if (!std.mem.eql(u8, fp, c.head)) return false;
         }
+
         return true;
     }
 
@@ -300,15 +326,18 @@ pub const Tailer = struct {
         const scratch = t.scratch.allocator();
         const data = try scratch.alloc(u8, len);
         const n = try file.readPositionalAll(t.io, data, 0);
+
         var throwaway: std.heap.ArenaAllocator = .init(t.gpa);
         defer throwaway.deinit();
         var items: std.ArrayList(dialect.Item) = .empty;
         const s: dialect.Sink = .{ .arena = throwaway.allocator(), .scratch = throwaway.allocator(), .out = &items };
+
         var lines = std.mem.splitScalar(u8, data[0..n], '\n');
         while (lines.next()) |line| {
             if (lines.index == null) break;
             try f.parser.feed(s, line, 0);
         }
+
         f.parser.pending = null;
         f.parser.lines = 0;
         f.parser.malformed = 0;
@@ -321,9 +350,11 @@ pub const Tailer = struct {
         const bytes = Io.Dir.cwd().readFileAlloc(t.io, path, scratch, .limited(1 << 20)) catch return;
         const v = std.json.parseFromSliceLeaky(std.json.Value, scratch, bytes, .{}) catch return;
         if (v != .object) return;
+
         if (v.object.get("workspace_root")) |root| if (root == .string) {
             f.parser.meta.cwd = try f.keep.allocator().dupe(u8, root.string);
         };
+
         if (v.object.get("id")) |id| if (id == .string and f.parser.meta.session_id == null) {
             f.parser.meta.session_id = try f.keep.allocator().dupe(u8, id.string);
         };
@@ -334,10 +365,12 @@ pub const Tailer = struct {
             t.gpa.free(t.buf);
             t.buf = try t.gpa.alloc(u8, t.options.read_chunk);
         }
+
         while (f.read_off < size and f.excluded != true) {
             const want: usize = @intCast(@min(t.buf.len, size - f.read_off));
             const n = try file.readPositionalAll(t.io, t.buf[0..want], f.read_off);
             if (n == 0) return;
+
             const data = t.buf[0..n];
             const last_nl = std.mem.lastIndexOfScalar(u8, data, '\n') orelse {
                 if (n < t.buf.len) return;
@@ -351,18 +384,21 @@ pub const Tailer = struct {
                 f.skip_to_newline = true;
                 continue;
             };
+
             var pos: usize = 0;
             while (pos <= last_nl) {
                 const nl = std.mem.indexOfScalarPos(u8, data, pos, '\n').?;
                 const start = f.read_off + pos;
                 const line = data[pos..nl];
                 pos = nl + 1;
+
                 if (f.skip_to_newline) {
                     f.skip_to_newline = false;
                     continue;
                 }
                 try t.feedLine(f, line, start, f.read_off + pos, now);
             }
+
             f.read_off += last_nl + 1;
         }
     }
@@ -371,6 +407,7 @@ pub const Tailer = struct {
         var items: std.ArrayList(dialect.Item) = .empty;
         const before_lines = f.parser.lines;
         const before_bad = f.parser.malformed;
+
         try f.parser.feed(f.sink(t.scratch.allocator(), &items), line, start);
         t.stats.lines += f.parser.lines - before_lines;
         t.stats.malformed_lines += f.parser.malformed - before_bad;
@@ -382,12 +419,14 @@ pub const Tailer = struct {
         if (items.len == 0) return;
         if (f.excluded == null) try t.decideExclusion(f);
         if (f.excluded == true) return;
+
         var sealed: std.ArrayList(segment.Window) = .empty;
         for (items, 0..) |item, i| {
             if (t.paused or (t.options.since != null and item.turn.ts != null and item.turn.ts.? < t.options.since.?)) {
                 t.stats.dropped_turns += 1;
                 continue;
             }
+
             sealed.clearRetainingCapacity();
             try f.segmenter.push(f.window.allocator(), item, &sealed);
             const rest = if (i + 1 < items.len) items[i + 1].start else consumed;
@@ -399,6 +438,7 @@ pub const Tailer = struct {
         const keep = f.keep.allocator();
         const cwd = f.parser.meta.cwd;
         if (cwd) |dir| f.project = try project.derive(keep, t.io, dir);
+
         const excluded = try project.isExcluded(t.scratch.allocator(), t.io, t.config, .{
             .cwd = cwd,
             .project = f.project,
@@ -406,6 +446,7 @@ pub const Tailer = struct {
             .home = t.options.home,
         });
         f.excluded = excluded;
+
         if (excluded) {
             t.stats.excluded_files += 1;
             f.parser.pending = null;
@@ -415,15 +456,18 @@ pub const Tailer = struct {
 
     fn sealAll(t: *Tailer, f: *TailFile, windows: []const segment.Window, rest: u64, now: core.Micros) !void {
         if (windows.len == 0) return;
+
         const arena = f.window.allocator();
         var offset = rest;
         if (f.segmenter.firstStart()) |s| offset = @min(offset, s);
         if (f.parser.pendingStart()) |s| offset = @min(offset, s);
+
         for (windows) |w| {
             f.seq += 1;
             if (f.head_len == 0) try t.fingerprintHead(f);
             const turns = try segment.turnsOf(arena, w);
             const c: Cursor = .{ .offset = offset, .seq = f.seq, .inode = f.inode, .head = f.head, .head_len = f.head_len };
+
             try f.outbox.append(arena, .{
                 .source = t.sourceKey(f),
                 .seq_in_source = f.seq,
@@ -435,12 +479,14 @@ pub const Tailer = struct {
                 .cursor = try c.encode(arena),
             });
         }
+
         try t.drainOutbox(f);
     }
 
     fn fingerprintHead(t: *Tailer, f: *TailFile) !void {
         const file = Io.Dir.cwd().openFile(t.io, f.path, .{}) catch return;
         defer file.close(t.io);
+
         var prefix: [cursor_mod.head_len_max]u8 = undefined;
         const n = try file.readPositionalAll(t.io, &prefix, 0);
         if (n == 0) return;
@@ -451,11 +497,13 @@ pub const Tailer = struct {
     fn drainOutbox(t: *Tailer, f: *TailFile) !void {
         var sent: usize = 0;
         defer if (sent > 0) f.outbox.replaceRangeAssumeCapacity(0, sent, &.{});
+
         for (f.outbox.items) |*draft| {
             const outcome = t.sink.enqueue(draft) catch {
                 t.stats.enqueue_errors += 1;
                 return;
             };
+
             switch (outcome) {
                 .queued => t.stats.entries += 1,
                 .duplicate => t.stats.duplicates += 1,
@@ -467,12 +515,14 @@ pub const Tailer = struct {
     fn compact(t: *Tailer, f: *TailFile) void {
         _ = t;
         if (f.outbox.items.len > 0) return;
+
         if (f.segmenter.isEmpty() and f.parser.pending == null) {
             f.segmenter.clear();
             f.outbox = .empty;
             _ = f.window.reset(.retain_capacity);
             return;
         }
+
         if (f.window.queryCapacity() < f.segmenter.options.max_tokens * 64 + (4 << 20)) return;
         var fresh: std.heap.ArenaAllocator = .init(f.window.child_allocator);
         f.segmenter.rehome(fresh.allocator()) catch {
@@ -483,6 +533,7 @@ pub const Tailer = struct {
             fresh.deinit();
             return;
         };
+
         f.outbox = .empty;
         f.window.deinit();
         f.window = fresh;
@@ -523,12 +574,15 @@ pub const FakeSink = struct {
     fn enqueue(ptr: *anyopaque, draft: *const core.EntryDraft) anyerror!core.EntrySink.Outcome {
         const s: *FakeSink = @ptrCast(@alignCast(ptr));
         if (s.failing) return error.SinkUnavailable;
+
         const a = s.arena.allocator();
         const source = draft.source.?;
         try s.cursors.put(a, try a.dupe(u8, source.external_id), try a.dupe(u8, draft.cursor.?));
+
         const hash = try segment.contentHash(a, draft.body);
         const seen = try s.hashes.getOrPut(a, hash);
         if (seen.found_existing) return .duplicate;
+
         try s.entries.append(a, .{
             .body = try segment.canonicalBody(a, draft.body),
             .seq = draft.seq_in_source,
@@ -556,6 +610,7 @@ fn fixtureLines(from: usize, to: usize) []const u8 {
     var start: usize = 0;
     var line: usize = 0;
     var i: usize = 0;
+
     while (i < claude_fixture.len) : (i += 1) {
         if (line == from and (i == 0 or claude_fixture[i - 1] == '\n')) start = i;
         if (claude_fixture[i] == '\n') {
@@ -563,6 +618,7 @@ fn fixtureLines(from: usize, to: usize) []const u8 {
             if (line == to) return claude_fixture[start .. i + 1];
         }
     }
+
     return claude_fixture[start..];
 }
 
@@ -612,6 +668,7 @@ test "tails a transcript, seals on idle, and resumes from the stored cursor" {
     var t = h.tailer(&sink, .{});
     try t.scan(t0 + 30 * sec);
     try testing.expectEqual(@as(usize, 0), sink.entries.items.len);
+
     try t.tick(t0 + 3 * std.time.us_per_min);
     try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
     try testing.expectEqual(@as(usize, 3), sink.entries.items[0].turns);
@@ -666,12 +723,14 @@ test "a crash before sealing re-reads the open window and yields the same entrie
         try t.scan(t0 + 3 * std.time.us_per_min);
         try testing.expectEqual(@as(usize, 0), crashy.entries.items.len);
     }
+
     {
         var t = h.tailer(&crashy, .{});
         defer t.deinit();
         try t.scan(t0 + 3 * std.time.us_per_min);
         try t.tick(t0 + 10 * std.time.us_per_min);
     }
+
     try testing.expectEqual(straight.entries.items.len, crashy.entries.items.len);
     for (straight.entries.items, crashy.entries.items) |a, b| try testing.expectEqualStrings(a.body, b.body);
 }
@@ -682,19 +741,23 @@ test "losing every cursor makes a full re-tail a no-op" {
     try h.write(claude_fixture);
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
+
     {
         var t = h.tailer(&sink, .{});
         defer t.deinit();
         try t.scan(t0 + 3 * std.time.us_per_min);
         try t.tick(t0 + 10 * std.time.us_per_min);
     }
+
     const before = sink.entries.items.len;
     try testing.expect(before > 0);
+
     sink.cursors = .empty;
     var t = h.tailer(&sink, .{});
     defer t.deinit();
     try t.scan(t0 + 3 * std.time.us_per_min);
     try t.tick(t0 + 10 * std.time.us_per_min);
+
     try testing.expectEqual(before, sink.entries.items.len);
     try testing.expectEqual(@as(u64, before), t.stats.duplicates);
 }
@@ -704,12 +767,14 @@ test "partial lines wait for their newline" {
     defer h.deinit();
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
+
     const line = fixtureLines(1, 2);
     try h.write(line[0 .. line.len / 2]);
     var t = h.tailer(&sink, .{});
     defer t.deinit();
     try t.scan(t0);
     try testing.expectEqual(@as(u64, 0), t.stats.lines);
+
     try h.append(line[line.len / 2 ..]);
     try t.scan(t0);
     try testing.expectEqual(@as(u64, 1), t.stats.lines);
@@ -721,6 +786,7 @@ test "truncation and rotation restart the file from the top" {
     defer h.deinit();
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
+
     try h.write(claude_fixture);
     var t = h.tailer(&sink, .{});
     defer t.deinit();
@@ -750,6 +816,7 @@ test "a cursor from a replaced file is not trusted" {
     defer h.deinit();
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
+
     try h.write(claude_fixture);
     {
         var t = h.tailer(&sink, .{});
@@ -757,15 +824,18 @@ test "a cursor from a replaced file is not trusted" {
         try t.scan(t0 + 3 * std.time.us_per_min);
         try t.tick(t0 + 10 * std.time.us_per_min);
     }
+
     try h.tmp.dir.deleteFile(testing.io, "proj/session.jsonl");
     var replacement: std.ArrayList(u8) = .empty;
     defer replacement.deinit(testing.allocator);
     for (0..40) |i| try replacement.print(testing.allocator, "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"replacement line {d}\"}},\"timestamp\":\"2026-11-21T08:00:{d:0>2}.000Z\"}}\n", .{ i, i });
     try h.write(replacement.items);
+
     var t = h.tailer(&sink, .{});
     defer t.deinit();
     try t.scan(t0 + 16 * std.time.us_per_hour);
     try t.tick(t0 + 17 * std.time.us_per_hour);
+
     try testing.expectEqual(@as(u64, 1), t.stats.resets);
     try testing.expect(std.mem.indexOf(u8, sink.entries.items[sink.entries.items.len - 1].body, "replacement line 39") != null);
     try testing.expect(std.mem.indexOf(u8, sink.entries.items[sink.entries.items.len - 1].body, "replacement line 0\"") != null or
@@ -777,11 +847,13 @@ test "turns before the capture epoch and while paused are dropped" {
     defer h.deinit();
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
+
     try h.write(claude_fixture);
     var t = h.tailer(&sink, .{ .since = t0 + 30 * sec });
     defer t.deinit();
     try t.scan(t0 + 3 * std.time.us_per_min);
     try t.tick(t0 + 10 * std.time.us_per_min);
+
     try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
     try testing.expectEqual(@as(usize, 1), sink.entries.items[0].turns);
     try testing.expectEqual(@as(u64, 4), t.stats.dropped_turns);
@@ -790,6 +862,7 @@ test "turns before the capture epoch and while paused are dropped" {
     try h.append("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"private while paused\"},\"timestamp\":\"2026-11-20T17:20:00.000Z\"}\n");
     try t.scan(t0 + 21 * std.time.us_per_min);
     try t.tick(t0 + 30 * std.time.us_per_min);
+
     try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
     try testing.expectEqual(@as(u64, 5), t.stats.dropped_turns);
 }
@@ -799,14 +872,17 @@ test "a failing sink keeps sealed entries until it recovers" {
     defer h.deinit();
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
+
     try h.write(claude_fixture);
     sink.failing = true;
     var t = h.tailer(&sink, .{});
     defer t.deinit();
+
     try t.scan(t0 + 3 * std.time.us_per_min);
     try t.tick(t0 + 10 * std.time.us_per_min);
     try testing.expectEqual(@as(usize, 0), sink.entries.items.len);
     try testing.expect(t.stats.enqueue_errors > 0);
+
     sink.failing = false;
     try t.tick(t0 + 11 * std.time.us_per_min);
     try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
@@ -817,9 +893,11 @@ test "a hook flush seals a complete exchange without waiting for idle" {
     defer h.deinit();
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
+
     try h.write(fixtureLines(0, 9));
     var t = h.tailer(&sink, .{});
     defer t.deinit();
+
     try testing.expect(try t.flush(h.path, t0 + 26 * sec));
     try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
     try testing.expectEqual(@as(usize, 4), sink.entries.items[0].turns);
@@ -831,20 +909,24 @@ test "files untouched since the capture epoch are skipped until they grow" {
     defer h.deinit();
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
+
     try h.write(claude_fixture);
     {
         const file = try h.tmp.dir.openFile(testing.io, "proj/session.jsonl", .{ .mode = .read_write });
         defer file.close(testing.io);
         try file.setTimestamps(testing.io, .{ .modify_timestamp = .{ .new = .fromNanoseconds(@as(i96, t0) * std.time.ns_per_us) } });
     }
+
     const since = t0 + std.time.us_per_day;
     var t = h.tailer(&sink, .{ .since = since });
     defer t.deinit();
     try t.scan(since);
     try testing.expectEqual(@as(u64, 0), t.stats.lines);
+
     try h.append("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Resumed a day later.\"},\"timestamp\":\"2026-11-21T18:00:00.000Z\"}\n");
     try t.scan(since + std.time.us_per_hour);
     try t.tick(since + 2 * std.time.us_per_hour);
+
     try testing.expectEqual(@as(u64, 1), t.stats.lines);
     try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
     try testing.expect(std.mem.indexOf(u8, sink.entries.items[0].body, "Resumed a day later.") != null);
@@ -855,12 +937,14 @@ test "excluded projects and paths are never read into entries" {
     defer h.deinit();
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
+
     try h.write(claude_fixture);
     h.config.capture.exclude_paths = &.{"/home/dev/brackwater"};
     var t = h.tailer(&sink, .{});
     defer t.deinit();
     try t.scan(t0 + 3 * std.time.us_per_min);
     try t.tick(t0 + 10 * std.time.us_per_min);
+
     try testing.expectEqual(@as(usize, 0), sink.entries.items.len);
     try testing.expectEqual(@as(usize, 1), t.stats.excluded_files);
 
@@ -878,10 +962,12 @@ test "secrets never reach an entry from any part of a turn" {
     defer h.deinit();
     var sink: FakeSink = .init(testing.allocator);
     defer sink.deinit();
+
     const a = h.arena.allocator();
     const mooring_key = try std.mem.concat(a, u8, &.{ "mr_live_", "Q7xV2mK9pL4rT8wZ", "3nB6cD1fH5jN0sY2" });
     const model_key = try std.mem.concat(a, u8, &.{ "sk-" ++ "ant-api03-", "Zr4Tq9LmXw2Vb7Nc", "K1pS8dF3gH6jY0uE", "5aWq-RtYu_Io9Pz" });
     const token = try std.mem.concat(a, u8, &.{ "gh" ++ "p_", "a1B2c3D4e5F6g7H8", "i9J0k1L2m3N4o5P6q7R8" });
+
     const transcript = try std.fmt.allocPrint(a,
         \\{{"type":"user","cwd":"/home/dev/brackwater/widget","message":{{"role":"user","content":"Try hitting Mooring with MOORING_API_KEY={s} and verify the staging URL https://mooring.example.test/v1 responds."}},"timestamp":"2026-11-20T17:00:00.000Z"}}
         \\{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t1","name":"Bash","input":{{"command":"curl -H 'Authorization: Bearer {s}' https://mooring.example.test/v1/berths"}}}}]}},"timestamp":"2026-11-20T17:00:02.000Z"}}
@@ -889,16 +975,19 @@ test "secrets never reach an entry from any part of a turn" {
         \\{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Mooring answered 200 OK."}}]}},"timestamp":"2026-11-20T17:00:04.000Z"}}
         \\
     , .{ mooring_key, model_key, token });
+
     try h.write(transcript);
     var t = h.tailer(&sink, .{});
     defer t.deinit();
     try t.scan(t0 + std.time.us_per_min);
     try t.tick(t0 + 10 * std.time.us_per_min);
+
     try testing.expectEqual(@as(usize, 1), sink.entries.items.len);
     const body = sink.entries.items[0].body;
     for ([_][]const u8{ mooring_key, model_key, token, "Q7xV2mK9pL4rT8wZ", "K1pS8dF3gH6jY0uE", "i9J0k1L2m3N4o5P6" }) |secret| {
         try testing.expect(std.mem.indexOf(u8, body, secret) == null);
     }
+
     try testing.expect(std.mem.indexOf(u8, body, "https://mooring.example.test/v1") != null);
     try testing.expect(std.mem.indexOf(u8, body, "[REDACTED:") != null);
 }

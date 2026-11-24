@@ -33,9 +33,11 @@ pub const Options = struct {
             .daily_usd = cfg.limits.daily_usd,
             .monthly_usd = cfg.limits.monthly_usd,
         };
+
         opts.routes.set(.of(cfg.llm.route), .from(cfg.llm.rpm, cfg.llm.input_tpm));
         opts.routes.set(.embeddings, .from(cfg.embed.rpm, cfg.embed.input_tpm));
         opts.routes.set(.@"typed-decisions", .from(cfg.decision.rpm, cfg.decision.input_tpm));
+
         return opts;
     }
 };
@@ -74,6 +76,7 @@ const Bucket = struct {
             b.tokens = @min(cap, b.tokens + @as(f64, @floatFromInt(now_ms - b.last_ms)) * cap / 60_000.0);
             b.last_ms = now_ms;
         }
+
         const want = @min(need, cap);
         if (b.tokens >= want) {
             if (commit) b.tokens -= want;
@@ -122,6 +125,7 @@ pub const Limiter = struct {
         }
         if (now_ms < r.cooldown_until_ms) return .{ .wait_ms = r.cooldown_until_ms - now_ms };
         if (l.inflight >= l.opts.max_inflight) return .wait_release;
+
         const limit = l.opts.routes.get(route);
         var wait: u64 = 0;
         if (limit.rpm) |rpm| if (r.requests.take(rpm, 1, now_ms, false)) |w| {
@@ -131,6 +135,7 @@ pub const Limiter = struct {
             wait = @max(wait, w);
         };
         if (wait > 0) return .{ .wait_ms = wait };
+
         if (limit.rpm) |rpm| _ = r.requests.take(rpm, 1, now_ms, true);
         if (limit.input_tpm) |tpm| _ = r.input.take(tpm, @floatFromInt(input_tokens), now_ms, true);
         l.inflight += 1;
@@ -141,11 +146,13 @@ pub const Limiter = struct {
         l.refreshSpend(io);
         try l.mutex.lock(io);
         defer l.mutex.unlock(io);
+
         if (priority == .interactive) l.interactive_waiting += 1;
         defer if (priority == .interactive) {
             l.interactive_waiting -= 1;
             l.cond.broadcast(io);
         };
+
         while (true) {
             switch (l.tryAdmit(nowMs(io), route, priority, input_tokens)) {
                 .granted => return,
@@ -202,6 +209,7 @@ pub const Limiter = struct {
 
     pub fn addSpend(l: *Limiter, io: Io, usd: f64) void {
         if (usd <= 0) return;
+
         l.mutex.lockUncancelable(io);
         defer l.mutex.unlock(io);
         l.rollSpendPeriods(core.time.now(io));
@@ -220,6 +228,7 @@ pub const Limiter = struct {
     fn refreshSpend(l: *Limiter, io: Io) void {
         const now_ms = nowMs(io);
         const now_us = core.time.now(io);
+
         {
             l.mutex.lockUncancelable(io);
             defer l.mutex.unlock(io);
@@ -227,10 +236,12 @@ pub const Limiter = struct {
             if (l.ledger == null) return;
             if (l.spend.refreshed_ms) |at| if (now_ms -| at < l.opts.spend_refresh_ms) return;
         }
+
         const ledger = l.ledger.?;
         const periods = periodStarts(now_us);
         const day = ledger.spentSince(periods.day) catch return;
         const month = ledger.spentSince(periods.month) catch return;
+
         l.mutex.lockUncancelable(io);
         defer l.mutex.unlock(io);
         l.spend = .{
@@ -249,6 +260,7 @@ pub const Limiter = struct {
             l.spend.day_usd = 0;
             l.spend.refreshed_ms = null;
         }
+
         if (p.month != l.spend.month_start_us) {
             l.spend.month_start_us = p.month;
             l.spend.month_usd = 0;
@@ -276,6 +288,7 @@ test "in-flight cap and release" {
     try testing.expect(l.tryAdmit(0, .embeddings, .background, 0) == .granted);
     try testing.expect(l.tryAdmit(0, .@"openai-responses", .background, 0) == .granted);
     try testing.expect(l.tryAdmit(0, .embeddings, .background, 0) == .wait_release);
+
     l.release(testing.io);
     try testing.expect(l.tryAdmit(0, .embeddings, .background, 0) == .granted);
 }
@@ -284,12 +297,14 @@ test "per-route request and input-token buckets" {
     var opts: Options = .{ .max_inflight = 100 };
     opts.routes.set(.@"openai-responses", .{ .rpm = 2, .input_tpm = 1000 });
     var l = Limiter.init(opts, null);
+
     try testing.expect(l.tryAdmit(0, .@"openai-responses", .background, 400) == .granted);
     try testing.expect(l.tryAdmit(0, .@"openai-responses", .background, 400) == .granted);
     const a = l.tryAdmit(0, .@"openai-responses", .background, 100);
     try testing.expectEqual(@as(u64, 30_000), a.wait_ms);
     try testing.expect(l.tryAdmit(0, .embeddings, .background, 100) == .granted);
     try testing.expect(l.tryAdmit(30_000, .@"openai-responses", .background, 100) == .granted);
+
     var m_opts: Options = .{};
     m_opts.routes.set(.embeddings, .{ .input_tpm = 1000 });
     var m = Limiter.init(m_opts, null);
@@ -310,6 +325,7 @@ test "interactive callers go first and pass the spend cap" {
     l.interactive_waiting = 1;
     try testing.expect(l.tryAdmit(0, .embeddings, .background, 0) == .wait_release);
     try testing.expect(l.tryAdmit(0, .embeddings, .interactive, 0) == .granted);
+
     l.interactive_waiting = 0;
     l.addSpend(testing.io, 1.5);
     try testing.expectEqual(Admit{ .denied = error.SpendCapReached }, l.tryAdmit(0, .embeddings, .background, 0));
@@ -322,6 +338,7 @@ test "a halted route refuses until resumed" {
     try testing.expectEqual(Admit{ .denied = error.RouteHalted }, l.tryAdmit(0, .@"openai-responses", .interactive, 0));
     try testing.expectError(error.RouteHalted, l.acquire(testing.io, .@"openai-responses", .background, 0));
     try testing.expectEqual(@as(?HaltReason, .auth), l.haltedReason(testing.io, .@"openai-responses"));
+
     l.resumeRoute(testing.io, null);
     try l.acquire(testing.io, .@"openai-responses", .background, 0);
     l.release(testing.io);
@@ -335,7 +352,9 @@ const FakeLedger = struct {
     fn ledger(f: *FakeLedger) core.LlmLedger {
         return .{ .ptr = f, .vtable = &.{ .record = record, .spentSince = spentSince } };
     }
+
     fn record(_: *anyopaque, _: *const core.LlmCall) anyerror!void {}
+
     fn spentSince(ptr: *anyopaque, since: core.Micros) anyerror!f64 {
         const f: *FakeLedger = @ptrCast(@alignCast(ptr));
         f.reads += 1;
@@ -347,8 +366,10 @@ const FakeLedger = struct {
 test "the monthly cap from the ledger pauses background work" {
     var fake: FakeLedger = .{ .day = 3.0, .month = 1500.0 };
     var l = Limiter.init(.{}, fake.ledger());
+
     try testing.expectError(error.SpendCapReached, l.acquire(testing.io, .@"openai-responses", .background, 0));
     try testing.expectEqual(@as(f64, 3.0), l.spent(testing.io).day_usd);
+
     try l.acquire(testing.io, .@"openai-responses", .interactive, 0);
     l.release(testing.io);
     try testing.expectEqual(@as(u32, 2), fake.reads);
@@ -358,6 +379,7 @@ test "UTC period starts" {
     const daysFromCivil = core.time.daysFromCivil;
     const t = (daysFromCivil(2026, 11, 23) * 86_400 + 3_600) * std.time.us_per_s;
     const p = periodStarts(t);
+
     try testing.expectEqual(daysFromCivil(2026, 11, 23) * 86_400 * std.time.us_per_s, p.day);
     try testing.expectEqual(daysFromCivil(2026, 11, 1) * 86_400 * std.time.us_per_s, p.month);
 }
@@ -369,6 +391,7 @@ test "route limits come from each endpoint's config section" {
     cfg.llm.input_tpm = 90_000;
     cfg.embed.rpm = 3000;
     cfg.decision.input_tpm = 5000;
+
     const o = Options.fromConfig(&cfg);
     try testing.expectEqual(RouteLimit{ .rpm = 60, .input_tpm = 90_000 }, o.routes.get(.@"anthropic-messages"));
     try testing.expectEqual(RouteLimit{}, o.routes.get(.@"openai-responses"));

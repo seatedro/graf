@@ -71,6 +71,7 @@ const Drive = enum { finished, unavailable, timed_out };
 
 fn drive(io: std.Io, s: *store.Store, pipeline: *ingest.Pipeline, graph_id: core.Id, id: core.Id, opts: RunOptions, notes: *Notes, eval_id: []const u8) !Drive {
     const deadline = nowMs(io) + opts.entry_timeout_ms;
+
     while (true) {
         const status = (try pgload.entryStatus(s.pool, id)) orelse return error.EntryMissing;
         if (isTerminal(status)) return .finished;
@@ -78,6 +79,7 @@ fn drive(io: std.Io, s: *store.Store, pipeline: *ingest.Pipeline, graph_id: core
             try notes.add("ingest: {s} still {s} after {d} ms", .{ eval_id, @tagName(status), opts.entry_timeout_ms });
             return .timed_out;
         }
+
         var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer scratch.deinit();
         const claimed = s.claim(scratch.allocator(), graph_id, opts.worker) catch |err| {
@@ -88,6 +90,7 @@ fn drive(io: std.Io, s: *store.Store, pipeline: *ingest.Pipeline, graph_id: core
             sleepMs(io, opts.poll_ms);
             continue;
         };
+
         _ = pipeline.process(scratch.allocator(), lease) catch |err| {
             if (err == error.NotImplemented or err == error.ModelNotConfigured) return .unavailable;
             try notes.add("ingest: an attempt during {s} failed: {s}", .{ eval_id, @errorName(err) });
@@ -121,6 +124,7 @@ pub fn run(arena: Allocator, io: std.Io, config: *const core.Config, opts: RunOp
     var links: std.ArrayList(pgload.EntryLink) = .empty;
     var ingesting = true;
     var enqueued = true;
+
     for (suite.entries) |ep| {
         const draft = try toDraft(ep);
         const outcome = s.enqueue(graph_id, &draft) catch |err| {
@@ -129,6 +133,7 @@ pub fn run(arena: Allocator, io: std.Io, config: *const core.Config, opts: RunOp
             enqueued = false;
             break;
         };
+
         const id = switch (outcome) {
             .queued => |id| id,
             .duplicate => {
@@ -136,8 +141,10 @@ pub fn run(arena: Allocator, io: std.Io, config: *const core.Config, opts: RunOp
                 continue;
             },
         };
+
         try links.append(arena, .{ .eval_id = ep.id, .id = id });
         if (!ingesting) continue;
+
         switch (try drive(io, &s, &pipeline, graph_id, id, opts, &notes, ep.id)) {
             .finished, .timed_out => {},
             .unavailable => {
@@ -188,6 +195,7 @@ fn judgeResiduals(
 ) !?[]const score.Judgment {
     const residuals = try score.residualFacts(arena, suite, state);
     if (residuals.len == 0) return &.{};
+
     const setup = opts.judge orelse {
         try notes.add("judge: no judge is configured; residual faithfulness is unmeasured", .{});
         return null;
@@ -207,11 +215,14 @@ fn judgeResiduals(
     var judgments: std.ArrayList(score.Judgment) = .empty;
     const done = try arena.alloc(bool, residuals.len);
     @memset(done, false);
+
     for (residuals, 0..) |first, i| {
         if (done[i]) continue;
         const entry = first.entry orelse continue;
+
         var members: std.ArrayList(usize) = .empty;
         var facts: std.ArrayList(judge.Fact) = .empty;
+
         for (residuals[i..], i..) |r, j| {
             const other = r.entry orelse continue;
             if (done[j] or !std.mem.eql(u8, other, entry)) continue;
@@ -219,20 +230,24 @@ fn judgeResiduals(
             try members.append(arena, j);
             try facts.append(arena, .{ .text = r.text, .subject = r.subject, .relation = r.relation, .qualifier = r.qualifier, .object = r.object });
         }
+
         const view = views.get(entry) orelse {
             try notes.add("judge: entry {s} was not found; its residual facts are unjudged", .{entry});
             continue;
         };
+
         const verdicts = judge.judgeEntry(&client, arena, view, facts.items) catch |err| {
             try notes.add("judge: judging {s} failed: {s}; residual faithfulness is unmeasured", .{ entry, @errorName(err) });
             state.judge_calls = try pgload.loadCalls(arena, s.pool, judge_graph_id, links);
             return null;
         };
+
         for (members.items, verdicts) |j, v| {
             const verdict = v orelse continue;
             try judgments.append(arena, .{ .fact = residuals[j].fact, .supported = verdict.supported, .durable = verdict.durable, .reason = verdict.reason });
         }
     }
+
     state.judge_calls = try pgload.loadCalls(arena, s.pool, judge_graph_id, links);
     return judgments.items;
 }
@@ -246,6 +261,7 @@ fn runQueries(arena: Allocator, engine: *retrieve.Engine, suite: *const fixtures
             .as_of = if (q.as_of) |v| try core.time.parseRfc3339(v) else null,
             .max_tokens = 1500,
         };
+
         const found = engine.search(arena, params) catch |err| {
             if (err == error.NotImplemented) {
                 try notes.add("retrieval: search is not implemented yet", .{});
@@ -255,13 +271,16 @@ fn runQueries(arena: Allocator, engine: *retrieve.Engine, suite: *const fixtures
             try results.append(arena, .{ .query = q.id });
             continue;
         };
+
         const hits = try arena.alloc(score.Hit, found.hits.len);
         for (found.hits, hits) |h, *out| {
             var buf: [36]u8 = undefined;
             out.* = .{ .fact = try arena.dupe(u8, h.fact.id.toString(&buf)), .text = h.fact.text };
         }
+
         try results.append(arena, .{ .query = q.id, .hits = hits });
     }
+
     return results.items;
 }
 
@@ -298,6 +317,7 @@ fn crashResume(arena: Allocator, io: std.Io, s: *store.Store, config: *const cor
         try notes.add("crash-resume: unknown entry {s}", .{opts.crash_entry});
         return null;
     };
+
     const ep = suite.entries[index];
     const graph = try std.fmt.allocPrint(arena, "{s}-crash", .{base_graph});
     const graph_id = s.ensureGraph(graph) catch |err| {
@@ -305,12 +325,14 @@ fn crashResume(arena: Allocator, io: std.Io, s: *store.Store, config: *const cor
         try notes.add("crash-resume: creating graphs is not implemented yet; unmeasured", .{});
         return null;
     };
+
     const draft = try toDraft(ep);
     const outcome = s.enqueue(graph_id, &draft) catch |err| {
         if (err != error.NotImplemented) return err;
         try notes.add("crash-resume: enqueue is not implemented yet; unmeasured", .{});
         return null;
     };
+
     const id = switch (outcome) {
         .queued => |id| id,
         .duplicate => {
@@ -322,6 +344,7 @@ fn crashResume(arena: Allocator, io: std.Io, s: *store.Store, config: *const cor
     var env = try serveEnv(arena, config, opts, graph);
     var first = try spawnServe(io, bin, &env);
     const deadline = nowMs(io) + opts.entry_timeout_ms;
+
     while (true) {
         const status = (try pgload.entryStatus(s.pool, id)) orelse return error.EntryMissing;
         if (status == .extracted) break;
@@ -332,6 +355,7 @@ fn crashResume(arena: Allocator, io: std.Io, s: *store.Store, config: *const cor
         }
         sleepMs(io, 10);
     }
+
     const before = try pgload.countCalls(s.pool, id, .extract);
     stop(io, &first, true);
 
@@ -339,11 +363,13 @@ fn crashResume(arena: Allocator, io: std.Io, s: *store.Store, config: *const cor
     defer stop(io, &second, false);
     const restart_deadline = nowMs(io) + 2 * @as(i64, opts.entry_timeout_ms);
     var final: core.types.EntryStatus = .extracted;
+
     while (nowMs(io) <= restart_deadline) {
         final = (try pgload.entryStatus(s.pool, id)) orelse return error.EntryMissing;
         if (isTerminal(final)) break;
         sleepMs(io, opts.poll_ms);
     }
+
     const after = try pgload.countCalls(s.pool, id, .extract);
     const passed = (final == .committed or final == .skipped) and after == before;
     if (!passed) try notes.add("crash-resume: {s} ended {s} with {d} extraction calls after restart", .{ ep.id, @tagName(final), after - before });
@@ -353,8 +379,10 @@ fn crashResume(arena: Allocator, io: std.Io, s: *store.Store, config: *const cor
 test "entries convert to drafts with their source key and reference time" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
+
     const suite = try fixtures.loadShippedSuite(arena_state.allocator(), std.testing.io);
     const draft = try toDraft(suite.entries[1]);
+
     try std.testing.expectEqual(core.Harness.capy, draft.source.?.harness);
     try std.testing.expectEqualStrings("capy-thread-0012", draft.source.?.external_id);
     try std.testing.expectEqualStrings("github.com/tidewright/brinelog", draft.project.?);
@@ -365,13 +393,17 @@ test "entries convert to drafts with their source key and reference time" {
 
 test "a run against unbuilt pipeline pieces reports unmeasured gates instead of failing" {
     const url = store.testing.databaseUrl() orelse return error.SkipZigTest;
+
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const config: core.Config = .{ .database = .{ .url = url } };
     var name_buf: [36]u8 = undefined;
     const graph = try std.fmt.allocPrint(arena, "eval-run-{s}", .{core.Id.v7(std.testing.io).toString(&name_buf)});
+
     const report = try run(arena, std.testing.io, &config, .{ .graph = graph, .suite_dir = try fixtures.shippedSuiteDir(arena, std.testing.io), .entry_timeout_ms = 2_000 });
+
     try std.testing.expect(!report.metrics.passes());
     try std.testing.expect(report.metrics.crash_resume_pass_rate == null);
     try std.testing.expectEqual(@as(?u32, 0), report.metrics.secret_leaks);

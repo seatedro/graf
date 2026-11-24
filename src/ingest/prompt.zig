@@ -76,10 +76,12 @@ fn writeExtractionSystem(w: *Writer, learned: []const resolve.RelationRow) Write
         if (i > 0) try w.writeAll(", ");
         try w.writeAll(n);
     }
+
     try w.writeAll("\n\nRelations (name, cardinality: meaning):\n");
     for (core.ontology.core_relations) |p| {
         try w.print("- {s} ({t}): {s}\n", .{ p.name, p.cardinality, p.description });
     }
+
     var sorted_buf: [256]resolve.RelationRow = undefined;
     var n: usize = 0;
     for (learned) |p| {
@@ -87,9 +89,11 @@ fn writeExtractionSystem(w: *Writer, learned: []const resolve.RelationRow) Write
         sorted_buf[n] = p;
         n += 1;
     }
+
     const sorted = sorted_buf[0..n];
     std.mem.sort(resolve.RelationRow, sorted, {}, byName);
     for (sorted) |p| try w.print("- {s} ({t}): {s}\n", .{ p.name, p.cardinality, p.description });
+
     try w.writeAll("\n");
     try w.writeAll(examples);
 }
@@ -118,6 +122,7 @@ fn writeExtractionUser(w: *Writer, entry: EntryView, context: []const PriorEntry
     var buf: [20]u8 = undefined;
     try w.print("Reference time: {s} ({s}, UTC)\n", .{ time.format(entry.reference_time, &buf), time.weekday(entry.reference_time) });
     try w.print("Project: {s}\nKind: {t}\nAuthor: {t}\n", .{ entry.project orelse "none", entry.kind, entry.author });
+
     if (context.len > 0) {
         try w.writeAll("\nRecent context from this source, oldest first:\n");
         for (context) |c| {
@@ -130,6 +135,7 @@ fn writeExtractionUser(w: *Writer, entry: EntryView, context: []const PriorEntry
             for (c.facts) |f| try w.print("  - {s}\n", .{f});
         }
     }
+
     try w.writeAll("\nEntry:\n");
     if (entry.body.text) |t| try w.print("{s}\n", .{t});
     for (entry.body.turns) |turn| {
@@ -170,12 +176,14 @@ fn writeRange(w: *Writer, lower: ?core.Micros, upper: ?core.Micros) Writer.Error
 fn writeResolutionUser(w: *Writer, p: resolve.Plan, checked: extract.Checked, prefetch: resolve.Prefetch, reference_time: core.Micros) Writer.Error!void {
     var buf: [20]u8 = undefined;
     try w.print("Reference time: {s}\n", .{time.format(reference_time, &buf)});
+
     if (p.entity_labels.len > 0) {
         try w.writeAll("\nExisting entities:\n");
         for (p.entity_labels, 0..) |id, i| {
             const c = resolve.findEntity(prefetch, id) orelse continue;
             try w.print("E{d}: {s} ({t})\n", .{ i + 1, c.name, c.type });
         }
+
         try w.writeAll("\nNew entities with candidates:\n");
         for (p.entities, checked.result.entities) |entry, e| {
             if (entry.decision != .ask) continue;
@@ -184,6 +192,7 @@ fn writeResolutionUser(w: *Writer, p: resolve.Plan, checked: extract.Checked, pr
             try w.writeAll("\n");
         }
     }
+
     if (p.fact_labels.len > 0) {
         try w.writeAll("\nExisting facts:\n");
         for (p.fact_labels, 0..) |id, i| {
@@ -194,6 +203,7 @@ fn writeResolutionUser(w: *Writer, p: resolve.Plan, checked: extract.Checked, pr
             try writeRange(w, c.valid_lower, c.valid_upper);
             try w.writeAll("]\n");
         }
+
         try w.writeAll("\nNew facts with candidates:\n");
         for (p.facts, checked.result.facts, checked.meta, 0..) |fp, f, m, j| {
             if (fp.candidates.len == 0) continue;
@@ -220,6 +230,7 @@ test "the extraction prefix is byte-stable and lists learned relations in name o
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const a = try extractionSystem(arena, &.{
         .{ .name = "zeta_rel", .status = .learned, .description = "z" },
         .{ .name = "alpha_rel", .status = .learned, .description = "a" },
@@ -229,6 +240,7 @@ test "the extraction prefix is byte-stable and lists learned relations in name o
         .{ .name = "alpha_rel", .status = .learned, .description = "a" },
         .{ .name = "zeta_rel", .status = .learned, .description = "z" },
     });
+
     try testing.expectEqualStrings(a, b);
     try testing.expect(std.mem.indexOf(u8, a, "- has_setting (one_per_subject_qualifier)") != null);
     try testing.expect(std.mem.indexOf(u8, a, "draft_rel") == null);
@@ -239,6 +251,7 @@ test "the extraction message carries reference time, context and turns" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
     const msg = try extractionUser(arena, .{
         .reference_time = try core.time.parseRfc3339("2026-11-20T18:00:00Z"),
         .project = "lantern",
@@ -249,6 +262,7 @@ test "the extraction message carries reference time, context and turns" {
             .{ .role = .assistant, .text = "done", .tool_calls = &.{.{ .name = "bash", .args_preview = "make migrate", .result_preview = "ok" }} },
         } },
     }, &.{.{ .reference_time = try core.time.parseRfc3339("2026-11-19T10:00:00Z"), .facts = &.{"Lantern uses SQLite."} }});
+
     try testing.expect(std.mem.startsWith(u8, msg, "Reference time: 2026-11-20T18:00:00Z (Friday, UTC)\n"));
     try testing.expect(std.mem.indexOf(u8, msg, "  - Lantern uses SQLite.\n") != null);
     try testing.expect(std.mem.indexOf(u8, msg, "[user] switch it to Postgres\n") != null);

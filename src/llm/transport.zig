@@ -99,6 +99,7 @@ pub const Http = struct {
         var future = io.concurrent(exchange, .{ h, io, arena, req, &progress }) catch {
             return finish(h, io, exchange(h, io, arena, req, &progress), &progress, false, false);
         };
+
         var timed_out = false;
         var cancelled = false;
         while (progress.phase.load(.acquire) != .done) {
@@ -116,6 +117,7 @@ pub const Http = struct {
                 break;
             };
         }
+
         const outcome = if (timed_out or cancelled) future.cancel(io) else future.await(io);
         return finish(h, io, outcome, &progress, timed_out, cancelled);
     }
@@ -132,6 +134,7 @@ pub const Http = struct {
             },
             .done => return false,
         }
+
         return d.expired(now) != null;
     }
 
@@ -154,6 +157,7 @@ pub const Http = struct {
     fn dropIdleConnections(h: *Http, io: Io) void {
         const last = h.last_done_ms.load(.acquire);
         if (last == 0 or limiter.nowMs(io) -| last < idle_ttl_ms) return;
+
         h.client.connection_pool.resize(io, 0) catch return;
         h.client.connection_pool.resize(io, pool_size) catch return;
     }
@@ -191,6 +195,7 @@ pub const Http = struct {
                 .value = try arena.dupe(u8, hdr.value),
             });
         };
+
         const status: u16 = @backingInt(response.head.status);
 
         const decompress_buffer: []u8 = switch (response.head.content_encoding) {
@@ -203,6 +208,7 @@ pub const Http = struct {
         var decompress: std.http.Decompress = undefined;
         const reader = response.readerDecompressing(&transfer, &decompress, decompress_buffer);
         var out: Io.Writer.Allocating = .init(arena);
+
         while (true) {
             _ = reader.stream(&out.writer, .limited(64 * 1024)) catch |err| switch (err) {
                 error.EndOfStream => break,
@@ -212,6 +218,7 @@ pub const Http = struct {
             p.last_bytes_ms.store(limiter.nowMs(io), .release);
             if (out.written().len > max_body_bytes) return error.ResponseTooLarge;
         }
+
         return .{ .status = status, .headers = captured.items, .body = out.written() };
     }
 };
@@ -243,6 +250,7 @@ pub const Replay = struct {
             }
             r.gpa.free(s.headers);
         }
+
         r.sent.deinit(r.gpa);
     }
 
@@ -260,9 +268,11 @@ pub const Replay = struct {
         const headers = try r.gpa.alloc(std.http.Header, req.headers.len);
         for (req.headers, headers) |src, *dst| dst.* = .{ .name = try r.gpa.dupe(u8, src.name), .value = try r.gpa.dupe(u8, src.value) };
         try r.sent.append(r.gpa, .{ .url = try r.gpa.dupe(u8, req.url), .body = try r.gpa.dupe(u8, req.body), .headers = headers });
+
         if (r.next >= r.steps.len) return .{ .failure = .{ .err = error.ReplayExhausted, .sent = false } };
         const step = r.steps[r.next];
         r.next += 1;
+
         return switch (step) {
             .failure => |f| .{ .failure = f },
             .capture => |text| .{ .response = parseCapture(arena, text, req.capture) catch |err| switch (err) {
@@ -279,11 +289,13 @@ pub fn parseCapture(arena: std.mem.Allocator, text: []const u8, capture: []const
         const j = std.mem.find(u8, text, "\n\n") orelse return error.BadCapture;
         break :blk .{ j, j + 2 };
     };
+
     var lines = std.mem.tokenizeAny(u8, text[0..head_end], "\r\n");
     const status_line = lines.next() orelse return error.BadCapture;
     var parts = std.mem.tokenizeScalar(u8, status_line, ' ');
     _ = parts.next() orelse return error.BadCapture;
     const status = std.fmt.parseInt(u16, parts.next() orelse return error.BadCapture, 10) catch return error.BadCapture;
+
     var headers: std.ArrayList(std.http.Header) = .empty;
     while (lines.next()) |line| {
         const colon = std.mem.findScalar(u8, line, ':') orelse return error.BadCapture;
@@ -292,6 +304,7 @@ pub fn parseCapture(arena: std.mem.Allocator, text: []const u8, capture: []const
             try headers.append(arena, .{ .name = name, .value = std.mem.trim(u8, line[colon + 1 ..], " ") });
         };
     }
+
     return .{ .status = status, .headers = headers.items, .body = text[body_start..] };
 }
 
@@ -299,6 +312,7 @@ test "capture parsing keeps requested headers" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const r = try parseCapture(arena_state.allocator(), "HTTP/1.1 429 Too Many Requests\nRetry-After: 2\nx-other: y\n\n{\"error\":{}}\n", &.{"retry-after"});
+
     try std.testing.expectEqual(@as(u16, 429), r.status);
     try std.testing.expectEqualStrings("2", r.header("retry-after").?);
     try std.testing.expect(r.header("x-other") == null);

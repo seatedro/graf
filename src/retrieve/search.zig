@@ -111,15 +111,18 @@ pub fn run(e: *mod.Engine, arena: std.mem.Allocator, params: mod.SearchParams, o
     {
         const conn = try e.store.pool.acquire();
         defer conn.release();
+
         conn.begin() catch |err| {
             db.logError(conn, err, "search");
             return err;
         };
         errdefer conn.rollback() catch {};
+
         _ = conn.exec("SET LOCAL hnsw.iterative_scan = relaxed_order", .{}) catch |err| {
             db.logError(conn, err, "search");
             return err;
         };
+
         var result = conn.queryOpts(sql, .{
             &e.graph_id.bytes,
             params.query,
@@ -135,6 +138,7 @@ pub fn run(e: *mod.Engine, arena: std.mem.Allocator, params: mod.SearchParams, o
             return err;
         };
         defer result.deinit();
+
         var seen: std.AutoHashMapUnmanaged(core.Id, void) = .empty;
         while (try result.next()) |row| {
             const hit = try db.readHit(arena, row);
@@ -144,6 +148,7 @@ pub fn run(e: *mod.Engine, arena: std.mem.Allocator, params: mod.SearchParams, o
                 .emb = try db.floats(arena, row, c),
                 .ranks = .{ .vec = rankOf(try row.get(?i64, c + 1)), .lex = rankOf(try row.get(?i64, c + 2)), .graph = rankOf(try row.get(?i64, c + 3)) },
             });
+
             as_of_us = @intFromFloat(try row.get(f64, c + 6) * std.time.us_per_s);
             const gop = try seen.getOrPut(arena, hit.fact.subject_id);
             if (!gop.found_existing) try entities.append(arena, .{
@@ -156,8 +161,10 @@ pub fn run(e: *mod.Engine, arena: std.mem.Allocator, params: mod.SearchParams, o
                 .summary = try db.text(arena, row, c + 5),
             });
         }
+
         try conn.commit();
     }
+
     if (rows.items.len == 0) as_of_us = params.as_of orelse core.time.now(e.io);
 
     const cands = try arena.alloc(rank.Candidate, rows.items.len);
@@ -174,11 +181,13 @@ pub fn run(e: *mod.Engine, arena: std.mem.Allocator, params: mod.SearchParams, o
     const reranked = opts.rerank and try rerank(e, arena, params.query, rows.items, cands);
     rank.score(cands, reranked);
     const order = try rank.mmr(arena, cands);
+
     const hits = try arena.alloc(mod.Hit, order.len);
     for (order, hits) |i, *h| {
         h.* = rows.items[i].hit;
         h.score = cands[i].score;
     }
+
     return .{ .hits = hits, .entities = entities.items, .reranked = reranked, .as_of = as_of_us };
 }
 
@@ -207,6 +216,7 @@ fn rerank(e: *mod.Engine, arena: std.mem.Allocator, query: []const u8, rows: []c
         db.log.warn("reranker returned {d} scores for {d} candidates; using fallback order", .{ probs.len, n });
         return false;
     }
+
     for (top[0..n], probs) |i, p| cands[i].relevance = std.math.clamp(p, 0, 1);
     return true;
 }
@@ -222,6 +232,7 @@ fn scoreWithin(io: std.Io, reranker: mod.Reranker, arena: std.mem.Allocator, que
     defer select.cancelDiscard();
     select.concurrent(.scored, mod.Reranker.score, .{ reranker, arena, query, texts }) catch return null;
     select.concurrent(.timeout, std.Io.sleep, .{ io, .fromMilliseconds(timeout_ms), .awake }) catch return null;
+
     switch (try select.await()) {
         .scored => |res| return res catch |err| {
             if (err != error.DecisionDisabled) db.log.warn("rerank failed, using fallback order: {s}", .{@errorName(err)});
