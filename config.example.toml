@@ -1,0 +1,49 @@
+# graf configuration. Copy to ~/.config/graf/config.toml (or point GRAF_CONFIG at it).
+# Every key is optional. Environment variables override this file:
+#   GRAF_GRAPH, GRAF_DATABASE_URL,
+#   GRAF_LLM_BASE_URL, GRAF_LLM_API_KEY, GRAF_LLM_MODEL,
+#   GRAF_EMBED_BASE_URL, GRAF_EMBED_API_KEY, GRAF_EMBED_MODEL,
+#   GRAF_DECISION_BASE_URL, GRAF_DECISION_API_KEY
+
+graph = "default"
+
+[database]
+# Empty: graf manages a private local Postgres cluster.
+url = ""
+
+[llm]
+# Any OpenAI- or Anthropic-compatible endpoint, including a self-hosted proxy.
+base_url = "https://api.openai.com/v1"
+api_key = ""
+# openai-responses | anthropic-messages | openai-chat
+route = "openai-responses"
+model = "gpt-6.2-sol"
+# Response header with the exact USD cost of each call, if your endpoint sends one.
+cost_header = ""
+
+[embed]
+# base_url, api_key and cost_header default to the [llm] values.
+model = "text-embedding-3-large"
+dimensions = 512
+
+[decision]
+# Optional typed decision-model backend for resolution and reranking.
+base_url = ""
+api_key = ""
+path = ""
+
+[limits]
+daily_usd = 100.0
+monthly_usd = 1500.0
+max_inflight = 8
+
+[ingest]
+workers = 4
+
+[serve]
+listen = "127.0.0.1:7420"
+token = ""
+
+[capture]
+exclude_projects = []
+exclude_paths = []
