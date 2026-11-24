@@ -1,0 +1,5 @@
+HTTP/1.1 200 OK
+content-type: application/json
+x-example-cost-usd: 0.00001705
+
+{"model":"decider-2.1","answers":{"q0":{"type":"noul","noul":0.87},"q1":{"type":"choice","choice":"E1","confidence":0.88,"probabilities":{"E1":0.92,"E2":0.01,"none":0.07}}},"usage":{"input_tokens":406,"output_tokens":59}}

@@ -25,6 +25,13 @@ pub const RouteKey = limiter.RouteKey;
 pub const Transport = transport.Transport;
 pub const Question = decision.Question;
 pub const Answer = decision.Answer;
+
+pub const DecisionRequest = struct {
+    purpose: core.types.LlmPurpose,
+    entry_id: ?core.Id = null,
+    state: []const decision.Field = &.{},
+    questions: []const Question,
+};
 pub const jsonSchema = schema_gen.jsonSchema;
 
 pub const Failure = struct {
@@ -175,36 +182,38 @@ pub const Client = struct {
         return ctx.out;
     }
 
-    pub fn decide(c: *Client, arena: std.mem.Allocator, purpose: core.types.LlmPurpose, questions: []const Question) Error![]const Answer {
+    pub fn decide(c: *Client, arena: std.mem.Allocator, req: DecisionRequest) Error![]const Answer {
         if (!c.config.decisionEnabled()) return error.DecisionDisabled;
         const cfg = c.config.decision;
-        if (questions.len == 0) return &.{};
+        if (req.questions.len == 0) return &.{};
+        const payload: decision.Request = .{ .state = req.state, .questions = req.questions };
         var body: Io.Writer.Allocating = .init(arena);
-        decision.writeRequest(cfg.model, questions, &body.writer) catch return error.OutOfMemory;
-        var tokens: usize = 0;
-        for (questions) |q| tokens += q.promptLen() / 4 + 1;
+        decision.writeRequest(arena, cfg.wire, cfg.model, payload, &body.writer) catch return error.OutOfMemory;
+        const tokens = payload.promptLen(cfg.wire) / 4 + req.questions.len;
 
         const Ctx = struct {
             arena: std.mem.Allocator,
+            wire: decision.Wire,
             questions: []const Question,
             answers: []const Answer = &.{},
 
             fn decode(ctx: *@This(), res: transport.Response) Decoded {
-                const d = decision.decodeResponse(ctx.arena, res.body, ctx.questions) catch |err| return .{ .invalid = @errorName(err) };
+                const d = decision.decodeResponse(ctx.arena, ctx.wire, res.body, ctx.questions) catch |err| return .{ .invalid = @errorName(err) };
                 ctx.answers = d.answers;
-                return .{ .ok = .{ .usage = d.usage, .body_cost = d.body_cost, .body_cost_status = d.body_cost_status, .model = null } };
+                return .{ .ok = .{ .usage = d.usage, .body_cost = d.body_cost, .body_cost_status = d.body_cost_status, .model = d.model } };
             }
         };
-        var ctx: Ctx = .{ .arena = arena, .questions = questions };
-        const interactive = purpose == .rerank;
+        var ctx: Ctx = .{ .arena = arena, .wire = cfg.wire, .questions = req.questions };
+        const interactive = req.purpose == .rerank;
         var call: Call = .{
             .key = .@"typed-decisions",
             .route_name = "typed-decisions",
             .model = cfg.model,
             .url = try joinUrl(arena, cfg.base_url, cfg.path),
             .headers = try bearer(arena, cfg.api_key),
-            .cost_header = c.config.llm.cost_header,
-            .purpose = purpose,
+            .cost_header = cfg.cost_header,
+            .purpose = req.purpose,
+            .entry_id = req.entry_id,
             .priority = if (interactive) .interactive else .background,
             .input_tokens = std.math.cast(u32, tokens) orelse std.math.maxInt(u32),
             .bounds = c.bounds(),
@@ -621,5 +630,5 @@ test "decide reports a disabled backend so callers can fall back" {
     const cfg: core.Config = .{};
     var client = Client.init(std.testing.allocator, std.testing.io, &cfg, null);
     defer client.deinit();
-    try std.testing.expectError(error.DecisionDisabled, client.decide(std.testing.allocator, .rerank, &.{}));
+    try std.testing.expectError(error.DecisionDisabled, client.decide(std.testing.allocator, .{ .purpose = .rerank, .questions = &.{} }));
 }
