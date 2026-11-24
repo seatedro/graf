@@ -24,16 +24,28 @@ pub const Options = struct {
     max_inflight: u32 = 8,
     daily_usd: f64 = 100.0,
     monthly_usd: f64 = 1500.0,
-    rpm: ?u32 = null,
-    input_tpm: ?u32 = null,
+    routes: std.EnumArray(RouteKey, RouteLimit) = .initFill(.{}),
     spend_refresh_ms: u64 = 30_000,
 
     pub fn fromConfig(cfg: *const core.Config) Options {
-        return .{
+        var opts: Options = .{
             .max_inflight = @max(cfg.limits.max_inflight, 1),
             .daily_usd = cfg.limits.daily_usd,
             .monthly_usd = cfg.limits.monthly_usd,
         };
+        opts.routes.set(.of(cfg.llm.route), .from(cfg.llm.rpm, cfg.llm.input_tpm));
+        opts.routes.set(.embeddings, .from(cfg.embed.rpm, cfg.embed.input_tpm));
+        opts.routes.set(.@"typed-decisions", .from(cfg.decision.rpm, cfg.decision.input_tpm));
+        return opts;
+    }
+};
+
+pub const RouteLimit = struct {
+    rpm: ?u32 = null,
+    input_tpm: ?u32 = null,
+
+    fn from(rpm: u32, input_tpm: u32) RouteLimit {
+        return .{ .rpm = if (rpm == 0) null else rpm, .input_tpm = if (input_tpm == 0) null else input_tpm };
     }
 };
 
@@ -110,16 +122,17 @@ pub const Limiter = struct {
         }
         if (now_ms < r.cooldown_until_ms) return .{ .wait_ms = r.cooldown_until_ms - now_ms };
         if (l.inflight >= l.opts.max_inflight) return .wait_release;
+        const limit = l.opts.routes.get(route);
         var wait: u64 = 0;
-        if (l.opts.rpm) |rpm| if (r.requests.take(rpm, 1, now_ms, false)) |w| {
+        if (limit.rpm) |rpm| if (r.requests.take(rpm, 1, now_ms, false)) |w| {
             wait = @max(wait, w);
         };
-        if (l.opts.input_tpm) |tpm| if (r.input.take(tpm, @floatFromInt(input_tokens), now_ms, false)) |w| {
+        if (limit.input_tpm) |tpm| if (r.input.take(tpm, @floatFromInt(input_tokens), now_ms, false)) |w| {
             wait = @max(wait, w);
         };
         if (wait > 0) return .{ .wait_ms = wait };
-        if (l.opts.rpm) |rpm| _ = r.requests.take(rpm, 1, now_ms, true);
-        if (l.opts.input_tpm) |tpm| _ = r.input.take(tpm, @floatFromInt(input_tokens), now_ms, true);
+        if (limit.rpm) |rpm| _ = r.requests.take(rpm, 1, now_ms, true);
+        if (limit.input_tpm) |tpm| _ = r.input.take(tpm, @floatFromInt(input_tokens), now_ms, true);
         l.inflight += 1;
         return .granted;
     }
@@ -277,14 +290,18 @@ test "in-flight cap and release" {
 }
 
 test "per-route request and input-token buckets" {
-    var l = Limiter.init(.{ .max_inflight = 100, .rpm = 2, .input_tpm = 1000 }, null);
+    var opts: Options = .{ .max_inflight = 100 };
+    opts.routes.set(.@"openai-responses", .{ .rpm = 2, .input_tpm = 1000 });
+    var l = Limiter.init(opts, null);
     try testing.expect(l.tryAdmit(0, .@"openai-responses", .background, 400) == .granted);
     try testing.expect(l.tryAdmit(0, .@"openai-responses", .background, 400) == .granted);
     const a = l.tryAdmit(0, .@"openai-responses", .background, 100);
     try testing.expectEqual(@as(u64, 30_000), a.wait_ms);
     try testing.expect(l.tryAdmit(0, .embeddings, .background, 100) == .granted);
     try testing.expect(l.tryAdmit(30_000, .@"openai-responses", .background, 100) == .granted);
-    var m = Limiter.init(.{ .input_tpm = 1000 }, null);
+    var m_opts: Options = .{};
+    m_opts.routes.set(.embeddings, .{ .input_tpm = 1000 });
+    var m = Limiter.init(m_opts, null);
     try testing.expect(m.tryAdmit(0, .embeddings, .background, 5000) == .granted);
     try testing.expectEqual(@as(u64, 60_000), m.tryAdmit(0, .embeddings, .background, 5000).wait_ms);
 }
@@ -355,4 +372,18 @@ test "UTC period starts" {
 
 fn classifyDays(y: i64, m: i64, d: i64) i64 {
     return @import("classify.zig").daysFromCivil(y, m, d);
+}
+
+test "route limits come from each endpoint's config section" {
+    var cfg: core.Config = .{};
+    cfg.llm.route = .@"anthropic-messages";
+    cfg.llm.rpm = 60;
+    cfg.llm.input_tpm = 90_000;
+    cfg.embed.rpm = 3000;
+    cfg.decision.input_tpm = 5000;
+    const o = Options.fromConfig(&cfg);
+    try testing.expectEqual(RouteLimit{ .rpm = 60, .input_tpm = 90_000 }, o.routes.get(.@"anthropic-messages"));
+    try testing.expectEqual(RouteLimit{}, o.routes.get(.@"openai-responses"));
+    try testing.expectEqual(RouteLimit{ .rpm = 3000 }, o.routes.get(.embeddings));
+    try testing.expectEqual(RouteLimit{ .input_tpm = 5000 }, o.routes.get(.@"typed-decisions"));
 }

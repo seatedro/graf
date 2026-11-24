@@ -18,6 +18,12 @@ api_key = ""
 # openai-responses | anthropic-messages | openai-chat
 route = "openai-responses"
 model = "gpt-6.2-sol"
+# Requests and input tokens per minute for this route; 0 means unlimited.
+rpm = 0
+input_tpm = 0
+# Used for cost when the endpoint reports none, in USD per million tokens:
+# "<model> input=<usd> output=<usd> [cache_read=<usd>] [cache_write=<usd>]"
+rates = []
 # Response header with the exact USD cost of each call, if your endpoint sends one.
 cost_header = ""
 
@@ -25,12 +31,16 @@ cost_header = ""
 # base_url, api_key and cost_header default to the [llm] values.
 model = "text-embedding-3-large"
 dimensions = 512
+rpm = 0
+input_tpm = 0
 
 [decision]
 # Optional typed decision-model backend for resolution and reranking.
 base_url = ""
 api_key = ""
 path = ""
+rpm = 0
+input_tpm = 0
 
 [limits]
 daily_usd = 100.0

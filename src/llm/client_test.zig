@@ -523,3 +523,15 @@ test "every route replays success, 429, 5xx, context overflow, 401 and malformed
         }
     }
 }
+
+test "without a cost header, the configured rate table prices the call as estimated" {
+    var h: Harness = undefined;
+    h.init(.@"openai-responses", &.{fixture("responses_ok")});
+    defer h.deinit();
+    h.cfg.llm.cost_header = "";
+    h.cfg.llm.rates = &.{"example-model input=2 output=8"};
+    h.client.rates = h.cfg.llm.rates;
+    const out = try h.client.structured(h.a(), request(null));
+    try testing.expectEqual(core.types.CostStatus.estimated, out.cost.status);
+    try testing.expectApproxEqAbs(@as(f64, (103.0 * 2 + 44.0 * 8) / 1_000_000.0), out.cost.usd, 1e-12);
+}
