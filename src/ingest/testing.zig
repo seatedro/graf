@@ -14,7 +14,7 @@ const Micros = core.Micros;
 pub const FakeModel = struct {
     pub const Reply = union(enum) {
         json: []const u8,
-        fail: llm.ErrorClass,
+        fail: pipeline.Disposition,
     };
 
     pub const dims = 64;
@@ -23,8 +23,8 @@ pub const FakeModel = struct {
     next: usize = 0,
     calls: std.EnumArray(core.types.LlmPurpose, u32) = .initFill(0),
     requests: std.ArrayList(llm.StructuredRequest) = .empty,
-    embed_fail: ?llm.ErrorClass = null,
-    last: ?llm.Failure = null,
+    embed_fail: ?pipeline.Disposition = null,
+    last: ?pipeline.ModelFailure = null,
     gpa: Allocator,
     kept: std.heap.ArenaAllocator,
 
@@ -65,8 +65,8 @@ pub const FakeModel = struct {
                 m.last = null;
                 return .{ .json = j };
             },
-            .fail => |class| {
-                m.last = .{ .class = class, .certainty = .possibly_sent };
+            .fail => |disposition| {
+                m.last = .{ .disposition = disposition };
                 return error.ProviderFailed;
             },
         }
@@ -74,8 +74,8 @@ pub const FakeModel = struct {
 
     pub fn embed(m: *FakeModel, arena: Allocator, req: llm.EmbedRequest) !llm.EmbedResponse {
         m.calls.getPtr(req.purpose).* += 1;
-        if (m.embed_fail) |class| {
-            m.last = .{ .class = class, .certainty = .possibly_sent };
+        if (m.embed_fail) |disposition| {
+            m.last = .{ .disposition = disposition };
             return error.ProviderFailed;
         }
         const out = try arena.alloc([]const f32, req.inputs.len);
@@ -97,8 +97,7 @@ pub const FakeModel = struct {
     }
 
     pub fn failure(m: *FakeModel) ?pipeline.ModelFailure {
-        const f = m.last orelse return null;
-        return .{ .disposition = pipeline.dispositionForClass(@tagName(f.class)), .retry_after_ms = f.retry_after_ms };
+        return m.last;
     }
 
     pub fn count(m: *const FakeModel, purpose: core.types.LlmPurpose) u32 {

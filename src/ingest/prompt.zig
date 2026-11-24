@@ -137,15 +137,6 @@ fn writeExtractionUser(w: *Writer, entry: EntryView, context: []const PriorEntry
     }
 }
 
-pub const repair_system =
-    \\Your previous output did not match the required JSON schema. Return only a corrected JSON object that matches the schema exactly, keeping the same content.
-;
-
-pub fn repairUser(arena: Allocator, err: []const u8, broken: []const u8) Allocator.Error![]const u8 {
-    const max = 16 * 1024;
-    return std.fmt.allocPrint(arena, "Problem: {s}\n\nPrevious output:\n{s}", .{ err, broken[0..@min(broken.len, max)] });
-}
-
 pub const resolution_system =
     \\You reconcile newly extracted knowledge with what a knowledge graph already holds. Output one JSON object that matches the schema.
     \\

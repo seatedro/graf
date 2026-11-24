@@ -15,49 +15,31 @@ pub const ClientModel = struct {
     client: *llm.Client,
     last: ?llm.Failure = null,
 
-    const has_failure_out = @hasField(llm.StructuredRequest, "failure");
-    const has_repaired = @hasField(llm.StructuredResponse, "repaired");
-
-    fn blank() llm.Failure {
-        return .{ .class = .network_not_sent, .certainty = .not_sent };
-    }
-
     fn capture(m: *ClientModel, slot: *const llm.Failure, err: anyerror) anyerror {
-        m.last = if (err != error.ProviderFailed) null else if (comptime has_failure_out) slot.* else m.client.last_failure;
+        m.last = if (err == error.ProviderFailed) slot.* else null;
         return err;
-    }
-
-    fn completion(r: llm.StructuredResponse) pipeline.Completion {
-        return .{ .json = r.json, .repaired = if (comptime has_repaired) r.repaired else false };
     }
 
     pub fn structured(m: *ClientModel, arena: Allocator, req_in: llm.StructuredRequest) !pipeline.Completion {
         var req = req_in;
-        var slot = blank();
-        if (comptime has_failure_out) req.failure = &slot;
+        var slot: llm.Failure = .{ .class = .network_not_sent, .certainty = .not_sent };
+        req.failure = &slot;
         const r = m.client.structured(arena, req) catch |err| return m.capture(&slot, err);
-        return completion(r);
+        return .{ .json = r.json, .repaired = r.repaired };
     }
 
     pub fn repair(m: *ClientModel, arena: Allocator, req_in: llm.StructuredRequest, broken: []const u8, problem: []const u8) !pipeline.Completion {
         var req = req_in;
-        var slot = blank();
-        if (comptime has_failure_out) req.failure = &slot;
-        if (comptime @hasDecl(llm.Client, "repair")) {
-            const r = m.client.repair(arena, req, broken, problem) catch |err| return m.capture(&slot, err);
-            return .{ .json = r.json, .repaired = true };
-        }
-        req.purpose = .repair;
-        req.system = prompt.repair_system;
-        req.user = try prompt.repairUser(arena, problem, broken);
-        const r = m.client.structured(arena, req) catch |err| return m.capture(&slot, err);
+        var slot: llm.Failure = .{ .class = .network_not_sent, .certainty = .not_sent };
+        req.failure = &slot;
+        const r = m.client.repair(arena, req, broken, problem) catch |err| return m.capture(&slot, err);
         return .{ .json = r.json, .repaired = true };
     }
 
     pub fn embed(m: *ClientModel, arena: Allocator, req_in: llm.EmbedRequest) !llm.EmbedResponse {
         var req = req_in;
-        var slot = blank();
-        if (comptime @hasField(llm.EmbedRequest, "failure")) req.failure = &slot;
+        var slot: llm.Failure = .{ .class = .network_not_sent, .certainty = .not_sent };
+        req.failure = &slot;
         return m.client.embed(arena, req) catch |err| return m.capture(&slot, err);
     }
 
@@ -71,11 +53,7 @@ pub const ClientModel = struct {
 
     pub fn failure(m: *ClientModel) ?pipeline.ModelFailure {
         const f = m.last orelse return null;
-        const disposition: pipeline.Disposition = if (comptime @hasField(llm.Failure, "disposition"))
-            std.meta.stringToEnum(pipeline.Disposition, @tagName(f.disposition)) orelse .dead
-        else
-            pipeline.dispositionForClass(@tagName(f.class));
-        return .{ .disposition = disposition, .retry_after_ms = f.retry_after_ms };
+        return .{ .disposition = f.disposition, .retry_after_ms = f.retry_after_ms };
     }
 };
 

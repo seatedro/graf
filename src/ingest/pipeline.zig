@@ -14,7 +14,7 @@ const Micros = core.Micros;
 
 pub const max_attempts = 3;
 
-pub const Disposition = enum { requeue, split, pause_route, dead };
+pub const Disposition = llm.Disposition;
 
 pub const ModelFailure = struct {
     disposition: Disposition,
@@ -25,14 +25,6 @@ pub const Completion = struct {
     json: []const u8,
     repaired: bool = false,
 };
-
-pub fn dispositionForClass(class_name: []const u8) Disposition {
-    const eq = std.mem.eql;
-    if (eq(u8, class_name, "context_overflow")) return .split;
-    if (eq(u8, class_name, "auth_401_403") or eq(u8, class_name, "quota_exhausted")) return .pause_route;
-    if (eq(u8, class_name, "invalid_request_400") or eq(u8, class_name, "invalid_output")) return .dead;
-    return .requeue;
-}
 
 pub const Context = struct {
     prior: []const prompt.PriorEntry = &.{},

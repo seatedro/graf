@@ -153,15 +153,15 @@ test "provider failures requeue, kill, or split the entry" {
     defer h.deinit();
     const entry = try h.backend.add("session-a", at("2026-11-19T22:00:00Z"), null, turns("Relay lives under infra/relay. Marco is currently on call for Relay."));
 
-    try h.model.push(.{ .fail = .http_5xx });
+    try h.model.push(.{ .fail = .requeue });
     try testing.expectEqual(ingest.Outcome.requeued, try h.step());
     try testing.expectEqual(core.types.EntryStatus.queued, h.backend.row(entry).status);
-    try h.model.push(.{ .fail = .auth_401_403 });
+    try h.model.push(.{ .fail = .pause_route });
     try testing.expectEqual(ingest.Outcome.requeued, try h.step());
     try testing.expectEqual(@as(i32, 1), h.backend.row(entry).attempts);
-    try h.model.push(.{ .fail = .timeout });
+    try h.model.push(.{ .fail = .requeue });
     try testing.expectEqual(ingest.Outcome.requeued, try h.step());
-    try h.model.push(.{ .fail = .timeout });
+    try h.model.push(.{ .fail = .requeue });
     try testing.expectEqual(ingest.Outcome.dead, try h.step());
     try testing.expectEqual(core.types.EntryStatus.dead, h.backend.row(entry).status);
 
@@ -169,7 +169,7 @@ test "provider failures requeue, kill, or split the entry" {
         .{ .role = .user, .text = "first half of a very long session" },
         .{ .role = .assistant, .text = "second half of a very long session" },
     });
-    try h.model.push(.{ .fail = .context_overflow });
+    try h.model.push(.{ .fail = .split });
     try testing.expectEqual(ingest.Outcome.split, try h.step());
     try testing.expectEqual(core.types.EntryStatus.split, h.backend.row(long).status);
     try testing.expectEqual(@as(usize, 4), h.backend.entries.items.len);
@@ -178,7 +178,7 @@ test "provider failures requeue, kill, or split the entry" {
     var h2 = try Harness.init();
     defer h2.deinit();
     const rejected = try h2.backend.add("session-c", at("2026-11-19T23:30:00Z"), null, turns("hi"));
-    try h2.model.push(.{ .fail = .invalid_request_400 });
+    try h2.model.push(.{ .fail = .dead });
     try testing.expectEqual(ingest.Outcome.dead, try h2.step());
     try testing.expectEqual(core.types.EntryStatus.dead, h2.backend.row(rejected).status);
 }
