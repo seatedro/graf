@@ -23,9 +23,14 @@ pub const Store = struct {
     };
 
     pub fn open(io: std.Io, allocator: std.mem.Allocator, url: []const u8, opts: OpenOptions) !Store {
+        return openWithSettings(io, allocator, url, opts, null);
+    }
+
+    fn openWithSettings(io: std.Io, allocator: std.mem.Allocator, url: []const u8, opts: OpenOptions, settings: ?std.StringHashMap([]const u8)) !Store {
         var arena_state = std.heap.ArenaAllocator.init(allocator);
         defer arena_state.deinit();
-        const pool_opts = try poolOptions(arena_state.allocator(), url, opts.pool_size);
+        var pool_opts = try poolOptions(arena_state.allocator(), url, opts.pool_size);
+        pool_opts.auth.startup_parameters = settings;
         const pool = try pg.Pool.init(io, allocator, pool_opts);
         return .{ .allocator = allocator, .io = io, .pool = pool, .lease_ms = opts.lease_ms };
     }
@@ -237,7 +242,11 @@ pub const testing = struct {
 
     pub fn openWith(opts: Store.OpenOptions) !Store {
         const url = databaseUrl() orelse return error.SkipZigTest;
-        var s = try Store.open(std.testing.io, std.testing.allocator, url, opts);
+        var settings = std.StringHashMap([]const u8).init(std.testing.allocator);
+        defer settings.deinit();
+        try settings.put("statement_timeout", "60s");
+        try settings.put("lock_timeout", "30s");
+        var s = try Store.openWithSettings(std.testing.io, std.testing.allocator, url, opts, settings);
         errdefer s.close();
         _ = try s.migrate();
         return s;
@@ -285,6 +294,15 @@ test "migrations apply, are idempotent, and create halfvec(512) columns" {
     )) orelse return error.MissingColumn;
     defer row.deinit() catch {};
     try std.testing.expectEqualStrings("halfvec(512)", try row.get([]const u8, 0));
+}
+
+test "test stores bound statement and lock waits" {
+    var s = try testing.open();
+    defer s.close();
+    var row = (try s.pool.row("SELECT current_setting('statement_timeout'), current_setting('lock_timeout')", .{})) orelse return error.MissingRow;
+    defer row.deinit() catch {};
+    try std.testing.expectEqualStrings("1min", try row.get([]const u8, 0));
+    try std.testing.expectEqualStrings("30s", try row.get([]const u8, 1));
 }
 
 test "content hash ignores reference time and cursor but not the source" {
