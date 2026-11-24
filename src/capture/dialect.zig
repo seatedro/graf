@@ -499,3 +499,177 @@ fn textOf(scratch: Allocator, content: ?Value) Allocator.Error!?[]const u8 {
         else => return null,
     }
 }
+
+const testing = std.testing;
+
+const Parsed = struct {
+    items: []const Item,
+    meta: Meta,
+    malformed: u64,
+};
+
+fn parseAll(arena: Allocator, harness: core.Harness, bytes: []const u8) !Parsed {
+    var scratch_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer scratch_state.deinit();
+    var out: std.ArrayList(Item) = .empty;
+    var p = Parser.init(harness, arena);
+    const sink: Sink = .{ .arena = arena, .scratch = scratch_state.allocator(), .out = &out };
+    var offset: u64 = 0;
+    var it = std.mem.splitScalar(u8, bytes, '\n');
+    while (it.next()) |line| {
+        try p.feed(sink, line, offset);
+        _ = scratch_state.reset(.retain_capacity);
+        offset += line.len + 1;
+    }
+    try p.flushAll(sink);
+    return .{ .items = out.items, .meta = p.meta, .malformed = p.malformed };
+}
+
+fn expectTurn(item: Item, role: core.types.Role, text: []const u8, calls: []const core.ToolCall) !void {
+    try testing.expectEqual(role, item.turn.role);
+    try testing.expectEqualStrings(text, item.turn.text);
+    try testing.expectEqual(calls.len, item.turn.tool_calls.len);
+    for (calls, item.turn.tool_calls) |want, got| {
+        try testing.expectEqualStrings(want.name, got.name);
+        try testing.expectEqualStrings(want.args_preview, got.args_preview);
+        try testing.expectEqualStrings(want.result_preview, got.result_preview);
+    }
+}
+
+fn expectAbsent(items: []const Item, needle: []const u8) !void {
+    for (items) |item| {
+        try testing.expect(std.mem.indexOf(u8, item.turn.text, needle) == null);
+        for (item.turn.tool_calls) |tc| {
+            try testing.expect(std.mem.indexOf(u8, tc.args_preview, needle) == null);
+            try testing.expect(std.mem.indexOf(u8, tc.result_preview, needle) == null);
+        }
+    }
+}
+
+test "claude code transcript" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const parsed = try parseAll(arena_state.allocator(), .@"claude-code", @embedFile("testdata/claude-code/session.jsonl"));
+    try testing.expectEqual(@as(usize, 5), parsed.items.len);
+    try expectTurn(parsed.items[0], .user, "Switch the widget service to Postgres 17 and check the migration runner.", &.{});
+    try expectTurn(parsed.items[1], .assistant, "I'll read the runner first.", &.{.{ .name = "Read", .args_preview = "/home/dev/acme/widget/src/migrate.zig:1-3" }});
+    try expectTurn(parsed.items[2], .assistant, "", &.{.{ .name = "Bash", .args_preview = "zig build test", .result_preview = "All 42 tests passed." }});
+    try expectTurn(parsed.items[3], .assistant, "The runner applies each migration in its own transaction, and the tests pass.", &.{});
+    try expectTurn(parsed.items[4], .user, "Thanks. Also note that we deploy on Fridays.", &.{});
+    try testing.expectEqual(@as(?core.Micros, 1_795_194_000_000_000), parsed.items[0].turn.ts);
+    try testing.expect(parsed.items[1].start > parsed.items[0].start);
+    try expectAbsent(parsed.items, "HIDDEN-THOUGHT");
+    try expectAbsent(parsed.items, "Caveat");
+    try expectAbsent(parsed.items, "command-name");
+    try testing.expectEqual(@as(u64, 1), parsed.malformed);
+    try testing.expectEqualStrings("/home/dev/acme/widget", parsed.meta.cwd.?);
+    try testing.expectEqualStrings("0b6f9c1e-5a0d-4c7e-9a51-3f1e2d4c5b6a", parsed.meta.session_id.?);
+    try testing.expectEqualStrings("example-model-large", parsed.meta.model.?);
+}
+
+test "codex rollout" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const parsed = try parseAll(arena_state.allocator(), .codex, @embedFile("testdata/codex/rollout.jsonl"));
+    try testing.expectEqual(@as(usize, 5), parsed.items.len);
+    try expectTurn(parsed.items[0], .user, "Why is the queue test flaky?", &.{});
+    try expectTurn(parsed.items[1], .assistant, "", &.{.{ .name = "shell", .args_preview = "src/queue.zig:1-3" }});
+    try expectTurn(parsed.items[2], .assistant, "", &.{.{ .name = "shell", .args_preview = "zig build test -Dtest-filter=queue", .result_preview = "error: lease expired before heartbeat\n" }});
+    try testing.expectEqualStrings("apply_patch", parsed.items[3].turn.tool_calls[0].name);
+    try testing.expect(std.mem.indexOf(u8, parsed.items[3].turn.tool_calls[0].args_preview, "+const lease_ms = 1000;") != null);
+    try expectTurn(parsed.items[4], .assistant, "The lease was shorter than the heartbeat interval, so I raised it to 1 s.", &.{});
+    try expectAbsent(parsed.items, "HIDDEN-REASONING");
+    try expectAbsent(parsed.items, "environment_context");
+    try testing.expectEqualStrings("/home/dev/acme/widget", parsed.meta.cwd.?);
+    try testing.expectEqualStrings("5973b6c0-94b8-487b-a530-2aeb6098ae0e", parsed.meta.session_id.?);
+    try testing.expectEqualStrings("example-model-mini", parsed.meta.model.?);
+}
+
+test "codex legacy rollout without envelopes" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const legacy =
+        \\{"id":"legacy-1","timestamp":"2025-05-01T10:00:00Z","instructions":null}
+        \\{"record_type":"state"}
+        \\{"type":"message","role":"user","content":[{"type":"input_text","text":"hello there"}]}
+        \\{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}
+    ;
+    const parsed = try parseAll(arena_state.allocator(), .codex, legacy);
+    try testing.expectEqual(@as(usize, 2), parsed.items.len);
+    try expectTurn(parsed.items[1], .assistant, "hi", &.{});
+    try testing.expectEqualStrings("legacy-1", parsed.meta.session_id.?);
+}
+
+test "pi session" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const parsed = try parseAll(arena_state.allocator(), .pi, @embedFile("testdata/pi/session.jsonl"));
+    try testing.expectEqual(@as(usize, 5), parsed.items.len);
+    try expectTurn(parsed.items[0], .user, "Rename the notes CLI to jot.", &.{});
+    try expectTurn(parsed.items[1], .assistant, "Checking the package name.", &.{.{ .name = "read", .args_preview = "package.json:1-3" }});
+    try expectTurn(parsed.items[2], .assistant, "", &.{.{ .name = "bash", .args_preview = "npm test", .result_preview = "3 passing" }});
+    try expectTurn(parsed.items[3], .assistant, "Renamed the CLI to jot; tests pass.", &.{});
+    try expectTurn(parsed.items[4], .tool, "", &.{.{ .name = "bash", .args_preview = "git status --short", .result_preview = " M package.json\n" }});
+    try expectAbsent(parsed.items, "HIDDEN-THOUGHT");
+    try expectAbsent(parsed.items, "expert coding assistant");
+    try testing.expectEqualStrings("/home/dev/acme/notes", parsed.meta.cwd.?);
+    try testing.expectEqualStrings("example-model", parsed.meta.model.?);
+}
+
+test "fx conversation log" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const parsed = try parseAll(arena_state.allocator(), .fx, @embedFile("testdata/fx/conversation.jsonl"));
+    try testing.expectEqual(@as(usize, 3), parsed.items.len);
+    try expectTurn(parsed.items[0], .user, "List the open TODOs in the parser.", &.{});
+    try expectTurn(parsed.items[1], .assistant, "", &.{.{ .name = "grep", .args_preview = "{\"pattern\":\"TODO\",\"path\":\"src\"}", .result_preview = "src/parse.zig:12: TODO handle CRLF" }});
+    try expectTurn(parsed.items[2], .assistant, "One TODO: CRLF handling in src/parse.zig.", &.{});
+}
+
+test "fx event log" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const parsed = try parseAll(arena_state.allocator(), .fx, @embedFile("testdata/fx/events.jsonl"));
+    try testing.expectEqual(@as(usize, 4), parsed.items.len);
+    try expectTurn(parsed.items[0], .user, "Bump the zig version to 0.17.1.", &.{});
+    try expectTurn(parsed.items[1], .assistant, "Reading build.zig.zon first.", &.{.{ .name = "read_file", .args_preview = "build.zig.zon:1-3" }});
+    try expectTurn(parsed.items[2], .assistant, "", &.{.{ .name = "run_command", .args_preview = "zig build", .result_preview = "build ok" }});
+    try expectTurn(parsed.items[3], .assistant, "Bumped to 0.17.1; the build passes.", &.{});
+    try testing.expectEqualStrings("/home/dev/acme/widget", parsed.meta.cwd.?);
+    try testing.expectEqualStrings("sess-fx-1", parsed.meta.session_id.?);
+}
+
+test "a step is held until its results arrive" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var out: std.ArrayList(Item) = .empty;
+    var p = Parser.init(.@"claude-code", arena);
+    const sink: Sink = .{ .arena = arena, .scratch = arena, .out = &out };
+    try p.feed(sink, "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"sleep 600\"}}]}}", 100);
+    try p.flushResolved(sink);
+    try testing.expectEqual(@as(usize, 0), out.items.len);
+    try testing.expectEqual(@as(?u64, 100), p.pendingStart());
+
+    var other = std.heap.ArenaAllocator.init(testing.allocator);
+    defer other.deinit();
+    try p.rehome(other.allocator());
+    try p.feed(sink, "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"done\"}]}}", 200);
+    try p.flushResolved(sink);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expectEqual(@as(u64, 100), out.items[0].start);
+    try testing.expectEqualStrings("done", out.items[0].turn.tool_calls[0].result_preview);
+    try testing.expectEqual(@as(?u64, null), p.pendingStart());
+}
+
+test "orphan tool results become tool turns" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var out: std.ArrayList(Item) = .empty;
+    var p = Parser.init(.pi, arena);
+    const sink: Sink = .{ .arena = arena, .scratch = arena, .out = &out };
+    try p.feed(sink, "{\"type\":\"message\",\"message\":{\"role\":\"toolResult\",\"toolCallId\":\"x\",\"toolName\":\"bash\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}", 0);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try expectTurn(out.items[0], .tool, "", &.{.{ .name = "bash", .result_preview = "ok" }});
+}
