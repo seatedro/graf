@@ -112,7 +112,7 @@ pub fn recall(e: *mod.Engine, arena: std.mem.Allocator, session_id: []const u8, 
 
 fn dupeHit(a: std.mem.Allocator, h: Hit) !Hit {
     var d = h;
-    d.fact.predicate = try a.dupe(u8, h.fact.predicate);
+    d.fact.relation = try a.dupe(u8, h.fact.relation);
     d.fact.qualifier = try a.dupe(u8, h.fact.qualifier);
     d.fact.text = try a.dupe(u8, h.fact.text);
     d.fact.rationale = if (h.fact.rationale) |r| try a.dupe(u8, r) else null;

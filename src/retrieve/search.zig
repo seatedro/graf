@@ -13,10 +13,10 @@ const qvec = "$3::float4[]::halfvec(512)";
 const tsq = "replace(plainto_tsquery('english', $2::text)::text, '&', '|')::tsquery";
 
 const eligible =
-    "f.graph_id = $1 AND f.sys @> " ++ known_at ++
+    "f.graph_id = $1 AND f.known @> " ++ known_at ++
     " AND (f.valid @> " ++ as_of ++ " OR ($7::bool AND upper(f.valid) <= " ++ as_of ++ "))" ++
     " AND ($6::text = '*' OR f.scope = 'global' OR f.project = $6::text)" ++
-    " AND ($8::text IS NULL OR EXISTS (SELECT 1 FROM fact_provenance hp JOIN episode he ON he.id = hp.episode_id" ++
+    " AND ($8::text IS NULL OR EXISTS (SELECT 1 FROM fact_evidence hp JOIN entry he ON he.id = hp.entry_id" ++
     " JOIN source hs ON hs.id = he.source_id WHERE hp.fact_id = f.id AND hs.harness = $8::text))";
 
 pub const sql =
@@ -165,7 +165,7 @@ pub fn run(e: *mod.Engine, arena: std.mem.Allocator, params: mod.SearchParams, o
     const cands = try arena.alloc(rank.Candidate, rows.items.len);
     for (rows.items, cands) |r, *c| {
         const f = r.hit.fact;
-        const since = f.valid.lower orelse f.sys.lower;
+        const since = f.valid.lower orelse f.known.lower;
         c.* = .{
             .rrf = rank.rrf(r.ranks),
             .factors = rank.scopeBoost(filter, f.scope, f.project) * rank.recencyFactor(rank.ageDays(as_of_us, since)) * rank.confidenceFactor(f.confidence),

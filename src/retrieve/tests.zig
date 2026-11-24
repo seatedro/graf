@@ -85,7 +85,7 @@ pub const Seed = struct {
 
 pub const FactSpec = struct {
     subject: core.Id,
-    predicate: []const u8,
+    relation: []const u8,
     object: ?core.Id = null,
     value: ?[]const u8 = null,
     text: []const u8,
@@ -97,7 +97,7 @@ pub const FactSpec = struct {
     recorded: core.Micros,
     superseded: ?core.Micros = null,
     end_kind: ?[]const u8 = null,
-    asserted_by: []const u8 = "user",
+    author: []const u8 = "user",
     confidence: f32 = 0.9,
     harness: []const u8 = "claude-code",
 };
@@ -138,30 +138,30 @@ pub const Seeder = struct {
         var emb: [dims]f32 = undefined;
         hashEmbed(&emb, f.text);
         try sd.exec(
-            \\INSERT INTO fact (id, graph_id, subject_id, predicate, object_id, object_value, text, rationale, project, scope,
-            \\  valid, sys, end_kind, asserted_by, confidence, emb, created_seq)
+            \\INSERT INTO fact (id, graph_id, subject_id, relation, object_id, object_value, text, rationale, project, scope,
+            \\  valid, known, end_kind, author, confidence, emb, created_seq)
             \\VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, tstzrange($11::timestamptz, $12::timestamptz),
             \\  tstzrange($13::timestamptz, $14::timestamptz), $15, $16, $17, $18::float4[]::halfvec(512), 0)
         , .{
-            &id.bytes,                                              &sd.graph.bytes,        &f.subject.bytes, f.predicate,
+            &id.bytes,                                              &sd.graph.bytes,        &f.subject.bytes, f.relation,
             if (f.object) |o| @as(?[]const u8, &o.bytes) else null, f.value,                f.text,           f.rationale,
             f.project,                                              f.scope,                f.valid_from,     f.valid_to,
-            f.recorded,                                             f.superseded,           f.end_kind,       f.asserted_by,
+            f.recorded,                                             f.superseded,           f.end_kind,       f.author,
             f.confidence,                                           @as([]const f32, &emb),
         });
         sd.seq += 1;
         const source_id = core.Id.v7(sd.io);
-        const episode_id = core.Id.v7(sd.io);
+        const entry_id = core.Id.v7(sd.io);
         var ext_buf: [48]u8 = undefined;
         const ext = try std.fmt.bufPrint(&ext_buf, "session-{d}", .{sd.seq});
         var hash: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(&id.bytes, &hash, .{});
         try sd.exec("INSERT INTO source (id, graph_id, harness, external_id, project) VALUES ($1, $2, $3, $4, $5)", .{ &source_id.bytes, &sd.graph.bytes, f.harness, ext, f.project });
         try sd.exec(
-            \\INSERT INTO episode (id, graph_id, source_id, kind, project, asserted_by, body, content_hash, reference_time, status)
+            \\INSERT INTO entry (id, graph_id, source_id, kind, project, author, body, content_hash, reference_time, status)
             \\VALUES ($1, $2, $3, 'note', $4, 'user', '{}'::jsonb, $5, $6::timestamptz, 'committed')
-        , .{ &episode_id.bytes, &sd.graph.bytes, &source_id.bytes, f.project, @as([]const u8, &hash), f.recorded });
-        try sd.exec("INSERT INTO fact_provenance (fact_id, episode_id, role) VALUES ($1, $2, 'asserted')", .{ &id.bytes, &episode_id.bytes });
+        , .{ &entry_id.bytes, &sd.graph.bytes, &source_id.bytes, f.project, @as([]const u8, &hash), f.recorded });
+        try sd.exec("INSERT INTO fact_evidence (fact_id, entry_id, kind) VALUES ($1, $2, 'stated')", .{ &id.bytes, &entry_id.bytes });
         return id;
     }
 };
@@ -176,30 +176,30 @@ pub fn seed(s: *store.Store, io: std.Io) !Seed {
         .graph = graph,
         .now = now,
         .graf = try sd.entity("graf", "graf", "project", "Zig temporal knowledge graph for agents", &.{}),
-        .pgzig = try sd.entity("pg.zig", "pg zig", "library", "Zig Postgres driver", &.{ "pg-zig", "the zig postgres driver" }),
-        .postgres = try sd.entity("Postgres", "postgres", "service", "Relational database", &.{"PostgreSQL"}),
-        .sqlite = try sd.entity("SQLite", "sqlite", "library", "Embedded database", &.{}),
+        .pgzig = try sd.entity("pg.zig", "pg zig", "software", "Zig Postgres driver", &.{ "pg-zig", "the zig postgres driver" }),
+        .postgres = try sd.entity("Postgres", "postgres", "software", "Relational database", &.{"PostgreSQL"}),
+        .sqlite = try sd.entity("SQLite", "sqlite", "software", "Embedded database", &.{}),
         .potion = try sd.entity("potion", "potion", "project", "Rust desktop app", &.{}),
         .alice = try sd.entity("alice", "alice", "person", "The user", &.{}),
         .tabs = try sd.entity("tabs", "tabs", "concept", "Indentation with tab characters", &.{}),
     };
-    r.f_graf_uses_pg = try sd.fact(.{ .subject = r.graf, .predicate = "uses", .object = r.postgres, .text = "graf uses Postgres 17 with pgvector for storage.", .project = "graf", .valid_from = now - 30 * day, .recorded = now - 30 * day });
-    r.f_pgzig_lacks_copy = try sd.fact(.{ .subject = r.pgzig, .predicate = "lacks_feature", .value = "COPY", .text = "pg.zig lacks COPY support.", .project = "graf", .scope = "global", .valid_from = now - 25 * day, .valid_to = now - 5 * day, .end_kind = "changed", .recorded = now - 25 * day, .confidence = 0.8, .harness = "codex" });
-    r.f_pgzig_supports_copy = try sd.fact(.{ .subject = r.pgzig, .predicate = "supports_feature", .value = "COPY", .text = "pg.zig supports COPY since its latest release.", .project = "graf", .scope = "global", .valid_from = now - 5 * day, .recorded = now - 5 * day, .confidence = 0.85 });
-    r.f_graf_uses_sqlite = try sd.fact(.{ .subject = r.graf, .predicate = "uses", .object = r.sqlite, .text = "graf uses SQLite for storage.", .project = "graf", .valid_from = now - 20 * day, .recorded = now - 20 * day, .superseded = now - 10 * day, .end_kind = "retracted", .asserted_by = "agent", .confidence = 0.7 });
-    r.f_potion_uses_pg = try sd.fact(.{ .subject = r.potion, .predicate = "uses", .object = r.postgres, .text = "potion uses Postgres 17 with pgvector for storage.", .project = "potion", .valid_from = now - 30 * day, .recorded = now - 30 * day });
-    r.f_alice_prefers_tabs = try sd.fact(.{ .subject = r.alice, .predicate = "prefers", .object = r.tabs, .text = "alice prefers tabs over spaces for indentation.", .project = null, .scope = "global", .valid_from = null, .recorded = now - 40 * day });
-    r.f_graf_status = try sd.fact(.{ .subject = r.graf, .predicate = "has_status", .value = "beta", .text = "graf is in beta.", .project = "graf", .valid_from = now - 2 * day, .recorded = now - 2 * day });
-    r.f_graf_chose_pg = try sd.fact(.{ .subject = r.graf, .predicate = "chose", .object = r.postgres, .text = "graf chose Postgres over a graph database.", .rationale = "pgvector and range types cover the temporal graph", .project = "graf", .valid_from = now - 3 * day, .recorded = now - 3 * day });
-    r.f_graf_pg18 = try sd.fact(.{ .subject = r.graf, .predicate = "has_version", .value = "Postgres 18", .text = "graf moves to Postgres 18.", .project = "graf", .valid_from = now + 10 * day, .recorded = now - 1 * day });
+    r.f_graf_uses_pg = try sd.fact(.{ .subject = r.graf, .relation = "uses", .object = r.postgres, .text = "graf uses Postgres 17 with pgvector for storage.", .project = "graf", .valid_from = now - 30 * day, .recorded = now - 30 * day });
+    r.f_pgzig_lacks_copy = try sd.fact(.{ .subject = r.pgzig, .relation = "lacks_feature", .value = "COPY", .text = "pg.zig lacks COPY support.", .project = "graf", .scope = "global", .valid_from = now - 25 * day, .valid_to = now - 5 * day, .end_kind = "changed", .recorded = now - 25 * day, .confidence = 0.8, .harness = "codex" });
+    r.f_pgzig_supports_copy = try sd.fact(.{ .subject = r.pgzig, .relation = "supports_feature", .value = "COPY", .text = "pg.zig supports COPY since its latest release.", .project = "graf", .scope = "global", .valid_from = now - 5 * day, .recorded = now - 5 * day, .confidence = 0.85 });
+    r.f_graf_uses_sqlite = try sd.fact(.{ .subject = r.graf, .relation = "uses", .object = r.sqlite, .text = "graf uses SQLite for storage.", .project = "graf", .valid_from = now - 20 * day, .recorded = now - 20 * day, .superseded = now - 10 * day, .end_kind = "retracted", .author = "agent", .confidence = 0.7 });
+    r.f_potion_uses_pg = try sd.fact(.{ .subject = r.potion, .relation = "uses", .object = r.postgres, .text = "potion uses Postgres 17 with pgvector for storage.", .project = "potion", .valid_from = now - 30 * day, .recorded = now - 30 * day });
+    r.f_alice_prefers_tabs = try sd.fact(.{ .subject = r.alice, .relation = "prefers", .object = r.tabs, .text = "alice prefers tabs over spaces for indentation.", .project = null, .scope = "global", .valid_from = null, .recorded = now - 40 * day });
+    r.f_graf_status = try sd.fact(.{ .subject = r.graf, .relation = "has_status", .value = "beta", .text = "graf is in beta.", .project = "graf", .valid_from = now - 2 * day, .recorded = now - 2 * day });
+    r.f_graf_chose_pg = try sd.fact(.{ .subject = r.graf, .relation = "chose", .object = r.postgres, .text = "graf chose Postgres over a graph database.", .rationale = "pgvector and range types cover the temporal graph", .project = "graf", .valid_from = now - 3 * day, .recorded = now - 3 * day });
+    r.f_graf_pg18 = try sd.fact(.{ .subject = r.graf, .relation = "has_version", .value = "Postgres 18", .text = "graf moves to Postgres 18.", .project = "graf", .valid_from = now + 10 * day, .recorded = now - 1 * day });
     return r;
 }
 
 pub fn cleanup(s: *store.Store, graph: core.Id) void {
-    const tables = [_][]const u8{ "project_brief", "fact_provenance", "fact", "entity_alias", "entity", "episode", "source" };
+    const tables = [_][]const u8{ "project_brief", "fact_evidence", "fact", "entity_alias", "entity", "entry", "source" };
     inline for (tables) |t| {
-        const sql = if (comptime std.mem.eql(u8, t, "fact_provenance"))
-            "DELETE FROM fact_provenance WHERE fact_id IN (SELECT id FROM fact WHERE graph_id = $1)"
+        const sql = if (comptime std.mem.eql(u8, t, "fact_evidence"))
+            "DELETE FROM fact_evidence WHERE fact_id IN (SELECT id FROM fact WHERE graph_id = $1)"
         else
             "DELETE FROM " ++ t ++ " WHERE graph_id = $1";
         _ = s.pool.exec(sql, .{&graph.bytes}) catch {};
@@ -345,7 +345,7 @@ test "search without an embedder uses the lexical and entity arms" {
     try std.testing.expect(contains(res.hits, f.seed.f_pgzig_supports_copy));
     var out: std.Io.Writer.Allocating = .init(arena_state.allocator());
     try mod.render(&res, .{ .query = "tell me about pg-zig", .project = "graf" }, &out.writer);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "### pg.zig (library)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "### pg.zig (software)") != null);
 }
 
 test "entity resolves aliases and walks two hops" {
@@ -406,7 +406,7 @@ test "forget closes system time and asks before forgetting several facts" {
     const again = try f.engine.forget(arena, .{ .fact_id = sd.f_alice_prefers_tabs });
     try std.testing.expectEqual(@as(usize, 0), again.forgotten.len);
 
-    var row = (try f.s.pool.row("SELECT end_kind, (SELECT quote FROM fact_provenance WHERE fact_id = $1 AND role = 'forgotten') FROM fact WHERE id = $1", .{&sd.f_alice_prefers_tabs.bytes})).?;
+    var row = (try f.s.pool.row("SELECT end_kind, (SELECT quote FROM fact_evidence WHERE fact_id = $1 AND kind = 'forgotten') FROM fact WHERE id = $1", .{&sd.f_alice_prefers_tabs.bytes})).?;
     defer row.deinit() catch {};
     try std.testing.expectEqualStrings("forgotten", try row.get([]const u8, 0));
     try std.testing.expectEqualStrings("no longer true", try row.get([]const u8, 1));

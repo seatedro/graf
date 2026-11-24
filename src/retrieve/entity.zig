@@ -54,7 +54,7 @@ const resolve_sql =
     \\SELECT 
 ++ entity_columns ++
     \\,
-    \\  (SELECT count(*) FROM fact f WHERE (f.subject_id = e.id OR f.object_id = e.id) AND upper_inf(f.sys) AND upper_inf(f.valid)) AS n
+    \\  (SELECT count(*) FROM fact f WHERE (f.subject_id = e.id OR f.object_id = e.id) AND upper_inf(f.known) AND upper_inf(f.valid)) AS n
     \\FROM entity e WHERE e.id IN (SELECT id FROM chain WHERE merged_into IS NULL)
     \\ORDER BY n DESC, e.id LIMIT 6
 ;
@@ -67,13 +67,13 @@ const facts_sql =
     \\
     \\FROM fact f JOIN entity se ON se.id = f.subject_id LEFT JOIN entity oe ON oe.id = f.object_id
     \\WHERE f.graph_id = $1 AND (f.subject_id = $2 OR f.object_id = $2)
-    \\  AND ($5::bool OR upper_inf(f.sys))
+    \\  AND ($5::bool OR upper_inf(f.known))
     \\  AND (f.valid @> 
 ++ as_of ++
     \\ OR ($4::bool AND upper(f.valid) <= 
 ++ as_of ++
     \\))
-    \\ORDER BY upper_inf(f.sys) DESC, upper_inf(f.valid) DESC, f.confidence DESC, lower(f.valid) DESC NULLS LAST, f.id
+    \\ORDER BY upper_inf(f.known) DESC, upper_inf(f.valid) DESC, f.confidence DESC, lower(f.valid) DESC NULLS LAST, f.id
     \\LIMIT 200
 ;
 
@@ -81,14 +81,14 @@ const neighbors_sql =
     \\WITH hop1 AS (
     \\  SELECT DISTINCT CASE WHEN f.subject_id = $2 THEN f.object_id ELSE f.subject_id END AS id
     \\  FROM fact f WHERE f.graph_id = $1 AND (f.subject_id = $2 OR f.object_id = $2) AND f.object_id IS NOT NULL
-    \\    AND upper_inf(f.sys) AND f.valid @> 
+    \\    AND upper_inf(f.known) AND f.valid @> 
 ++ as_of ++
     \\
     \\), n AS (
     \\  SELECT 
 ++ entity_columns ++
     \\,
-    \\    (SELECT count(*) FROM fact f WHERE (f.subject_id = e.id OR f.object_id = e.id) AND upper_inf(f.sys) AND f.valid @> 
+    \\    (SELECT count(*) FROM fact f WHERE (f.subject_id = e.id OR f.object_id = e.id) AND upper_inf(f.known) AND f.valid @> 
 ++ as_of ++
     \\) AS deg
     \\  FROM hop1 h JOIN entity e ON e.id = h.id WHERE e.id <> $2 ORDER BY deg DESC, e.id LIMIT 12
@@ -100,7 +100,7 @@ const neighbors_sql =
     \\  FROM fact f JOIN entity se ON se.id = f.subject_id LEFT JOIN entity oe ON oe.id = f.object_id
     \\  WHERE $4::int = 2 AND f.graph_id = $1 AND (f.subject_id = n.id OR f.object_id = n.id)
     \\    AND f.subject_id <> $2 AND f.object_id IS DISTINCT FROM $2
-    \\    AND upper_inf(f.sys) AND f.valid @> 
+    \\    AND upper_inf(f.known) AND f.valid @> 
 ++ as_of ++
     \\
     \\  ORDER BY f.confidence DESC, lower(f.valid) DESC NULLS LAST, f.id LIMIT 5) x ON true
@@ -201,7 +201,7 @@ const candidates_sql =
 ++ db.hit_columns ++
     \\
     \\FROM fact f JOIN entity se ON se.id = f.subject_id LEFT JOIN entity oe ON oe.id = f.object_id
-    \\WHERE f.graph_id = $1 AND upper_inf(f.sys)
+    \\WHERE f.graph_id = $1 AND upper_inf(f.known)
     \\  AND (($2::uuid IS NOT NULL AND f.id = $2::uuid)
     \\    OR ($3::text IS NOT NULL AND (f.tsv @@ plainto_tsquery('english', $3::text) OR f.text ILIKE '%' || $3::text || '%')))
     \\ORDER BY ts_rank_cd(f.tsv, plainto_tsquery('english', coalesce($3::text, ''))) DESC, f.confidence DESC, f.id
@@ -235,33 +235,33 @@ pub fn forget(e: *mod.Engine, arena: std.mem.Allocator, target: ForgetTarget) !F
     }, .{});
     var hash: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(note, &hash, .{});
-    const episode_id = core.Id.v7(e.io);
+    const entry_id = core.Id.v7(e.io);
     const quote: ?[]const u8 = if (target.reason) |r| r[0..@min(r.len, 200)] else null;
 
     try conn.begin();
     errdefer conn.rollback() catch {};
     const updated = try db.exec(conn,
-        \\UPDATE fact SET sys = tstzrange(lower(sys), greatest(now(), lower(sys) + interval '1 microsecond')), end_kind = 'forgotten'
-        \\WHERE graph_id = $1 AND id = $2 AND upper_inf(sys)
+        \\UPDATE fact SET known = tstzrange(lower(known), greatest(now(), lower(known) + interval '1 microsecond')), end_kind = 'forgotten'
+        \\WHERE graph_id = $1 AND id = $2 AND upper_inf(known)
     , .{ &e.graph_id.bytes, &hit.fact.id.bytes });
     if ((updated orelse 0) == 0) {
         try conn.rollback();
         return .{};
     }
     _ = try db.exec(conn,
-        \\INSERT INTO episode (id, graph_id, kind, project, asserted_by, body, content_hash, reference_time, status)
+        \\INSERT INTO entry (id, graph_id, kind, project, author, body, content_hash, reference_time, status)
         \\VALUES ($1, $2, 'note', $3, 'user', $4::jsonb, $5, now(), 'committed')
-    , .{ &episode_id.bytes, &e.graph_id.bytes, hit.fact.project, note, @as([]const u8, &hash) });
+    , .{ &entry_id.bytes, &e.graph_id.bytes, hit.fact.project, note, @as([]const u8, &hash) });
     _ = try db.exec(
         conn,
-        "INSERT INTO fact_provenance (fact_id, episode_id, role, quote) VALUES ($1, $2, 'forgotten', $3)",
-        .{ &hit.fact.id.bytes, &episode_id.bytes, quote },
+        "INSERT INTO fact_evidence (fact_id, entry_id, kind, quote) VALUES ($1, $2, 'forgotten', $3)",
+        .{ &hit.fact.id.bytes, &entry_id.bytes, quote },
     );
     _ = try db.exec(conn, "NOTIFY graf_commit", .{});
     try conn.commit();
 
     var forgotten = hit;
     forgotten.fact.end_kind = .forgotten;
-    forgotten.fact.sys.upper = time.now(e.io);
+    forgotten.fact.known.upper = time.now(e.io);
     return .{ .forgotten = try arena.dupe(Hit, &.{forgotten}) };
 }

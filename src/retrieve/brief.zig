@@ -40,23 +40,23 @@ pub const BriefCache = struct {
 
 const section_tokens = .{ .prefs = 200, .project = 400, .recent = 200 };
 
-const base_where = "f.graph_id = $1 AND upper_inf(f.sys) AND f.confidence >= 0.70";
+const base_where = "f.graph_id = $1 AND upper_inf(f.known) AND f.confidence >= 0.70";
 const from = " FROM fact f JOIN entity se ON se.id = f.subject_id LEFT JOIN entity oe ON oe.id = f.object_id WHERE ";
 
 const prefs_sql = "SELECT " ++ db.hit_columns ++ from ++ base_where ++
-    " AND f.valid @> now() AND f.scope = 'global' AND f.predicate IN ('prefers', 'avoids') AND f.confidence >= 0.75" ++
+    " AND f.valid @> now() AND f.scope = 'global' AND f.relation IN ('prefers', 'avoids') AND f.confidence >= 0.75" ++
     " ORDER BY f.confidence DESC, lower(f.valid) DESC NULLS LAST, f.id LIMIT 20";
 
 const recent_sql = "SELECT " ++ db.hit_columns ++ from ++ base_where ++
     " AND (f.scope = 'global' OR f.project = $2::text) AND (" ++
-    "(f.predicate IN ('chose', 'rejected', 'has_status') AND f.valid @> now() AND lower(f.sys) >= now() - interval '14 days')" ++
+    "(f.relation IN ('chose', 'rejected', 'has_status') AND f.valid @> now() AND lower(f.known) >= now() - interval '14 days')" ++
     " OR (f.end_kind = 'changed' AND upper(f.valid) <= now() AND upper(f.valid) >= now() - interval '14 days'))" ++
-    " ORDER BY greatest(lower(f.sys), upper(f.valid)) DESC, f.id LIMIT 20";
+    " ORDER BY greatest(lower(f.known), upper(f.valid)) DESC, f.id LIMIT 20";
 
 const project_sql = "SELECT " ++ db.hit_columns ++ ", se.summary" ++ from ++ base_where ++
     " AND f.valid @> now() AND f.project = $2::text AND f.scope = 'project'" ++
     " ORDER BY f.confidence * (0.85 + 0.15 * exp(-extract(epoch FROM now() - coalesce(" ++ db.lowerBound("f.valid") ++
-    ", lower(f.sys))) / 86400.0 / 60.0)) DESC, f.id LIMIT 40";
+    ", lower(f.known))) / 86400.0 / 60.0)) DESC, f.id LIMIT 40";
 
 fn cacheKey(project: ?[]const u8) []const u8 {
     return project orelse "";
@@ -217,7 +217,7 @@ fn writeLine(w: *Writer, h: *const Hit, dated: bool) Writer.Error!void {
             try w.print("{f} ended", .{time.Date{ .t = t }});
             if (f.end_kind) |k| try w.print(" ({s})", .{@tagName(k)});
         } else {
-            try w.print("{f} {s}", .{ time.Date{ .t = f.sys.lower orelse 0 }, f.predicate });
+            try w.print("{f} {s}", .{ time.Date{ .t = f.known.lower orelse 0 }, f.relation });
         }
     } else if (f.valid.lower) |t| {
         try w.print("since {f}", .{time.Date{ .t = t }});

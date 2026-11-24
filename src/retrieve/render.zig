@@ -29,7 +29,7 @@ pub const Budget = struct {
 pub fn writeFactLine(w: *Writer, hit: *const Hit, with_range: bool) Writer.Error!void {
     const f = hit.fact;
     try w.writeAll("- [");
-    if (f.sys.upper) |t| {
+    if (f.known.upper) |t| {
         try w.print("{s} {f}", .{ if (f.end_kind) |k| @tagName(k) else "retracted", time.Date{ .t = t } });
     } else if (f.valid.upper) |t| {
         if (with_range) {
@@ -44,7 +44,7 @@ pub fn writeFactLine(w: *Writer, hit: *const Hit, with_range: bool) Writer.Error
     } else {
         try w.writeAll("current");
     }
-    try w.print(" | conf {d:.2} | {s}] {s}", .{ f.confidence, if (hit.harness) |h| @tagName(h) else @tagName(f.asserted_by), f.text });
+    try w.print(" | conf {d:.2} | {s}] {s}", .{ f.confidence, if (hit.harness) |h| @tagName(h) else @tagName(f.author), f.text });
     if (f.rationale) |why| if (why.len > 0) try w.print(" (why: {s})", .{why});
     try w.writeByte('\n');
 }
@@ -207,18 +207,18 @@ fn testHit(subject: core.Id, subject_name: []const u8, fact_text: []const u8, lo
             .id = core.Id.fromParts(1, @splat(@truncate(fact_text.len))),
             .graph_id = core.Id.nil,
             .subject_id = subject,
-            .predicate = "uses",
+            .relation = "uses",
             .object = .{ .value = "x" },
             .text = fact_text,
             .scope = .project,
             .valid = .{ .lower = lower, .upper = upper },
-            .sys = .{ .lower = lower },
+            .known = .{ .lower = lower },
             .end_kind = if (upper != null) .changed else null,
-            .asserted_by = .user,
+            .author = .user,
             .confidence = 0.9,
         },
         .subject_name = subject_name,
-        .subject_type = .library,
+        .subject_type = .software,
         .harness = .@"claude-code",
     };
 }
@@ -235,7 +235,7 @@ test "render groups by subject and tags each line" {
         testHit(graf, "graf", "graf considered SQLite before choosing Postgres.", null, t0 + day),
     };
     const entities = [_]core.Entity{
-        .{ .id = pgzig, .graph_id = core.Id.nil, .name = "pg.zig", .norm = "pg zig", .type = .library, .description = "Zig Postgres driver" },
+        .{ .id = pgzig, .graph_id = core.Id.nil, .name = "pg.zig", .norm = "pg zig", .type = .software, .description = "Zig Postgres driver" },
         .{ .id = graf, .graph_id = core.Id.nil, .name = "graf", .norm = "graf", .type = .project },
     };
     const result: mod.SearchResult = .{ .hits = &hits, .entities = &entities, .reranked = false, .as_of = t0 + day };
@@ -246,7 +246,7 @@ test "render groups by subject and tags each line" {
     try std.testing.expect(std.mem.startsWith(u8, s, "## Memory for \"pg.zig copy support\" (project: graf, as_of: 2026-11-23, "));
     const expected_body =
         \\
-        \\### pg.zig (library) — Zig Postgres driver
+        \\### pg.zig (software) — Zig Postgres driver
         \\- [current since 2026-11-22 | conf 0.90 | claude-code] pg.zig lacks COPY and pipelining.
         \\- [current since 2026-11-22 | conf 0.90 | claude-code] pg.zig works with pgvector HNSW via float4[] casts.
         \\
