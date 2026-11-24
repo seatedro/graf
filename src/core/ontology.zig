@@ -36,14 +36,14 @@ pub const core_relations = [_]CoreRelation{
 };
 
 pub fn find(name: []const u8) ?*const CoreRelation {
-    for (&core_relations) |*p| if (std.mem.eql(u8, p.name, name)) return p;
+    for (&core_relations) |*relation| if (std.mem.eql(u8, relation.name, name)) return relation;
     return null;
 }
 
 test "opposed relations are symmetric" {
-    for (core_relations) |p| {
-        const other_name = p.opposes orelse continue;
+    for (core_relations) |relation| {
+        const other_name = relation.opposes orelse continue;
         const other = find(other_name) orelse return error.MissingOpposite;
-        try std.testing.expectEqualStrings(p.name, other.opposes.?);
+        try std.testing.expectEqualStrings(relation.name, other.opposes.?);
     }
 }

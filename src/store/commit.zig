@@ -121,10 +121,10 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
         const ids = try a.alloc([]const u8, cs.evidence.len);
         const evidence_kinds = try a.alloc([]const u8, cs.evidence.len);
         const quotes = try a.alloc(?[]const u8, cs.evidence.len);
-        for (cs.evidence, ids, evidence_kinds, quotes) |*p, *id, *kind, *q| {
-            id.* = &p.fact_id.bytes;
-            kind.* = @tagName(p.kind);
-            q.* = p.quote;
+        for (cs.evidence, ids, evidence_kinds, quotes) |*ev, *id, *kind, *q| {
+            id.* = &ev.fact_id.bytes;
+            kind.* = @tagName(ev.kind);
+            q.* = ev.quote;
         }
         _ = try conn.exec(
             \\INSERT INTO fact_evidence (fact_id, entry_id, kind, quote)
@@ -153,14 +153,14 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
         const object_kinds = try a.alloc([]const u8, n);
         const statuses = try a.alloc([]const u8, n);
         const mapped = try a.alloc(?[]const u8, n);
-        for (cs.new_relations, 0..) |p, i| {
-            names[i] = p.name;
-            descriptions[i] = p.description;
-            cardinalities[i] = @tagName(p.cardinality);
-            opposes[i] = p.opposes;
-            object_kinds[i] = @tagName(p.object_kind);
-            statuses[i] = @tagName(p.status);
-            mapped[i] = p.mapped_to;
+        for (cs.new_relations, 0..) |relation, i| {
+            names[i] = relation.name;
+            descriptions[i] = relation.description;
+            cardinalities[i] = @tagName(relation.cardinality);
+            opposes[i] = relation.opposes;
+            object_kinds[i] = @tagName(relation.object_kind);
+            statuses[i] = @tagName(relation.status);
+            mapped[i] = relation.mapped_to;
         }
         _ = try conn.exec(
             \\INSERT INTO relation (graph_id, name, description, cardinality, opposes, object_kind, status, mapped_to)

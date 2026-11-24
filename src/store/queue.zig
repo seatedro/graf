@@ -17,18 +17,18 @@ pub fn ensureGraph(s: *Store, name: []const u8) !Id {
     const id = try store.idFromPg(try row.get([]const u8, 0));
     try row.deinit();
 
-    const preds = core.ontology.core_relations;
-    var names: [preds.len][]const u8 = undefined;
-    var descriptions: [preds.len][]const u8 = undefined;
-    var cardinalities: [preds.len][]const u8 = undefined;
-    var opposes: [preds.len]?[]const u8 = undefined;
-    var object_kinds: [preds.len][]const u8 = undefined;
-    for (preds, 0..) |p, i| {
-        names[i] = p.name;
-        descriptions[i] = p.description;
-        cardinalities[i] = @tagName(p.cardinality);
-        opposes[i] = p.opposes;
-        object_kinds[i] = @tagName(p.object_kind);
+    const relations = core.ontology.core_relations;
+    var names: [relations.len][]const u8 = undefined;
+    var descriptions: [relations.len][]const u8 = undefined;
+    var cardinalities: [relations.len][]const u8 = undefined;
+    var opposes: [relations.len]?[]const u8 = undefined;
+    var object_kinds: [relations.len][]const u8 = undefined;
+    for (relations, 0..) |relation, i| {
+        names[i] = relation.name;
+        descriptions[i] = relation.description;
+        cardinalities[i] = @tagName(relation.cardinality);
+        opposes[i] = relation.opposes;
+        object_kinds[i] = @tagName(relation.object_kind);
     }
     _ = try conn.exec(
         \\INSERT INTO relation (graph_id, name, description, cardinality, opposes, object_kind, status)
