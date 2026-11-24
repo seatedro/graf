@@ -1056,10 +1056,10 @@ test "normalizer folds punctuation, case, and apostrophes" {
     try testing.expectEqualStrings("pg zig", try normalize(arena, "pg_zig"));
     try testing.expectEqualStrings("karlseguins driver", try normalize(arena, "karlseguin's  driver"));
     try testing.expectEqualStrings("karlseguins driver", try normalize(arena, "karlseguin\u{2019}s driver"));
-    try testing.expectEqualStrings("acme box", try normalize(arena, "acme-box"));
-    try testing.expectEqualStrings("acme", try normalize(arena, "Acme"));
-    try testing.expectEqualStrings("acme labs monorepo", try normalize(arena, "acme-labs/monorepo"));
-    try testing.expectEqualStrings("gpt 4 1 mini", try normalize(arena, "gpt-4.1-mini"));
+    try testing.expectEqualStrings("brackwater buoy", try normalize(arena, "brackwater-buoy"));
+    try testing.expectEqualStrings("brackwater", try normalize(arena, "Brackwater"));
+    try testing.expectEqualStrings("brackwater harbor ops", try normalize(arena, "brackwater/harbor-ops"));
+    try testing.expectEqualStrings("surge net 2 0 lite", try normalize(arena, "surge-net-2.0-lite"));
     try testing.expectEqualStrings("", try normalize(arena, " -- "));
 }
 
@@ -1075,7 +1075,7 @@ test "relations and values match through the equivalence rules" {
     try testing.expectEqual(@as(u8, 1), try valueMatch(arena, "COPY", "COPY support"));
     try testing.expectEqual(@as(u8, 2), try valueMatch(arena, "2026-12-03", "December 3, 2026"));
     try testing.expectEqual(@as(u8, 0), try valueMatch(arena, "pipelining", "COPY"));
-    try testing.expect(containsWord("Potion uses Go.", "Go"));
+    try testing.expect(containsWord("Quayline uses Go.", "Go"));
     try testing.expect(!containsWord("Google", "Go"));
     try testing.expect(typesCompatible(.software, .software));
     try testing.expect(!typesCompatible(.organization, .software));
@@ -1129,18 +1129,18 @@ test "an unmerged duplicate entity costs entity precision and the expected merge
 test "merging an organization with its tool is a cross-type merge" {
     const f = try Fixture.init();
     defer f.deinit();
-    f.entity("ent_acmebox").merged_into = "ent_acme";
+    f.entity("ent_buoy").merged_into = "ent_brackwater";
     const report = try f.score();
     try testing.expectEqual(@as(u32, 1), report.metrics.cross_type_merges.?);
     try expectGate(report, "cross_type_merges", .fail);
-    try testing.expect(Fixture.hasFinding(report, "ent_acme and ent_acmebox must not merge"));
+    try testing.expect(Fixture.hasFinding(report, "ent_brackwater and ent_buoy must not merge"));
     try testing.expect(!report.metrics.passes());
 }
 
 test "an alias that swallows a different-type gold entity is a cross-type merge" {
     const f = try Fixture.init();
     defer f.deinit();
-    f.entity("ent_acme").aliases = &.{"acme-box"};
+    f.entity("ent_brackwater").aliases = &.{"brackwater-buoy"};
     const report = try f.score();
     try testing.expectEqual(@as(u32, 1), report.metrics.cross_type_merges.?);
 }
@@ -1148,9 +1148,9 @@ test "an alias that swallows a different-type gold entity is a cross-type merge"
 test "retracting a fact that changed fails invalidation" {
     const f = try Fixture.init();
     defer f.deinit();
-    const marco = f.fact("f_tollgate_oncall_marco");
-    marco.end_kind = .retracted;
-    marco.known.upper = marco.valid.upper;
+    const hollis = f.fact("f_mooring_oncall_hollis");
+    hollis.end_kind = .retracted;
+    hollis.known.upper = hollis.valid.upper;
     const report = try f.score();
     try testing.expectEqual(@as(u32, 2), report.detail.invalidation_tp);
     try testing.expectEqual(@as(u32, 1), report.detail.invalidation_fp);
@@ -1162,14 +1162,14 @@ test "retracting a fact that changed fails invalidation" {
 test "a historical backfill that clobbers current state fails" {
     const f = try Fixture.init();
     defer f.deinit();
-    const elena = f.fact("f_tollgate_oncall_elena");
-    elena.valid.upper = try time.parseRfc3339("2026-11-21T20:00:00Z");
-    elena.end_kind = .changed;
-    const priya = f.fact("f_tollgate_oncall_priya");
-    priya.valid.upper = null;
-    priya.end_kind = null;
+    const juno = f.fact("f_mooring_oncall_juno");
+    juno.valid.upper = try time.parseRfc3339("2026-11-21T20:00:00Z");
+    juno.end_kind = .changed;
+    const tamsin = f.fact("f_mooring_oncall_tamsin");
+    tamsin.valid.upper = null;
+    tamsin.end_kind = null;
     const report = try f.score();
-    try testing.expect(Fixture.hasFinding(report, "f_tollgate_oncall_elena must remain active"));
+    try testing.expect(Fixture.hasFinding(report, "f_mooring_oncall_juno must remain active"));
     try testing.expectEqual(@as(u32, 1), report.detail.invalidation_fp);
     try expectGate(report, "temporal_accuracy", .fail);
     try testing.expect(!report.metrics.passes());
@@ -1178,12 +1178,12 @@ test "a historical backfill that clobbers current state fails" {
 test "a leaked secret fails the secret gate" {
     const f = try Fixture.init();
     defer f.deinit();
-    const leaked = [_]ScannedText{.{ .location = "fact.text", .text = "key is tg_live_SUPERSECRETKEY0123456789abcdef" }};
+    const leaked = [_]ScannedText{.{ .location = "fact.text", .text = "key is mr_live_7Qk2Vx9Lp4Rt8Wz3Hn6Jb1Ys5Dc0FgAe" }};
     f.state.scanned = try std.mem.concat(f.alloc(), ScannedText, &.{ f.state.scanned.?, &leaked });
     const report = try f.score();
     try testing.expectEqual(@as(u32, 2), report.metrics.secret_leaks.?);
     try expectGate(report, "secret_leaks", .fail);
-    for (report.findings) |msg| try testing.expect(std.mem.indexOf(u8, msg, "SUPERSECRET") == null);
+    for (report.findings) |msg| try testing.expect(std.mem.indexOf(u8, msg, "7Qk2Vx9Lp4Rt8Wz3") == null);
 }
 
 test "facts from a skip entry are false positives" {
@@ -1192,10 +1192,10 @@ test "facts from a skip entry are false positives" {
     try f.addEntity(.{ .key = "neo", .name = "Neo4j", .type = .software });
     try f.addFact(.{
         .key = "bad",
-        .subject = "ent_graf",
+        .subject = "ent_brinelog",
         .relation = "uses",
         .object = .{ .entity = "neo" },
-        .text = "graf uses Neo4j",
+        .text = "brinelog uses Neo4j",
         .evidence = &.{.{ .entry = "e14", .kind = .stated }},
     });
     const report = try f.score();
@@ -1210,10 +1210,10 @@ test "a refuted claim is forgiven only when it is retracted" {
     try f.addEntity(.{ .key = "go", .name = "Go", .type = .software });
     try f.addFact(.{
         .key = "go-fact",
-        .subject = "ent_potion",
+        .subject = "ent_quayline",
         .relation = "uses",
         .object = .{ .entity = "go" },
-        .text = "Potion uses Go",
+        .text = "Quayline uses Go",
         .end_kind = .retracted,
         .known = .{ .lower = 1, .upper = 2 },
         .evidence = &.{.{ .entry = "e07", .kind = .stated }},
@@ -1227,7 +1227,7 @@ test "a refuted claim is forgiven only when it is retracted" {
     go.known.upper = null;
     const active = try f.score();
     try testing.expectEqual(@as(u32, 1), active.detail.fact_fp);
-    try testing.expect(Fixture.hasFinding(active, "forbidden fact 'Potion uses Go'"));
+    try testing.expect(Fixture.hasFinding(active, "forbidden fact 'Quayline uses Go'"));
 }
 
 test "a restatement that inserts a second row is a duplicate" {
@@ -1235,22 +1235,22 @@ test "a restatement that inserts a second row is a duplicate" {
     defer f.deinit();
     try f.addFact(.{
         .key = "again",
-        .subject = "ent_graf",
+        .subject = "ent_brinelog",
         .relation = "depends_on",
         .object = .{ .entity = "ent_postgres" },
-        .text = "graf depends on Postgres",
+        .text = "brinelog depends on Postgres",
         .evidence = &.{.{ .entry = "e15", .kind = .stated }},
     });
     const report = try f.score();
     try testing.expectEqual(@as(u32, 1), report.detail.fact_fp);
-    try testing.expect(Fixture.hasFinding(report, "duplicated f_graf_uses_pg"));
+    try testing.expect(Fixture.hasFinding(report, "duplicated f_brinelog_uses_pg"));
 }
 
 test "a valid_from three days off fails temporal grounding" {
     const f = try Fixture.init();
     defer f.deinit();
-    const elena = f.fact("f_tollgate_oncall_elena");
-    elena.valid.lower = elena.valid.lower.? + 3 * time.us_per_day;
+    const juno = f.fact("f_mooring_oncall_juno");
+    juno.valid.lower = juno.valid.lower.? + 3 * time.us_per_day;
     const report = try f.score();
     try testing.expectEqual(@as(u32, 6), report.detail.temporal_correct);
     try expectGate(report, "temporal_accuracy", .fail);
@@ -1260,8 +1260,8 @@ test "retrieval misses and excluded hits are counted" {
     const f = try Fixture.init();
     defer f.deinit();
     const results = @constCast(f.state.retrieval.?);
-    results[0].hits = &.{ .{ .fact = "f_tollgate_oncall_marco" }, .{ .fact = "f_tollgate_oncall_priya" } };
-    results[5].hits = &.{ .{ .fact = "f_potion_uses_rust" }, .{ .fact = "f_potion_uses_axum", .text = "Potion uses axum, not actix" } };
+    results[0].hits = &.{ .{ .fact = "f_mooring_oncall_hollis" }, .{ .fact = "f_mooring_oncall_tamsin" } };
+    results[5].hits = &.{ .{ .fact = "f_quayline_uses_elixir" }, .{ .fact = "f_quayline_uses_bandit", .text = "Quayline uses Bandit, not Cowboy" } };
     const report = try f.score();
     try testing.expectEqual(@as(u32, 12), report.detail.retrieval_found);
     try testing.expectEqual(@as(u32, 3), report.detail.retrieval_exclusion_violations.?);

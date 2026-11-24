@@ -2,7 +2,7 @@
 
 A 20-entry labeled suite that replays a realistic multi-harness timeline into a fresh graph and scores the result against gold labels. A release ships only when every gate below passes.
 
-All names in the suite are fictional or public: `Acme` is a made-up organization, `acme-box` its sandbox software, `Tollgate` a made-up LLM gateway, and `lighthouse` a made-up devbox. The API key in `e18` is fake and exists only so the redactor has something to remove.
+All names in the suite are fictional or public: `Brackwater` is a made-up ferry operator, `brackwater-buoy` its buoy firmware, `Mooring` its berth booking service, `brinelog` and `quayline` the projects of a made-up developer, and `kittiwake` a made-up field box. The API key in `e18` is fake and exists only so the redactor has something to remove.
 
 ## Files
 
@@ -58,7 +58,7 @@ Any piece of the pipeline that is not built yet reports its gates as unmeasured 
 
 ## How each metric is scored
 
-**Name matching.** Names and aliases are normalized before comparison: ASCII letters are lowercased, apostrophes are dropped (`karlseguin's` becomes `karlseguins`), every other ASCII punctuation or whitespace run becomes one space, and the result is trimmed. So `pg.zig`, `pg-zig`, and `pg_zig` all become `pg zig`, while `Acme` and `acme-box` stay distinct.
+**Name matching.** Names and aliases are normalized before comparison: ASCII letters are lowercased, apostrophes are dropped (`karlseguin's` becomes `karlseguins`), every other ASCII punctuation or whitespace run becomes one space, and the result is trimmed. So `pg.zig`, `pg-zig`, and `pg_zig` all become `pg zig`, while `Brackwater` and `brackwater-buoy` stay distinct.
 
 **Mapping graph entities to gold.** A graph entity maps to the first gold entity whose name or alias equals one of its own names (its name first, then its aliases), provided the types are compatible. Compatible types share a class: person; organization; project, repository, code, software, AI model, or environment; dataset or document; decision, task, change, session, run, problem, or event; concept. `other` is compatible with everything. Entities are followed through `merged_into` to their surviving entity, and a survivor takes its own label or, failing that, the first label among the entities merged into it.
 
@@ -118,7 +118,7 @@ The source key is `(harness, source_id)`, and `seq` becomes `seq_in_source`.
 - Extraction of several facts per entry: `e01` to `e03`.
 - Entries with no durable knowledge: `e04` (test output) and `e14` (brainstorming).
 - Deduplication by alias and across projects: `e05`, `e08`, `e19`.
-- Merge traps: `Acme` (organization) against `acme-box` (software) in `e09`, and `fx` (software) against the FX dataset in `e20`.
+- Merge traps: `Brackwater` (organization) against `brackwater-buoy` (software) in `e09`, and `fx` (software) against the FX dataset in `e20`.
 - State changes: `e06` (on-call handoff), `e10` (opposed relation), `e11` (setting change).
 - Corrections: `e07` (refuted claim) and `e13` (self-correction within one entry).
 - Historical backfill that must not end current state: `e12`.
