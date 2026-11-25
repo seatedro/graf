@@ -54,7 +54,13 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
     try warnings.appendSlice(a, cs.warnings);
 
     try insertEntities(a, conn, gid, seq, &cs, &touched_entities);
-    for (cs.merges) |*m| try applyMerge(s, a, conn, gid, seq, m, &touched_entities, &touched_facts);
+    var applied_merges: std.ArrayList(core.ChangeSet.Merge) = .empty;
+    for (0..cs.merges.len) |k| {
+        const m = try orientMerge(s, a, conn, gid, &cs, k, &warnings) orelse continue;
+        try applyMerge(s, a, conn, gid, seq, &m, &touched_entities, &touched_facts);
+        try applied_merges.append(a, m);
+    }
+    cs.merges = applied_merges.items;
     try insertFacts(a, conn, gid, seq, commit_ts, cs.new_facts, &touched_facts);
 
     if (cs.restatements.len != 0) {
@@ -270,6 +276,86 @@ fn insertEntities(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i6
             \\ON CONFLICT DO NOTHING
         , .{ gid, alias_norms.items, alias_ids.items, alias_texts.items });
     }
+}
+
+pub const max_merge_facts = 100;
+
+const MergeSide = struct { created_seq: i64, facts: i64 };
+
+fn mergeSide(conn: *pg.Conn, gid: []const u8, id: *const Id) !?MergeSide {
+    var row = (try conn.row(
+        \\SELECT e.created_seq,
+        \\  (SELECT count(*) FROM fact f WHERE f.graph_id = $1 AND (f.subject_id = e.id OR f.object_id = e.id))
+        \\FROM entity e WHERE e.id = $2 AND e.graph_id = $1 AND e.merged_into IS NULL
+    , .{ gid, @as([]const u8, &id.bytes) })) orelse return null;
+    defer row.deinit() catch {};
+
+    return .{ .created_seq = try row.get(i64, 0), .facts = try row.get(i64, 1) };
+}
+
+fn orientMerge(s: *Store, a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, cs: *core.ChangeSet, k: usize, warnings: *std.ArrayList([]const u8)) !?core.ChangeSet.Merge {
+    const m = cs.merges[k];
+    if (m.from.eql(m.into)) return null;
+
+    var fbuf: [36]u8 = undefined;
+    var ibuf: [36]u8 = undefined;
+    const from = try mergeSide(conn, gid, &m.from);
+    const into = try mergeSide(conn, gid, &m.into);
+    if (from == null or into == null) {
+        try warnings.append(a, try std.fmt.allocPrint(a, "merge of {s} into {s} skipped: an entity is missing or already merged", .{ m.from.toString(&fbuf), m.into.toString(&ibuf) }));
+        return null;
+    }
+
+    const f = from.?;
+    const i = into.?;
+    if (@min(f.facts, i.facts) > max_merge_facts) {
+        try warnings.append(a, try std.fmt.allocPrint(a, "merge of {s} into {s} skipped: both hold more than {d} facts", .{ m.from.toString(&fbuf), m.into.toString(&ibuf), max_merge_facts }));
+        const dup_id = Id.v7(s.io);
+        _ = try conn.exec(
+            \\INSERT INTO possible_duplicate (id, graph_id, entity_a, entity_b, score) VALUES ($1, $2, $3, $4, 1)
+        , .{ @as([]const u8, &dup_id.bytes), gid, @as([]const u8, &m.from.bytes), @as([]const u8, &m.into.bytes) });
+        return null;
+    }
+
+    const swap = f.facts > i.facts or (f.facts == i.facts and f.created_seq < i.created_seq);
+    if (!swap) return m;
+
+    try redirect(a, cs, m.into, m.from);
+    return .{ .from = m.into, .into = m.from, .reason = m.reason };
+}
+
+fn redirect(a: std.mem.Allocator, cs: *core.ChangeSet, old: Id, new: Id) !void {
+    const to = struct {
+        fn f(id: Id, o: Id, n: Id) Id {
+            return if (id.eql(o)) n else id;
+        }
+    }.f;
+
+    const facts = try a.dupe(core.ChangeSet.NewFact, cs.new_facts);
+    for (facts) |*nf| {
+        nf.fact.subject_id = to(nf.fact.subject_id, old, new);
+        switch (nf.fact.object) {
+            .entity => |o| nf.fact.object = .{ .entity = to(o, old, new) },
+            .value => {},
+        }
+    }
+
+    const mentions = try a.dupe(Id, cs.mentions);
+    for (mentions) |*id| id.* = to(id.*, old, new);
+
+    const aliases = try a.dupe(core.ChangeSet.Alias, cs.new_aliases);
+    for (aliases) |*al| al.entity_id = to(al.entity_id, old, new);
+
+    const merges = try a.dupe(core.ChangeSet.Merge, cs.merges);
+    for (merges) |*m| {
+        m.from = to(m.from, old, new);
+        m.into = to(m.into, old, new);
+    }
+
+    cs.new_facts = facts;
+    cs.mentions = mentions;
+    cs.new_aliases = aliases;
+    cs.merges = merges;
 }
 
 fn applyMerge(s: *Store, a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, m: *const core.ChangeSet.Merge, touched_entities: *std.ArrayList([]const u8), touched_facts: *std.ArrayList([]const u8)) !void {

@@ -671,3 +671,71 @@ test "backfill entries claim after live ones, never block them, and stop at the 
     try testing.expect(second.entry_id.eql(old_id));
     try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM entry WHERE graph_id = $1 AND backfill", .{@as([]const u8, &g.bytes)}));
 }
+
+test "a merge keeps the entity with more facts and leaves two established entities apart" {
+    var s = try store.testing.open();
+    defer s.close();
+    const g = try store.testing.freshGraph(&s);
+    const gid: []const u8 = &g.bytes;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const t0: i64 = 1_763_000_000_000_000;
+
+    const big = entity(&s, "kestrel", .software);
+    const small = entity(&s, "kestrel cli", .software);
+    const osprey = entity(&s, "osprey", .software);
+    const osprey_twin = entity(&s, "osprey service", .software);
+    const e1 = emb(21);
+    const old_small = newFact(&s, g, small.id, "uses", .{ .value = "sqlite" }, "kestrel cli uses sqlite.", t0, &e1);
+
+    const en1 = try enqueueNew(&s, g, note("direction", "entry one", t0));
+    const l1 = (try s.claim(a, g, "w")).?;
+    try testing.expect(l1.entry_id.eql(en1));
+    const cs1: core.ChangeSet = .{
+        .base_seq = 0,
+        .new_entities = &.{ big, small, osprey, osprey_twin },
+        .new_facts = &.{
+            newFact(&s, g, big.id, "uses", .{ .value = "zig" }, "kestrel uses zig.", t0, &e1),
+            newFact(&s, g, big.id, "uses", .{ .value = "postgres" }, "kestrel uses postgres.", t0, &e1),
+            old_small,
+        },
+    };
+    try stage(&s, l1, &cs1);
+    try testing.expectEqual(@as(i64, 1), (try s.commit(l1, &cs1, null)).committed.seq);
+
+    for ([_]Id{ osprey.id, osprey_twin.id }) |owner| _ = try s.pool.exec(
+        \\INSERT INTO fact (id, graph_id, subject_id, relation, object_value, text, scope, valid, known, author, confidence, emb, created_seq)
+        \\SELECT gen_random_uuid(), $1, $2, 'uses', 'dep ' || n, 'uses dep ' || n, 'project', tstzrange(now(), NULL), tstzrange(now(), NULL),
+        \\  'user', 0.9, array_fill(0.1::real, ARRAY[512])::vector(512)::halfvec(512), 1
+        \\FROM generate_series(1, $3::int) n
+    , .{ gid, @as([]const u8, &owner.bytes), @as(i32, store.max_merge_facts + 1) });
+
+    const new_small = newFact(&s, g, small.id, "uses", .{ .value = "duckdb" }, "kestrel cli uses duckdb.", t0 + day, &e1);
+    const en2 = try enqueueNew(&s, g, note("direction", "entry two", t0 + day));
+    const l2 = (try s.claim(a, g, "w")).?;
+    try testing.expect(l2.entry_id.eql(en2));
+    const cs2: core.ChangeSet = .{
+        .base_seq = 1,
+        .merges = &.{
+            .{ .from = big.id, .into = small.id, .reason = "exact alias match" },
+            .{ .from = osprey_twin.id, .into = osprey.id, .reason = "exact alias match" },
+        },
+        .new_facts = &.{new_small},
+        .mentions = &.{small.id},
+    };
+    try stage(&s, l2, &cs2);
+    try testing.expectEqual(@as(i64, 2), (try s.commit(l2, &cs2, null)).committed.seq);
+
+    const big_id: []const u8 = &big.id.bytes;
+    const small_id: []const u8 = &small.id.bytes;
+    try testing.expectEqual(@as(i64, 0), try scalarI64(&s, "SELECT count(*) FROM entity WHERE id = $1 AND merged_into IS NOT NULL", .{big_id}));
+    try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM entity WHERE id = $1 AND merged_into = $2", .{ small_id, big_id }));
+    try testing.expectEqual(@as(i64, 4), try scalarI64(&s, "SELECT count(*) FROM fact WHERE subject_id = $1", .{big_id}));
+    try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT cardinality(moved_facts)::int8 FROM merge_log WHERE graph_id = $1 AND from_id = $2 AND into_id = $3", .{ gid, small_id, big_id }));
+    try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM entity_mention WHERE entity_id = $1 AND entry_id = $2", .{ big_id, @as([]const u8, &en2.bytes) }));
+
+    try testing.expectEqual(@as(i64, 0), try scalarI64(&s, "SELECT count(*) FROM entity WHERE graph_id = $1 AND merged_into IS NOT NULL AND id IN ($2, $3)", .{ gid, @as([]const u8, &osprey.id.bytes), @as([]const u8, &osprey_twin.id.bytes) }));
+    try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM possible_duplicate WHERE graph_id = $1 AND entity_a = $2 AND entity_b = $3", .{ gid, @as([]const u8, &osprey_twin.id.bytes), @as([]const u8, &osprey.id.bytes) }));
+    try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM entry WHERE id = $1 AND warnings::text LIKE '%both hold more than%'", .{@as([]const u8, &en2.bytes)}));
+}

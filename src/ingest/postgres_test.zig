@@ -6,6 +6,9 @@ const postgres = @import("postgres.zig");
 const jobs = @import("jobs.zig");
 const workers = @import("workers.zig");
 const rebase = @import("rebase.zig");
+const ingest = @import("mod.zig");
+const extract = @import("extract.zig");
+const resolve = @import("resolve.zig");
 
 const testing = std.testing;
 const Id = core.Id;
@@ -110,11 +113,12 @@ test "ingest SQL runs against the store schema" {
     });
 
     try testing.expectEqual(@as(i64, 1), pre.base_seq);
-    var alias_hit = false;
+    var via: []const []const u8 = &.{};
     for (pre.entities) |e| if (e.item == 0 and e.id.eql(cache)) {
-        alias_hit = e.alias_match;
+        via = e.via;
     };
-    try testing.expect(alias_hit);
+    try testing.expectEqual(@as(usize, 1), via.len);
+    try testing.expectEqualStrings("brackwater cache service", via[0]);
 
     try testing.expect(pre.facts.len >= 1);
     try testing.expect(pre.facts[0].id.eql(fact));
@@ -166,4 +170,68 @@ test "ingest SQL runs against the store schema" {
     try testing.expectEqual(@as(i32, 1), try scalar(i32, conn, "SELECT entries FROM relation WHERE graph_id = $1::uuid AND name = 'chose'", .{t[0]}));
 
     _ = try workers.tryLead(conn);
+}
+
+const snowball_seed_sql =
+    \\WITH g AS (INSERT INTO graph (id, name) VALUES ($1::uuid, $1::text) RETURNING id),
+    \\e AS (
+    \\  INSERT INTO entity (id, graph_id, name, norm, type, name_emb, created_seq, updated_seq)
+    \\  SELECT x.id, g.id, x.name, x.norm, x.type, array_fill(0.1::real, ARRAY[512])::vector(512)::halfvec(512), 1, 1
+    \\  FROM g, (VALUES ($2::uuid, 'kestrel', 'kestrel', 'environment'), ($3::uuid, 'kestrel', 'kestrel', 'repository'),
+    \\    ($4::uuid, 'Lark', 'lark', 'software'), ($5::uuid, 'Plover', 'plover', 'software')) AS x(id, name, norm, type)
+    \\  RETURNING id, graph_id, norm)
+    \\INSERT INTO entity_alias (graph_id, norm, entity_id, alias)
+    \\SELECT graph_id, norm, id, norm FROM e
+    \\UNION ALL SELECT graph_id, 'app', id, 'app' FROM e WHERE norm IN ('lark', 'plover')
+;
+
+test "prefetched exact hits never let an other-typed mention or a generic alias merge existing entities" {
+    var s = try store.testing.open();
+    defer s.close();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = testing.io;
+
+    const graph, const box, const repo, const lark, const plover = ids(io, 5);
+    var bufs: [5][36]u8 = undefined;
+    const conn = try s.pool.acquire();
+    defer conn.release();
+    _ = conn.exec(snowball_seed_sql, .{ graph.toString(&bufs[0]), box.toString(&bufs[1]), repo.toString(&bufs[2]), lark.toString(&bufs[3]), plover.toString(&bufs[4]) }) catch |err| {
+        if (conn.err) |e| std.debug.print("seed: {s}\n", .{e.message});
+        return err;
+    };
+
+    var b: postgres.PgBackend = .{ .store = &s, .graph_id = graph, .io = io };
+    const emb = try arena.alloc(f32, 512);
+    @memset(emb, 0.1);
+
+    const raw: ingest.ExtractResult = .{
+        .skip = null,
+        .entities = &.{
+            .{ .ref = "n1", .name = "kestrel", .type = .other, .aliases = &.{}, .description = "" },
+            .{ .ref = "n2", .name = "Harrier", .type = .software, .aliases = &.{"app"}, .description = "" },
+        },
+        .facts = &.{},
+        .new_relations = &.{},
+    };
+    const checked = try extract.check(arena, raw, "kestrel runs the Harrier app", 0);
+
+    const pre = try b.prefetch(arena, .{
+        .entity_norms = &.{ &.{"kestrel"}, &.{ "harrier", "app" } },
+        .entity_embs = &.{ emb, emb },
+        .fact_subject = &.{},
+        .fact_object = &.{},
+        .fact_relations = &.{},
+        .fact_opposed = &.{},
+        .fact_embs = &.{},
+        .fact_texts = &.{},
+    });
+    const p = try resolve.plan(arena, checked, pre);
+
+    const linked = p.entities[0].decision.existing;
+    try testing.expect(linked.eql(box) or linked.eql(repo));
+    try testing.expectEqual(@as(usize, 0), p.entities[0].absorb.len);
+    try testing.expectEqual(resolve.EntityDecision.ask, p.entities[1].decision);
+    try testing.expectEqual(@as(usize, 0), p.entities[1].absorb.len);
 }

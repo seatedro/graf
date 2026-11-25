@@ -79,8 +79,11 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
         var match: ?Id = null;
         for (touched.entities) |t| {
             if (t.merged_into != null or !rules.compatible(ne.type, t.type)) continue;
-            var hit = hasNorm(norms.items, t.norm);
-            for (t.aliases) |a| hit = hit or hasNorm(norms.items, a);
+            var hit = std.mem.eql(u8, ne.norm, t.norm);
+            for (norms.items) |n| {
+                if (!rules.specificAlias(n)) continue;
+                hit = hit or std.mem.eql(u8, n, t.norm) or hasNorm(t.aliases, n);
+            }
             if (hit) {
                 match = t.id;
                 break;
@@ -390,4 +393,32 @@ test "rebase follows concurrent merges and records gray-band duplicates" {
     try testing.expectEqual(@as(usize, 1), cs.new_entities.len);
     try testing.expectEqual(@as(usize, 1), out.possible_duplicates.len);
     try testing.expect(out.possible_duplicates[0].b.eql(lookalike));
+}
+
+test "rebase folds a new entity only through its name or a specific alias" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const generic = testId(20);
+    const named = testId(21);
+    const lark = testId(22);
+    const plover = testId(23);
+    var cs: ChangeSet = .{
+        .base_seq = 1,
+        .new_entities = &.{
+            .{ .id = generic, .name = "Harrier", .norm = "harrier", .type = .software, .aliases = &.{ "app", "v2" } },
+            .{ .id = named, .name = "Plover", .norm = "plover", .type = .software },
+        },
+        .mentions = &.{ generic, named },
+    };
+
+    _ = try apply(arena, &cs, .{ .entities = &.{
+        .{ .id = lark, .name = "Lark", .norm = "lark", .type = .software, .aliases = &.{ "lark", "app", "v2" } },
+        .{ .id = plover, .name = "plover", .norm = "plover", .type = .software, .aliases = &.{"plover"} },
+    } }, 10, 5);
+
+    try testing.expectEqual(@as(usize, 1), cs.new_entities.len);
+    try testing.expect(cs.new_entities[0].id.eql(generic));
+    try testing.expect(cs.mentions[1].eql(plover));
 }

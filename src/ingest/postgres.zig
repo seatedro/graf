@@ -100,22 +100,23 @@ pub const prefetch_sql =
     \\  SELECT item, norm FROM unnest($3::int[], $4::text[]) AS n(item, norm)
     \\),
     \\hits AS (
-    \\  SELECT en.item, COALESCE(x.merged_into, x.id) AS id, true AS alias
+    \\  SELECT en.item, COALESCE(x.merged_into, x.id) AS id, en.norm AS via
     \\  FROM ent_norms en JOIN entity_alias a ON a.graph_id = $2::uuid AND a.norm = en.norm JOIN entity x ON x.id = a.entity_id
     \\  UNION ALL
-    \\  SELECT en.item, COALESCE(x.merged_into, x.id), true
+    \\  SELECT en.item, COALESCE(x.merged_into, x.id), en.norm
     \\  FROM ent_norms en JOIN entity x ON x.graph_id = $2::uuid AND x.norm = en.norm
     \\  UNION ALL
-    \\  SELECT ei.item, k.id, false FROM ent_in ei CROSS JOIN LATERAL (
+    \\  SELECT ei.item, k.id, NULL FROM ent_in ei CROSS JOIN LATERAL (
     \\    SELECT x.id FROM entity x WHERE x.graph_id = $2::uuid AND x.merged_into IS NULL AND x.name_emb IS NOT NULL
     \\    ORDER BY x.name_emb <=> ei.emb LIMIT 5) k
     \\  UNION ALL
-    \\  SELECT en.item, COALESCE(x.merged_into, x.id), false FROM ent_norms en CROSS JOIN LATERAL (
+    \\  SELECT en.item, COALESCE(x.merged_into, x.id), NULL FROM ent_norms en CROSS JOIN LATERAL (
     \\    SELECT a.entity_id FROM entity_alias a WHERE a.graph_id = $2::uuid AND a.norm % en.norm
     \\    ORDER BY similarity(a.norm, en.norm) DESC LIMIT 5) t JOIN entity x ON x.id = t.entity_id
     \\),
     \\ent_out AS (
-    \\  SELECT h.item, x.id, x.name, x.norm, x.type, bool_or(h.alias) AS alias_match,
+    \\  SELECT h.item, x.id, x.name, x.norm, x.type,
+    \\         COALESCE(array_agg(DISTINCT h.via) FILTER (WHERE h.via IS NOT NULL), '{}') AS via,
     \\         CASE WHEN x.name_emb IS NULL THEN 0 ELSE 1 - (x.name_emb <=> ei.emb) END AS cosine
     \\  FROM hits h JOIN entity x ON x.id = h.id AND x.merged_into IS NULL JOIN ent_in ei ON ei.item = h.item
     \\  GROUP BY h.item, x.id, x.name, x.norm, x.type, x.name_emb, ei.emb
@@ -127,7 +128,7 @@ pub const prefetch_sql =
     \\  FROM req, jsonb_array_elements(r->'facts') WITH ORDINALITY f(value, ord)
     \\),
     \\linked AS (
-    \\  SELECT item, id FROM ent_out WHERE alias_match OR cosine >= 0.70
+    \\  SELECT item, id FROM ent_out WHERE cardinality(via) > 0 OR cosine >= 0.70
     \\),
     \\fact_hits AS (
     \\  SELECT fi.item, f.id FROM fact_in fi JOIN linked l ON l.item = fi.subject

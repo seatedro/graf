@@ -17,9 +17,27 @@ pub const CandidateEntity = struct {
     name: []const u8,
     norm: []const u8,
     type: core.EntityType,
-    alias_match: bool = false,
+    via: []const []const u8 = &.{},
     cosine: f32 = 0,
+
+    fn exactHit(c: CandidateEntity, mention_norm: []const u8) bool {
+        for (c.via) |v| {
+            if (rules.specificAlias(v)) return true;
+            if (std.mem.eql(u8, v, mention_norm) and std.mem.eql(u8, v, c.norm)) return true;
+        }
+        return false;
+    }
+
+    fn sharesSpecific(a: CandidateEntity, b: CandidateEntity) bool {
+        for (a.via) |v| if (rules.specificAlias(v) and hasNorm(b.via, v)) return true;
+        return false;
+    }
 };
+
+fn hasNorm(list: []const []const u8, n: []const u8) bool {
+    for (list) |x| if (std.mem.eql(u8, x, n)) return true;
+    return false;
+}
 
 pub const CandidateFact = struct {
     item: u32,
@@ -217,7 +235,10 @@ fn candidatesFor(arena: Allocator, prefetch: Prefetch, item: usize) Allocator.Er
     outer: for (prefetch.entities) |c| {
         if (c.item != item) continue;
         for (out.items) |*prev| if (prev.id.eql(c.id)) {
-            prev.alias_match = prev.alias_match or c.alias_match;
+            var via: std.ArrayList([]const u8) = .empty;
+            try via.appendSlice(arena, prev.via);
+            for (c.via) |v| if (!hasNorm(via.items, v)) try via.append(arena, v);
+            prev.via = via.items;
             prev.cosine = @max(prev.cosine, c.cosine);
             continue :outer;
         };
@@ -233,15 +254,15 @@ fn planEntity(arena: Allocator, e: ingest.ExtractedEntity, item: usize, prefetch
     const e_norm = try core.text.norm(arena, e.name);
 
     var winner: ?CandidateEntity = null;
-    for (cands) |c| if (c.alias_match and rules.compatible(e.type, c.type)) {
+    for (cands) |c| if (c.exactHit(e_norm) and rules.compatible(e.type, c.type)) {
         winner = c;
         break;
     };
     if (winner) |w| {
         var absorb: std.ArrayList(Id) = .empty;
         for (cands) |c| {
-            if (!c.alias_match or c.id.eql(w.id) or !rules.compatible(e.type, c.type)) continue;
-            if (rules.hardBlocked(w.type, c.type) or prefetch.isBlocked(w.id, c.id)) continue;
+            if (c.id.eql(w.id) or !rules.mergeCompatible(w.type, c.type) or prefetch.isBlocked(w.id, c.id)) continue;
+            if (!w.sharesSpecific(c) or c.cosine < rules.gray_cosine) continue;
             try appendUnique(arena, &absorb, c.id);
         }
         return .{ .decision = .{ .existing = w.id }, .absorb = absorb.items };
@@ -619,6 +640,14 @@ fn chooseRelation(
     return .{ .name = name, .rule = .{} };
 }
 
+fn heldElsewhere(prefetch: Prefetch, item: usize, id: Id, absorbed: []const Id, norm: []const u8) bool {
+    for (prefetch.entities) |c| {
+        if (c.item != item or c.id.eql(id) or containsId(absorbed, c.id)) continue;
+        if (hasNorm(c.via, norm)) return true;
+    }
+    return false;
+}
+
 const OldState = struct { fact: core.Fact, key: rules.Key, ended: bool };
 
 pub fn build(
@@ -657,7 +686,8 @@ pub fn build(
 
             for (names.items) |n| {
                 const nn = try core.text.norm(arena, n);
-                if (nn.len == 0 or std.mem.eql(u8, nn, known_norm)) continue;
+                if (nn.len == 0 or std.mem.eql(u8, nn, known_norm) or !rules.specificAlias(nn)) continue;
+                if (heldElsewhere(prefetch, i, id, entry.absorb, nn)) continue;
                 var dup = false;
                 for (new_aliases.items) |a| if (a.entity_id.eql(id) and std.mem.eql(u8, a.norm, nn)) {
                     dup = true;
@@ -673,6 +703,9 @@ pub fn build(
                 if (!seen and !from.eql(id)) try merges.append(arena, .{ .from = from, .into = id, .reason = "exact alias match" });
             }
         } else {
+            var aliases: std.ArrayList([]const u8) = .empty;
+            for (e.aliases) |a| if (rules.specificAlias(try core.text.norm(arena, a))) try aliases.append(arena, a);
+
             const id = Id.v7(ctx.io);
             final[i] = id;
             try new_entities.append(arena, .{
@@ -681,7 +714,7 @@ pub fn build(
                 .norm = try core.text.norm(arena, e.name),
                 .type = e.type,
                 .description = e.description,
-                .aliases = e.aliases,
+                .aliases = aliases.items,
                 .name_emb = if (i < vectors.entities.len) vectors.entities[i] else &.{},
             });
         }

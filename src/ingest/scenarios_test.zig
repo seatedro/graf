@@ -77,7 +77,7 @@ fn relayOncallPrefetch(item_subject: u32, item_object: u32, fact_item: u32) reso
     return .{
         .base_seq = 7,
         .entities = &.{
-            .{ .item = item_subject, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .alias_match = true, .cosine = 1.0 },
+            .{ .item = item_subject, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .via = &.{"relay"}, .cosine = 1.0 },
             .{ .item = 1, .id = hollis, .name = "Hollis", .norm = "hollis", .type = .person, .cosine = 0.55 },
         },
         .facts = &.{.{
@@ -139,8 +139,8 @@ test "a handoff that also says the previous holder rotated off ends it once and 
 
     const prefetch: resolve.Prefetch = .{
         .entities = &.{
-            .{ .item = 0, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .alias_match = true, .cosine = 1.0 },
-            .{ .item = 2, .id = hollis, .name = "Hollis", .norm = "hollis", .type = .person, .alias_match = true, .cosine = 1.0 },
+            .{ .item = 0, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .via = &.{"relay"}, .cosine = 1.0 },
+            .{ .item = 2, .id = hollis, .name = "Hollis", .norm = "hollis", .type = .person, .via = &.{"hollis"}, .cosine = 1.0 },
         },
         .facts = &.{.{
             .item = 0,
@@ -178,8 +178,8 @@ test "a handoff that also says the previous holder rotated off ends it once and 
 fn endedHollisPrefetch() resolve.Prefetch {
     return .{
         .entities = &.{
-            .{ .item = 0, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .alias_match = true, .cosine = 1.0 },
-            .{ .item = 1, .id = hollis, .name = "Hollis", .norm = "hollis", .type = .person, .alias_match = true, .cosine = 1.0 },
+            .{ .item = 0, .id = relay, .name = "Relay", .norm = "relay", .type = .software, .via = &.{"relay"}, .cosine = 1.0 },
+            .{ .item = 1, .id = hollis, .name = "Hollis", .norm = "hollis", .type = .person, .via = &.{"hollis"}, .cosine = 1.0 },
         },
         .facts = &.{.{
             .item = 0,
@@ -277,7 +277,7 @@ test "gaining a feature ends the opposed lacks_feature fact" {
         .body = "Good news: COPY support was merged into pg.zig today! So pg.zig now supports COPY.",
         .raw = .{ .skip = null, .entities = &.{ent("n1", "pg.zig", .software)}, .facts = &.{fct("n1", "supports_feature", null, "COPY", "So pg.zig now supports COPY.")}, .new_relations = &.{} },
         .prefetch = .{
-            .entities = &.{.{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .software, .alias_match = true, .cosine = 1 }},
+            .entities = &.{.{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .software, .via = &.{"pg zig"}, .cosine = 1 }},
             .facts = &.{
                 .{ .item = 0, .id = lacks, .subject_id = driver, .relation = "lacks_feature", .object_value = "COPY", .text = "pg.zig lacks COPY.", .valid_lower = at("2026-11-19T20:15:00Z"), .confidence = 0.7 },
                 .{ .item = 0, .id = pipelining, .subject_id = driver, .relation = "lacks_feature", .object_value = "pipelining", .text = "pg.zig lacks pipelining.", .valid_lower = at("2026-11-19T20:15:00Z"), .confidence = 0.7 },
@@ -308,7 +308,7 @@ test "switching a setting ends only the same qualifier" {
         .body = "Actually let's switch lantern's extraction_model setting from model-a to model-b",
         .raw = .{ .skip = null, .entities = &.{ent("n1", "Lantern", .project)}, .facts = &.{switch_fact}, .new_relations = &.{} },
         .prefetch = .{
-            .entities = &.{.{ .item = 0, .id = lantern, .name = "lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 }},
+            .entities = &.{.{ .item = 0, .id = lantern, .name = "lantern", .norm = "lantern", .type = .project, .via = &.{"lantern"}, .cosine = 1 }},
             .facts = &.{
                 .{ .item = 0, .id = old_model, .subject_id = lantern, .relation = "has_setting", .qualifier = "extraction_model", .object_value = "model-a", .text = "lantern extraction_model is model-a", .valid_lower = at("2026-11-20T21:00:00Z"), .confidence = 0.9 },
                 .{ .item = 0, .id = other_setting, .subject_id = lantern, .relation = "has_setting", .qualifier = "zig_version", .object_value = "0.17.1", .text = "lantern pins zig 0.17.1", .valid_lower = at("2026-11-18T18:00:00Z"), .confidence = 0.9 },
@@ -336,7 +336,7 @@ test "a correction the resolution call marks was_wrong retracts instead of endin
         .body = "That's wrong. Lantern uses Rust for its backend, not Go. We never used Go.",
         .raw = .{ .skip = null, .entities = &.{ ent("n1", "Lantern", .project), ent("n2", "Rust", .other) }, .facts = &.{fct("n1", "uses", "n2", null, "Lantern uses Rust for its backend, not Go")}, .new_relations = &.{} },
         .prefetch = .{
-            .entities = &.{.{ .item = 0, .id = lantern, .name = "Lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 }},
+            .entities = &.{.{ .item = 0, .id = lantern, .name = "Lantern", .norm = "lantern", .type = .project, .via = &.{"lantern"}, .cosine = 1 }},
             .facts = &.{.{ .item = 0, .id = uses_go, .subject_id = lantern, .relation = "uses", .object_id = go, .text = "Lantern uses Go for its backend.", .valid_lower = at("2026-11-20T19:00:00Z"), .confidence = 0.7, .cosine = 0.8 }},
         },
         .resolution = .{
@@ -373,8 +373,8 @@ test "restating an existing fact restates it instead of duplicating" {
         .raw = .{ .skip = null, .entities = &.{ ent("n1", "lantern", .project), ent("n2", "Postgres", .software) }, .facts = &.{fct("n1", "uses", "n2", null, "we already chose Postgres 17 for lantern")}, .new_relations = &.{} },
         .prefetch = .{
             .entities = &.{
-                .{ .item = 0, .id = lantern, .name = "Lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 },
-                .{ .item = 1, .id = pg, .name = "PostgreSQL", .norm = "postgresql", .type = .software, .alias_match = true, .cosine = 0.95 },
+                .{ .item = 0, .id = lantern, .name = "Lantern", .norm = "lantern", .type = .project, .via = &.{"lantern"}, .cosine = 1 },
+                .{ .item = 1, .id = pg, .name = "PostgreSQL", .norm = "postgresql", .type = .software, .via = &.{"postgres"}, .cosine = 0.95 },
             },
             .facts = &.{.{ .item = 0, .id = uses_pg, .subject_id = lantern, .relation = "uses", .object_id = pg, .text = "Lantern uses Postgres 17.", .valid_lower = at("2026-11-18T18:00:00Z"), .confidence = 0.9 }},
         },
@@ -404,7 +404,7 @@ test "an alias spelling merges deterministically into the existing entity" {
         .reference_time = at("2026-11-20T16:30:00Z"),
         .body = "Since pg-zig has no COPY, we'll batch commit inserts with unnest.",
         .raw = .{ .skip = null, .entities = &.{e}, .facts = &.{fct("n1", "lacks_feature", null, "COPY", "Since pg-zig has no COPY")}, .new_relations = &.{} },
-        .prefetch = .{ .entities = &.{.{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .software, .alias_match = true, .cosine = 0.97 }} },
+        .prefetch = .{ .entities = &.{.{ .item = 0, .id = driver, .name = "pg.zig", .norm = "pg zig", .type = .software, .via = &.{"pg zig"}, .cosine = 0.97 }} },
     }).run();
 
     try testing.expectEqual(@as(usize, 0), out.cs.new_entities.len);
@@ -427,7 +427,7 @@ test "same-name entities of incompatible types never merge without the model" {
         .body = "We compared the vx coding agent against the VX currency rates dataset.",
         .raw = .{ .skip = null, .entities = &.{ ent("n1", "VX currency rates", .dataset), ent("n2", "vx", .dataset) }, .facts = &.{}, .new_relations = &.{} },
         .prefetch = .{ .entities = &.{
-            .{ .item = 1, .id = vx_tool, .name = "vx", .norm = "vx", .type = .software, .alias_match = true, .cosine = 0.99 },
+            .{ .item = 1, .id = vx_tool, .name = "vx", .norm = "vx", .type = .software, .via = &.{"vx"}, .cosine = 0.99 },
         } },
     }).run();
 
@@ -450,7 +450,7 @@ test "an organization and its similarly named software stay apart, and a person 
         .raw = .{ .skip = null, .entities = &.{ ent("n1", "brackwater-box", .software), ent("n2", "Brackwater", .person) }, .facts = &.{}, .new_relations = &.{} },
         .prefetch = .{ .entities = &.{
             .{ .item = 0, .id = brackwater_org, .name = "Brackwater", .norm = "brackwater", .type = .organization, .cosine = 0.86 },
-            .{ .item = 1, .id = brackwater_org, .name = "Brackwater", .norm = "brackwater", .type = .organization, .alias_match = true, .cosine = 1.0 },
+            .{ .item = 1, .id = brackwater_org, .name = "Brackwater", .norm = "brackwater", .type = .organization, .via = &.{"brackwater"}, .cosine = 1.0 },
         } },
         .resolution = .{
             .entity_links = &.{ .{ .ref = "n1", .existing = "E1" }, .{ .ref = "n2", .existing = "E1" } },
@@ -530,7 +530,7 @@ test "one entry ends at most five existing facts" {
         .body = "lantern now uses only the new tool",
         .raw = .{ .skip = null, .entities = &.{ent("n1", "lantern", .project)}, .facts = &.{fct("n1", "uses", null, "new tool", "lantern now uses only the new tool")}, .new_relations = &.{} },
         .prefetch = .{
-            .entities = &.{.{ .item = 0, .id = subject, .name = "lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 }},
+            .entities = &.{.{ .item = 0, .id = subject, .name = "lantern", .norm = "lantern", .type = .project, .via = &.{"lantern"}, .cosine = 1 }},
             .facts = &facts,
         },
         .resolution = .{ .entity_links = &.{}, .fact_verdicts = &.{.{ .fact_index = 0, .duplicate_of = null, .contradicts = &verdicts }} },
@@ -586,7 +586,7 @@ test "decision-model probabilities become a verdict" {
     const raw: ingest.ExtractResult = .{ .skip = null, .entities = &.{ent("n1", "Lantern", .project)}, .facts = &.{fct("n1", "uses", null, "rust", "Lantern uses Rust, not Go")}, .new_relations = &.{} };
     const checked = try extract.check(arena, raw, "Lantern uses Rust, not Go", at("2026-11-21T09:00:00Z"));
     const prefetch: resolve.Prefetch = .{
-        .entities = &.{.{ .item = 0, .id = lantern, .name = "Lantern", .norm = "lantern", .type = .project, .alias_match = true, .cosine = 1 }},
+        .entities = &.{.{ .item = 0, .id = lantern, .name = "Lantern", .norm = "lantern", .type = .project, .via = &.{"lantern"}, .cosine = 1 }},
         .facts = &.{.{ .item = 0, .id = old, .subject_id = lantern, .relation = "uses", .object_value = "go", .text = "Lantern uses Go.", .valid_lower = at("2026-11-20T00:00:00Z"), .confidence = 0.7, .cosine = 0.8 }},
     };
 
@@ -647,4 +647,110 @@ test "a gray-band entity links to the candidate the decision model picks with en
     probs[options.len - 1] = 0.6;
     const apart = try resolve.verdictFromAnswers(arena, p, q.questions, &.{.{ .choice = probs }}, .{});
     try testing.expect(apart.links[0] == null);
+}
+
+test "an other-typed mention never bridges an environment and a repository that share its name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const box = id(60);
+    const repo = id(61);
+
+    const out = try (Scenario{
+        .arena = arena,
+        .reference_time = at("2026-11-23T03:00:00Z"),
+        .body = "kestrel is acting up again.",
+        .raw = .{ .skip = null, .entities = &.{ent("n1", "kestrel", .other)}, .facts = &.{}, .new_relations = &.{} },
+        .prefetch = .{ .entities = &.{
+            .{ .item = 0, .id = box, .name = "kestrel", .norm = "kestrel", .type = .environment, .via = &.{"kestrel"}, .cosine = 0.95 },
+            .{ .item = 0, .id = repo, .name = "kestrel", .norm = "kestrel", .type = .repository, .via = &.{"kestrel"}, .cosine = 0.94 },
+        } },
+    }).run();
+
+    try testing.expect(out.plan.entities[0].decision.existing.eql(box));
+    try testing.expectEqual(@as(usize, 0), out.plan.entities[0].absorb.len);
+    try testing.expectEqual(@as(usize, 0), out.cs.merges.len);
+}
+
+test "entities that share only a short, versioned or generic alias are neither linked nor merged" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const lark = id(62);
+    const plover = id(63);
+    var e = ent("n1", "Harrier dashboard", .software);
+    e.aliases = &.{ "app", "v1", "main", "harrier ui" };
+
+    const out = try (Scenario{
+        .arena = arena,
+        .reference_time = at("2026-11-23T03:00:00Z"),
+        .body = "The Harrier dashboard app v1 ships from main.",
+        .raw = .{ .skip = null, .entities = &.{e}, .facts = &.{}, .new_relations = &.{} },
+        .prefetch = .{ .entities = &.{
+            .{ .item = 0, .id = lark, .name = "Lark", .norm = "lark", .type = .software, .via = &.{ "app", "main" }, .cosine = 0.81 },
+            .{ .item = 0, .id = plover, .name = "Plover", .norm = "plover", .type = .software, .via = &.{"v1"}, .cosine = 0.80 },
+        } },
+    }).run();
+
+    try testing.expectEqual(resolve.EntityDecision.ask, out.plan.entities[0].decision);
+    try testing.expectEqual(@as(usize, 0), out.cs.merges.len);
+    try testing.expectEqual(@as(usize, 1), out.cs.new_entities.len);
+    try testing.expectEqual(@as(usize, 1), out.cs.new_entities[0].aliases.len);
+    try testing.expectEqualStrings("harrier ui", out.cs.new_entities[0].aliases[0]);
+}
+
+test "two entities matched through different aliases of one mention stay apart" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const kestrel = id(64);
+    const merlin = id(65);
+    var e = ent("n1", "kestrel", .software);
+    e.aliases = &.{ "merlin box", "gpu" };
+
+    const out = try (Scenario{
+        .arena = arena,
+        .reference_time = at("2026-11-23T03:00:00Z"),
+        .body = "kestrel, the merlin box, has a GPU.",
+        .raw = .{ .skip = null, .entities = &.{e}, .facts = &.{}, .new_relations = &.{} },
+        .prefetch = .{ .entities = &.{
+            .{ .item = 0, .id = kestrel, .name = "kestrel", .norm = "kestrel", .type = .software, .via = &.{"kestrel"}, .cosine = 0.97 },
+            .{ .item = 0, .id = merlin, .name = "merlin box", .norm = "merlin box", .type = .software, .via = &.{ "merlin box", "gpu" }, .cosine = 0.90 },
+        } },
+    }).run();
+
+    try testing.expect(out.plan.entities[0].decision.existing.eql(kestrel));
+    try testing.expectEqual(@as(usize, 0), out.cs.merges.len);
+    try testing.expectEqual(@as(usize, 0), out.cs.new_aliases.len);
+}
+
+test "twins that share the mention's specific name merge, and a short exact name still links" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const kestrel = id(66);
+    const twin = id(67);
+    const zig = id(68);
+
+    const out = try (Scenario{
+        .arena = arena,
+        .reference_time = at("2026-11-23T03:00:00Z"),
+        .body = "kestrel is written in Zig.",
+        .raw = .{ .skip = null, .entities = &.{ ent("n1", "kestrel", .software), ent("n2", "Zig", .software) }, .facts = &.{}, .new_relations = &.{} },
+        .prefetch = .{ .entities = &.{
+            .{ .item = 0, .id = kestrel, .name = "kestrel", .norm = "kestrel", .type = .software, .via = &.{"kestrel"}, .cosine = 0.97 },
+            .{ .item = 0, .id = twin, .name = "Kestrel", .norm = "kestrel", .type = .code, .via = &.{"kestrel"}, .cosine = 0.93 },
+            .{ .item = 1, .id = zig, .name = "Zig", .norm = "zig", .type = .software, .via = &.{"zig"}, .cosine = 0.99 },
+        } },
+    }).run();
+
+    try testing.expectEqual(@as(usize, 1), out.cs.merges.len);
+    try testing.expect(out.cs.merges[0].from.eql(twin));
+    try testing.expect(out.cs.merges[0].into.eql(kestrel));
+    try testing.expect(out.plan.entities[1].decision.existing.eql(zig));
+    try testing.expectEqual(@as(usize, 0), out.cs.new_entities.len);
 }
