@@ -16,6 +16,7 @@ const extraction_rules =
     \\- Set "skip" to a short reason, with no entities or facts, when the entry holds nothing durable: test or lint output, routine command chatter, hypotheticals, brainstorming that commits to nothing, greetings.
     \\- Entities get local refs n1, n2, ... Use the most canonical name as "name" and list other spellings in "aliases". Reuse one ref for every mention of the same thing.
     \\- Entity type "code" is a module, file or service inside a repository the user works in; "software" is a product, library, tool or service they use, and programming languages, databases and frameworks are "software" too. A commit is not an entity: record it on the "change" it belongs to. Bugs, failure modes and open questions are "problem".
+    \\- A phase, trial, lane, milestone or workstream inside a project is a "task", and one execution of it is a "run"; link it to its project with part_of instead of minting another "project". Name a project the same way every time it comes up.
     \\- Keep one entity per real thing: a service and its API, or a project and its repository, are the same entity unless the entry treats them as separate things. Relate the named things directly; do not invent an entity for a request, a check or a comparison just to hang facts on it.
     \\- Every fact has a subject ref, a relation, and exactly one of "object" (an entity ref) or "value" (a literal). The other is null.
     \\- Reuse a listed relation whenever one fits. Use "related_to" only as a last resort. If none fits, invent a snake_case relation and describe it in "new_relations".
@@ -150,8 +151,8 @@ fn writeExtractionUser(w: *Writer, entry: EntryView, context: []const PriorEntry
 pub const resolution_system =
     \\You reconcile newly extracted knowledge with what a knowledge graph already holds. Output one JSON object that matches the schema.
     \\
-    \\Entities: for each new entity listed with candidates, set "existing" to the label (E1, E2, ...) of the candidate that is the same real-world thing, or null when none is. Same name is not enough: a company and its product, a tool and a dataset, or two people who share a first name are different entities. A project and its repository are the same entity. List every such entity in "entity_links".
-    \\
+    \\Entities: for each new entity listed with candidates, set "existing" to the label (E1, E2, ...) of the candidate that is the same real-world thing, or null when none is.
+++ " " ++ resolve.entity_link_rule ++ " List every such entity in \"entity_links\".\n\n" ++
     \\Facts: for each new fact listed with candidates, give one entry in "fact_verdicts" with its index:
     \\- "duplicate_of": the label (F1, F2, ...) of an existing fact that already says the same thing, else null.
     \\- "contradicts": existing facts that can no longer be current if the new fact is true. Use kind "changed" when the world changed (a handoff, a switch, an upgrade) and kind "was_wrong" when the old fact was never true (a correction or a misstatement). Set "at" to the RFC 3339 time of the change when the entry states it, else null.
@@ -181,7 +182,9 @@ fn writeResolutionUser(w: *Writer, p: resolve.Plan, checked: extract.Checked, pr
         try w.writeAll("\nExisting entities:\n");
         for (p.entity_labels, 0..) |id, i| {
             const c = resolve.findEntity(prefetch, id) orelse continue;
-            try w.print("E{d}: {s} ({t})\n", .{ i + 1, c.name, c.type });
+            try w.print("E{d}: {s} ({t})", .{ i + 1, c.name, c.type });
+            try resolve.writeCandidateContext(w, c);
+            try w.writeAll("\n");
         }
 
         try w.writeAll("\nNew entities with candidates:\n");

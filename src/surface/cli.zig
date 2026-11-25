@@ -3,6 +3,7 @@ const core = @import("core");
 const store = @import("store");
 const capture = @import("capture");
 const eval = @import("eval");
+const ingest = @import("ingest");
 const api = @import("api.zig");
 const client = @import("client.zig");
 const daemon = @import("daemon.zig");
@@ -16,7 +17,7 @@ const Writer = std.Io.Writer;
 
 pub const version = "0.0.0-dev";
 
-const Command = enum { help, version, config, init, serve, mcp, hook, install, pause, @"resume", source, backfill, search, entity, remember, forget, doctor, eval };
+const Command = enum { help, version, config, init, serve, mcp, hook, install, pause, @"resume", source, backfill, consolidate, merge, unmerge, search, entity, remember, forget, doctor, eval };
 
 const usage =
     \\usage: graf [--config PATH] <command> [args...]
@@ -35,6 +36,12 @@ const usage =
     \\      [--once] [--backfill]
     \\  backfill                     ingest transcript history from before live capture started
     \\      [--since DATE|30d] [--harness H,...] [--dry-run] [--max-entries N] [--cap-usd USD] [--upstream URL]
+    \\  consolidate                  find and merge duplicate entities with the decision model
+    \\      [--dry-run] [--type person,project,...] [--limit N] [--cap-usd USD]
+    \\  merge <from> <into>          merge one entity into another, by id or exact name
+    \\      [--reason R] [--dry-run] [--force]
+    \\  unmerge <merge-id|entity>    undo a merge and keep the two entities apart
+    \\      [--reason R] [--dry-run]
     \\  search <query...>            search memory
     \\      [--project P | --all] [--as-of T] [--known-at T] [--history] [--harness H] [--max-tokens N] [--json]
     \\  entity <name-or-id>          show an entity and its facts
@@ -49,7 +56,7 @@ const usage =
     \\
 ;
 
-const value_flags = [_][]const u8{ "--project", "--as-of", "--known-at", "--harness", "--max-tokens", "--depth", "--valid-from", "--query", "--reason", "--suite", "--command", "--upstream", "--since", "--max-entries", "--cap-usd" };
+const value_flags = [_][]const u8{ "--project", "--as-of", "--known-at", "--harness", "--max-tokens", "--depth", "--valid-from", "--query", "--reason", "--suite", "--command", "--upstream", "--since", "--max-entries", "--cap-usd", "--type", "--limit" };
 
 fn isValueFlag(a: []const u8) bool {
     for (value_flags) |f| if (std.mem.eql(u8, f, a)) return true;
@@ -248,6 +255,9 @@ pub fn run(init: std.process.Init) !u8 {
         },
         .source => return runSource(init, cfg, rest, out, err),
         .backfill => return runBackfill(init, cfg, rest, out, err),
+        .consolidate => return runConsolidate(init, cfg, rest, out, err),
+        .merge => return runMerge(init, cfg, rest, out, err),
+        .unmerge => return runUnmerge(init, cfg, rest, out, err),
         .doctor => return doctor(arena, init, cfg, loaded, out),
         .eval => return eval.main(arena, io, cfg, init.environ_map, rest, out, err),
         .search, .entity, .remember, .forget => {
@@ -517,6 +527,157 @@ fn runBackfill(init: std.process.Init, cfg: *const core.Config, rest: []const []
 
     const report = backfill.run(init.gpa, io, env, cfg, plan, .{ .hub = .{ .store = &rt.store, .graph_id = rt.graph_id } }) catch |e| return fail(err, "backfill", e);
     try backfill.print(report, out);
+    return 0;
+}
+
+fn openHub(rt: *daemon.Runtime, init: std.process.Init, cfg: *const core.Config, what: []const u8, err: *Writer) !bool {
+    if (cfg.edge.upstream.len > 0) {
+        try err.print("graf {s}: run this on the hub; this machine is an edge of {s}\n", .{ what, cfg.edge.upstream });
+        return false;
+    }
+
+    rt.open(init.gpa, init.io, init.environ_map, cfg, .{ .pool_size = 3, .start_postgres = true }) catch |e| {
+        _ = try fail(err, what, e);
+        return false;
+    };
+    return true;
+}
+
+fn runConsolidate(init: std.process.Init, cfg: *const core.Config, rest: []const []const u8, out: *Writer, err: *Writer) !u8 {
+    const arena = init.arena.allocator();
+    const parsed = Args.parse(arena, rest) catch {
+        try err.writeAll("graf consolidate: a flag is missing its value\n");
+        return 2;
+    };
+
+    var opts: ingest.consolidate.Options = .{ .dry_run = parsed.has("--dry-run") };
+    if (parsed.value("--type")) |t| opts.types = ingest.consolidate.parseTypes(arena, t) catch {
+        try err.print("graf consolidate: unknown entity type in '{s}'\n", .{t});
+        return 2;
+    };
+    if (parsed.int("--limit") catch null) |n| opts.limit = n;
+    if (parsed.value("--cap-usd")) |c| opts.cap_usd = std.fmt.parseFloat(f64, c) catch {
+        try err.writeAll("graf consolidate: --cap-usd takes a number\n");
+        return 2;
+    };
+
+    var rt: daemon.Runtime = undefined;
+    if (!try openHub(&rt, init, cfg, "consolidate", err)) return 1;
+    defer rt.close();
+
+    var model: ingest.postgres.ClientModel = .{ .client = &rt.client };
+    const report = ingest.consolidate.run(ingest.postgres.ClientModel, arena, &rt.store, &model, rt.graph_id, opts) catch |e| return fail(err, "consolidate", e);
+    try ingest.consolidate.print(report, out);
+    return 0;
+}
+
+fn resolveRef(arena: Allocator, conn: *store.pg.Conn, graph_id: core.Id, ref: []const u8, err: *Writer) !?ingest.consolidate.Side {
+    switch (try ingest.consolidate.lookup(arena, conn, graph_id, ref)) {
+        .found => |side| return side,
+        .missing => try err.print("graf merge: no live entity is named '{s}'\n", .{ref}),
+        .ambiguous => |all| {
+            try err.print("graf merge: '{s}' names {d} entities; pass an id:\n", .{ ref, all.len });
+            for (all) |side| try err.print("  {f}  {s} ({t}, {d} facts)\n", .{ side.id, side.name, side.type, side.facts });
+        },
+    }
+    return null;
+}
+
+fn runMerge(init: std.process.Init, cfg: *const core.Config, rest: []const []const u8, out: *Writer, err: *Writer) !u8 {
+    const arena = init.arena.allocator();
+    const parsed = Args.parse(arena, rest) catch {
+        try err.writeAll("graf merge: a flag is missing its value\n");
+        return 2;
+    };
+
+    if (parsed.positional.len != 2) {
+        try err.writeAll("usage: graf merge <from> <into> [--reason R] [--dry-run] [--force]\n");
+        return 2;
+    }
+
+    var rt: daemon.Runtime = undefined;
+    if (!try openHub(&rt, init, cfg, "merge", err)) return 1;
+    defer rt.close();
+
+    const conn = try rt.store.pool.acquire();
+    const from = try resolveRef(arena, conn, rt.graph_id, parsed.positional[0], err);
+    const into = try resolveRef(arena, conn, rt.graph_id, parsed.positional[1], err);
+    conn.release();
+    if (from == null or into == null) return 1;
+
+    const dry_run = parsed.has("--dry-run");
+    const reason = parsed.value("--reason") orelse "merged by operator";
+    const outcome = ingest.consolidate.mergeManual(&rt.store, rt.graph_id, from.?, into.?, reason, .{ .force = parsed.has("--force"), .dry_run = dry_run }) catch |e| switch (e) {
+        error.IncompatibleTypes => {
+            try err.print("graf merge: a {t} cannot merge into a {t}\n", .{ from.?.type, into.?.type });
+            return 1;
+        },
+        else => return fail(err, "merge", e),
+    };
+
+    switch (outcome) {
+        .merged => |m| {
+            try out.print("{s} \"{s}\" ({d} facts) into \"{s}\" ({d} facts), moving {d} facts\n", .{ if (dry_run) "would merge" else "merged", from.?.name, from.?.facts, into.?.name, into.?.facts, m.moved_facts });
+            if (!dry_run) try out.print("merge {f}; undo with graf unmerge {f}\n", .{ m.log_id, m.log_id });
+            return 0;
+        },
+        .skipped => |why| {
+            const msg: []const u8 = switch (why) {
+                .same => "both names are the same entity",
+                .missing => "an entity was merged elsewhere meanwhile",
+                .blocked => "the pair is recorded as must-not-merge; pass --force to merge anyway",
+                .too_large => "both entities hold more than 100 facts; pass --force to merge anyway",
+            };
+            try err.print("graf merge: {s}\n", .{msg});
+            return 1;
+        },
+    }
+}
+
+fn runUnmerge(init: std.process.Init, cfg: *const core.Config, rest: []const []const u8, out: *Writer, err: *Writer) !u8 {
+    const arena = init.arena.allocator();
+    const parsed = Args.parse(arena, rest) catch {
+        try err.writeAll("graf unmerge: a flag is missing its value\n");
+        return 2;
+    };
+
+    if (parsed.positional.len != 1) {
+        try err.writeAll("usage: graf unmerge <merge-id|entity> [--reason R] [--dry-run]\n");
+        return 2;
+    }
+
+    var rt: daemon.Runtime = undefined;
+    if (!try openHub(&rt, init, cfg, "unmerge", err)) return 1;
+    defer rt.close();
+
+    const conn = try rt.store.pool.acquire();
+    defer conn.release();
+    const merge_id = ingest.consolidate.findMerge(arena, conn, rt.graph_id, parsed.positional[0]) catch |e| {
+        try err.print("graf unmerge: {s}\n", .{switch (e) {
+            error.MergeNotFound => "no live merge matches; pass a merge id, or the id or name of the merged entity",
+            error.AmbiguousMerge => "several merges match; pass the merge id",
+            else => @errorName(e),
+        }});
+        return 1;
+    };
+
+    const dry_run = parsed.has("--dry-run");
+    const reason = parsed.value("--reason") orelse "unmerged by operator";
+    const undone = rt.store.unmerge(rt.graph_id, merge_id, reason, dry_run) catch |e| {
+        try err.print("graf unmerge: {s}\n", .{switch (e) {
+            error.AlreadyUndone => "that merge was already undone",
+            error.MergeSuperseded => "the surviving entity was merged again since; undo the later merge first",
+            else => @errorName(e),
+        }});
+        return 1;
+    };
+
+    try out.print("{s} \"{s}\" from \"{s}\", restoring {d} facts; the pair is now kept apart\n", .{
+        if (dry_run) "would unmerge" else "unmerged",
+        try ingest.consolidate.entityName(arena, conn, undone.from),
+        try ingest.consolidate.entityName(arena, conn, undone.into),
+        undone.restored_facts,
+    });
     return 0;
 }
 

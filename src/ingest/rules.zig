@@ -13,6 +13,14 @@ pub const gray_cosine: f32 = 0.78;
 pub const gray_cross_type_cosine: f32 = 0.90;
 pub const gray_per_entity: usize = 5;
 
+pub const person_floor_cosine: f32 = 0.35;
+pub const gray_lexical: f32 = 0.50;
+pub const lexical_floor_cosine: f32 = 0.60;
+pub const shared_project_cosine: f32 = 0.70;
+
+pub const consolidate_same: f64 = 0.80;
+pub const consolidate_different: f64 = 0.20;
+
 pub const neighbour_cosine: f32 = 0.72;
 pub const neighbours_per_fact: usize = 8;
 pub const max_invalidations: usize = 5;
@@ -117,6 +125,69 @@ pub fn specificAlias(norm: []const u8) bool {
         for (digits) |c| if (!std.ascii.isDigit(c)) return true;
     }
     return false;
+}
+
+fn firstToken(norm: []const u8) []const u8 {
+    var it = std.mem.tokenizeScalar(u8, norm, ' ');
+    return it.next() orelse "";
+}
+
+fn tokenCount(norm: []const u8) usize {
+    var n: usize = 0;
+    var it = std.mem.tokenizeScalar(u8, norm, ' ');
+    while (it.next()) |_| n += 1;
+    return n;
+}
+
+fn hasToken(norm: []const u8, tok: []const u8) bool {
+    var it = std.mem.tokenizeScalar(u8, norm, ' ');
+    while (it.next()) |t| if (std.mem.eql(u8, t, tok)) return true;
+    return false;
+}
+
+const roman = [_][]const u8{ "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii" };
+
+fn isMarker(tok: []const u8) bool {
+    if (tok.len == 1) return true;
+    for (tok) |c| if (std.ascii.isDigit(c)) return true;
+    for (roman) |r| if (std.mem.eql(u8, tok, r)) return true;
+    return false;
+}
+
+fn unsharedMarker(a_norm: []const u8, b_norm: []const u8) bool {
+    var it = std.mem.tokenizeScalar(u8, a_norm, ' ');
+    while (it.next()) |tok| if (isMarker(tok) and !hasToken(b_norm, tok)) return true;
+    return false;
+}
+
+pub fn distinctMarkers(a_norm: []const u8, b_norm: []const u8) bool {
+    return unsharedMarker(a_norm, b_norm) and unsharedMarker(b_norm, a_norm);
+}
+
+pub fn sameFirstName(a_norm: []const u8, b_norm: []const u8) bool {
+    const a = firstToken(a_norm);
+    return a.len >= 3 and std.mem.eql(u8, a, firstToken(b_norm));
+}
+
+pub fn singleToken(norm: []const u8) bool {
+    return tokenCount(norm) == 1;
+}
+
+pub const Signals = struct {
+    cosine: f32,
+    lexical: f32 = 0,
+    shares_project: bool = false,
+};
+
+pub fn contextualGray(a_type: EntityType, b_type: EntityType, a_norm: []const u8, b_norm: []const u8, s: Signals) bool {
+    if (a_type != b_type or std.mem.eql(u8, a_norm, b_norm) or distinctMarkers(a_norm, b_norm)) return false;
+    if (a_type == .person) {
+        if (!sameFirstName(a_norm, b_norm) or s.cosine < person_floor_cosine) return false;
+        return singleToken(a_norm) or singleToken(b_norm) or s.shares_project;
+    }
+
+    if (s.lexical >= gray_lexical and s.cosine >= lexical_floor_cosine) return true;
+    return s.shares_project and s.cosine >= shared_project_cosine;
 }
 
 pub const RelationRule = struct {
@@ -458,6 +529,36 @@ test "short, versioned and generic aliases are not specific" {
         try testing.expect(!specificAlias(n));
     for ([_][]const u8{ "pg zig", "brackwater", "postgres 17", "zig 0 17 1", "harbor ops", "tidewright" }) |n|
         try testing.expect(specificAlias(n));
+}
+
+test "numbered phases, tickets, lanes and versions carry distinct markers" {
+    try testing.expect(distinctMarkers("phase 1", "phase 2"));
+    try testing.expect(distinctMarkers("ticket 340177", "ticket 340178"));
+    try testing.expect(distinctMarkers("lane b", "lane d"));
+    try testing.expect(distinctMarkers("rollout iii", "rollout iv"));
+    try testing.expect(distinctMarkers("postgres 16", "postgresql 17"));
+
+    try testing.expect(!distinctMarkers("quay slot ordering research", "quay slot order research"));
+    try testing.expect(!distinctMarkers("postgresql 17", "postgres 17"));
+    try testing.expect(!distinctMarkers("zig 0 17 1", "zig 0 17"));
+    try testing.expect(!distinctMarkers("maren", "maren hollis"));
+}
+
+test "contextual gray admits first names and handles, and lexical project variants" {
+    try testing.expect(contextualGray(.person, .person, "maren", "maren hollis", .{ .cosine = 0.44 }));
+    try testing.expect(contextualGray(.person, .person, "maren", "maren brackwater", .{ .cosine = 0.60 }));
+    try testing.expect(contextualGray(.person, .person, "maren hollis", "maren brackwater", .{ .cosine = 0.50, .shares_project = true }));
+    try testing.expect(!contextualGray(.person, .person, "maren hollis", "maren brackwater", .{ .cosine = 0.50 }));
+    try testing.expect(!contextualGray(.person, .person, "maren", "juno maren", .{ .cosine = 0.70 }));
+    try testing.expect(!contextualGray(.person, .person, "al", "al hollis", .{ .cosine = 0.70 }));
+    try testing.expect(!contextualGray(.person, .person, "maren", "maren hollis", .{ .cosine = 0.20 }));
+    try testing.expect(!contextualGray(.person, .organization, "maren", "maren hollis", .{ .cosine = 0.90 }));
+
+    try testing.expect(contextualGray(.project, .project, "quay slot ordering research", "quay slot order research", .{ .cosine = 0.72, .lexical = 0.62 }));
+    try testing.expect(contextualGray(.project, .project, "slot ordering", "quay slot ordering review", .{ .cosine = 0.74, .shares_project = true }));
+    try testing.expect(!contextualGray(.project, .project, "slot ordering", "quay slot ordering review", .{ .cosine = 0.74 }));
+    try testing.expect(!contextualGray(.project, .project, "mooring phase 1", "mooring phase 2", .{ .cosine = 0.97, .lexical = 0.80, .shares_project = true }));
+    try testing.expect(!contextualGray(.task, .task, "lane b", "lane d", .{ .cosine = 0.95, .lexical = 0.60 }));
 }
 
 test "token jaccard and cosine" {

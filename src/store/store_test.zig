@@ -370,9 +370,11 @@ test "commit applies entities, aliases, facts, merges, invalidations, retraction
     try testing.expectEqual(@as(i64, 2), (try s.commit(l2, &cs2, null)).committed.seq);
 
     const Payload = struct { graph_id: []const u8, seq: i64, project: ?[]const u8 };
-    const payload = try std.json.parseFromSliceLeaky(Payload, a, try store.testing.nextNotification(&commits, "graf_commit"), .{ .allocate = .alloc_always });
     var gbuf: [36]u8 = undefined;
-    try testing.expectEqualStrings(g.toString(&gbuf), payload.graph_id);
+    const payload = while (true) {
+        const next = try std.json.parseFromSliceLeaky(Payload, a, try store.testing.nextNotification(&commits, "graf_commit"), .{ .allocate = .alloc_always });
+        if (std.mem.eql(u8, next.graph_id, g.toString(&gbuf))) break next;
+    };
     try testing.expectEqual(@as(i64, 2), payload.seq);
     try testing.expectEqualStrings("example.test/graf", payload.project.?);
 

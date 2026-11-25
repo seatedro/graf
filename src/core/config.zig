@@ -71,6 +71,7 @@ pub const Config = struct {
 
     pub const Ingest = struct {
         workers: u32 = 4,
+        consolidate_pairs: u32 = 0,
     };
 
     pub const Serve = struct {

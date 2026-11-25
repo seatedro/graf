@@ -6,6 +6,7 @@ pub const managed = @import("managed.zig");
 const queue = @import("queue.zig");
 const committer = @import("commit.zig");
 pub const spend = @import("spend.zig");
+pub const merging = @import("merge.zig");
 
 pub const Id = core.Id;
 
@@ -109,6 +110,18 @@ pub const Store = struct {
 
     pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase: ?Rebase) !CommitResult {
         return committer.commit(s, lease, change_set, rebase);
+    }
+
+    pub fn merge(s: *Store, graph_id: Id, from: Id, into: Id, reason: []const u8, opts: merging.MergeOptions) !merging.MergeOutcome {
+        return merging.merge(s, graph_id, from, into, reason, opts);
+    }
+
+    pub fn unmerge(s: *Store, graph_id: Id, merge_id: Id, reason: []const u8, dry_run: bool) !merging.Unmerged {
+        return merging.unmerge(s, graph_id, merge_id, reason, dry_run);
+    }
+
+    pub fn keepApart(s: *Store, graph_id: Id, a: Id, b: Id, reason: []const u8) !void {
+        return merging.keepApart(s, graph_id, a, b, reason);
     }
 
     pub fn spentSince(s: *Store, since: core.Micros) !f64 {

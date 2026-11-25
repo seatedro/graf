@@ -32,6 +32,8 @@ pub const Context = struct {
 };
 
 pub const PrefetchRequest = struct {
+    project: ?[]const u8 = null,
+    entity_types: []const core.EntityType = &.{},
     entity_norms: []const []const []const u8,
     entity_embs: []const []const f32,
     fact_subject: []const u32,
@@ -117,7 +119,9 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
                 try d.backend.saveRelationEmbeddings(names.items, missing_vecs);
             }
 
-            var prefetched = try d.backend.prefetch(arena, try prefetchRequest(arena, checked, ent_vecs, fact_vecs));
+            var req = try prefetchRequest(arena, checked, ent_vecs, fact_vecs);
+            req.project = entry.project;
+            var prefetched = try d.backend.prefetch(arena, req);
             prefetched.relations = relations;
 
             const p = try resolve.plan(arena, checked, prefetched);
@@ -337,7 +341,9 @@ pub fn Driver(comptime Backend: type, comptime Model: type) type {
 fn prefetchRequest(arena: Allocator, checked: extract.Checked, ent_vecs: []const []const f32, fact_vecs: []const []const f32) !PrefetchRequest {
     const ents = checked.result.entities;
     const norms = try arena.alloc([]const []const u8, ents.len);
+    const types = try arena.alloc(core.EntityType, ents.len);
     for (ents, 0..) |e, i| {
+        types[i] = e.type;
         var list: std.ArrayList([]const u8) = .empty;
         try list.append(arena, try core.text.norm(arena, e.name));
         for (e.aliases) |a| {
@@ -363,6 +369,7 @@ fn prefetchRequest(arena: Allocator, checked: extract.Checked, ent_vecs: []const
     }
 
     return .{
+        .entity_types = types,
         .entity_norms = norms,
         .entity_embs = ent_vecs,
         .fact_subject = subj,
