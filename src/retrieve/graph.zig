@@ -3,7 +3,7 @@ const core = @import("core");
 const db = @import("db.zig");
 const Engine = @import("mod.zig").Engine;
 
-pub const Op = enum { overview, neighborhood, search, entity };
+pub const Op = enum { overview, map, neighborhood, search, entity };
 
 pub const Input = struct {
     project: ?[]const u8 = null,
@@ -24,6 +24,7 @@ const seeds = @embedFile("graph/seeds.sql");
 const probe = @embedFile("graph/probe.sql");
 const first = std.fmt.comptimePrint(@embedFile("graph/first.sql"), .{probe});
 const overview_sql = filters ++ seeds ++ first ++ @embedFile("graph/overview.sql");
+const map_sql = filters ++ @embedFile("graph/map.sql");
 const neighborhood_sql = filters ++ seeds ++ first ++ std.fmt.comptimePrint(@embedFile("graph/neighborhood.sql"), .{probe});
 const search_sql = filters ++ @embedFile("graph/search.sql");
 const entity_sql = filters ++ @embedFile("graph/entity.sql");
@@ -38,7 +39,7 @@ pub fn run(engine: *Engine, arena: std.mem.Allocator, op: Op, in: Input) ![]cons
     if ((op == .search) != (in.query != null)) return error.InvalidGraphInput;
     if ((op == .entity and in.id == null) or (in.id != null and op != .entity and op != .neighborhood))
         return error.InvalidGraphInput;
-    if ((in.before != null and in.fact_id != null) or (op != .entity and (in.before != null or in.fact_id != null)))
+    if ((in.before != null and op != .map and op != .entity) or (in.fact_id != null and (op != .entity or in.before != null)))
         return error.InvalidGraphInput;
 
     const id = if (in.id) |s| core.Id.parse(s) catch return error.InvalidGraphInput else null;
@@ -47,16 +48,18 @@ pub fn run(engine: *Engine, arena: std.mem.Allocator, op: Op, in: Input) ![]cons
     const at: ?core.Micros = if (in.as_of) |s| try core.time.parseIso(s) else null;
     const args = .{ &engine.graph_id.bytes, in.project, in.type, in.relation, in.min_confidence, at, in.include_history orelse false };
     const id_bytes: ?[]const u8 = if (id) |*v| &v.bytes else null;
+    const before_bytes: ?[]const u8 = if (before) |*v| &v.bytes else null;
     const conn = try engine.store.pool.acquire();
     defer conn.release();
 
     var row = (switch (op) {
         .overview => try db.queryRow(conn, arena, overview_sql, args ++ .{id_bytes}),
+        .map => try db.queryRow(conn, arena, map_sql, args ++ .{before_bytes}),
         .neighborhood => try db.queryRow(conn, arena, neighborhood_sql, args ++ .{ id_bytes, @as(i32, in.hops orelse 1) }),
         .search => try db.queryRow(conn, arena, search_sql, args ++ .{ in.query.?, try core.text.norm(arena, in.query.?) }),
         .entity => try db.queryRow(conn, arena, entity_sql, args ++ .{
             id_bytes,
-            if (before) |*v| @as(?[]const u8, &v.bytes) else null,
+            before_bytes,
             if (fact_id) |*v| @as(?[]const u8, &v.bytes) else null,
         }),
     }) orelse return error.EntityNotFound;

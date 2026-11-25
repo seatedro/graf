@@ -64,6 +64,7 @@ pub const Service = struct {
     fn handle(s: *Service, arena: Allocator, req: api.Request) !api.Reply {
         return switch (req.op) {
             .graph_overview => s.graph(arena, .overview, req.body),
+            .graph_map => s.graph(arena, .map, req.body),
             .graph_neighborhood => s.graph(arena, .neighborhood, req.body),
             .graph_search => s.graph(arena, .search, req.body),
             .graph_entity => s.graph(arena, .entity, req.body),

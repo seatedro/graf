@@ -19,7 +19,7 @@ const eligible =
 
 pub const sql =
     \\WITH vec AS (
-    \\  SELECT id, row_number() OVER (ORDER BY d) AS r FROM (
+    \\  SELECT id, row_number() OVER (ORDER BY d, id) AS r FROM (
     \\    SELECT f.id, f.emb <=> 
 ++ qvec ++
     \\ AS d FROM fact f
@@ -90,6 +90,7 @@ pub const sql =
     \\FROM cand c JOIN fact f ON f.id = c.id
     \\JOIN entity se ON se.id = f.subject_id
     \\LEFT JOIN entity oe ON oe.id = f.object_id
+    \\ORDER BY f.id
 ;
 
 pub const Options = struct {

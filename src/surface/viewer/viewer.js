@@ -5,13 +5,14 @@ const svgNS = "http://www.w3.org/2000/svg";
 const number = new Intl.NumberFormat();
 const dates = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const typeOrder = ["project", "person", "organization", "concept", "software", "document", "repository", "task", "decision", "event", "code", "environment", "ai_model", "change", "dataset", "problem", "run", "session", "other"];
-const colors = ["#90dfac", "#f6c582", "#b6a3eb", "#84cbdc", "#edaa9a", "#d4d996", "#9ab6ef", "#eda9c3", "#a4d1b8", "#edbd99", "#96b5c3", "#d9a6df", "#d4ab89", "#a9c1f2", "#b0cb88", "#f89992", "#9acbd0", "#b5b5d1", "#b2c1b7"];
-const nodeCap = 140, edgeCap = 360;
+const colors = ["#6edee1", "#efbc79", "#af98f6", "#82c7fc", "#e294c7", "#ddda8d", "#8caff6", "#f1a29c", "#97d2bb", "#e6a783", "#88b6cd", "#c79ae6", "#d1a380", "#acb5f9", "#a6cf8d", "#ef908e", "#8fcad7", "#acaccd", "#b3c2ca"];
+const nodeCap = 8192, edgeCap = 16384;
 const requests = new Map();
 const canvas = $("map");
 const ctx = canvas.getContext("2d");
 let overview = null, graph = { nodes: [], edges: [], truncated: false }, nodes = new Map();
 let selected = null, root = null, session = { mode: "anonymous" }, credential = "";
+let nextSector = null, sector = 0;
 let width = 1, height = 1, scale = 1, fitScale = 1, ox = 0, oy = 0, frame = 0;
 let hover = null, hoverAt = null, drag = null, searchTimer = 0, labels = [];
 let activeFacts = null, overviewRequest = 0, mapRequest = 0, entityRequest = 0, searchRequest = 0;
@@ -37,7 +38,7 @@ function icon(name) {
 
 function typeIndex(type) {
   const i = typeOrder.indexOf(type);
-  return i === -1 ? colors.length - 1 : i;
+  return i === -1 ? hash(type) % (colors.length - 1) : i;
 }
 
 function pretty(value) {
@@ -159,7 +160,7 @@ function section(title, count) {
 }
 
 function renderOverview() {
-  $("side-title").textContent = "Graph index";
+  $("side-title").textContent = "World index";
   $("side-code").hidden = false;
   $("close-inspector").hidden = true;
   const body = $("side-body");
@@ -334,6 +335,7 @@ async function inspect(id, factId = null, before = null) {
   if (!id) return;
   const rev = ++entityRequest;
   selected = id;
+  $("hops").disabled = false;
   activeFacts = factId;
   $("side-title").textContent = "Entity inspector";
   $("side-code").hidden = true;
@@ -359,6 +361,7 @@ function closeInspector() {
   ++entityRequest;
   abort("entity");
   selected = null;
+  $("hops").disabled = !root;
   activeFacts = null;
   renderOverview();
   paint();
@@ -434,7 +437,7 @@ function setGraph(data, append, id) {
   for (const n of [...data.nodes, ...(append ? graph.nodes : [])]) {
     if (!ordered.has(n.id)) ordered.set(n.id, n);
   }
-  let limited = ordered.size > nodeCap || data.truncated || (append && graph.truncated);
+  let limited = ordered.size > nodeCap || (id && data.truncated) || (append && graph.truncated);
   const list = [...ordered.values()].slice(0, nodeCap);
   nodes = new Map(list.map(n => [n.id, { ...n, degree: 0, neighbors: new Set() }]));
 
@@ -450,125 +453,275 @@ function setGraph(data, append, id) {
   }
   graph = { nodes: list, edges: [...kept.values()], truncated: limited };
   root = id;
+  $("hops").disabled = !root && !selected;
   hover = null;
-  $("map-reset").hidden = !root;
-  $("map-mode").textContent = root ? nodes.get(root)?.name || "Focused neighborhood" : "Hub neighborhood";
-  $("plot-state").textContent = "No entities match this view.";
+  $("map-reset").hidden = !root && sector < 2;
+  $("map-mode").textContent = root ? nodes.get(root)?.name || "Focused neighborhood" : sector > 1 ? "World map · " + sector : "World map";
+  $("plot-state").textContent = root ? "No entities match this view." : "No entity links in this sector. Search to inspect individual entities.";
   $("plot-state").hidden = list.length > 0;
-  $("shown").textContent = number.format(list.length) + " nodes · " + number.format(kept.size) + " edges" + (limited ? " · Capped" : "");
-  const entries = [...nodes.values()].sort((a, b) => a.name.localeCompare(b.name)).map(n => {
+  $("shown").textContent = number.format(list.length) + " entities · " + number.format(kept.size) + " links" + (limited ? " · limited view" : "");
+  const entries = [...nodes.values()].sort((a, b) => b.degree - a.degree || a.name.localeCompare(b.name)).slice(0, 64).map(n => {
     const item = el("button");
     item.append(dot(n.type), el("span", "row-title", n.name), el("span", "row-meta", pretty(n.type)));
     item.onclick = () => inspectFromMap(n.id);
     return item;
   });
   $("node-list").replaceChildren(...entries);
+  if (list.length > entries.length) $("node-list").append(el("p", "muted", "Showing the 64 most connected entities in view. Search to locate any entity."));
+  $("load-sector").hidden = !!root || !nextSector;
+  $("load-sector").disabled = false;
   layout();
   fit();
 }
 
 async function loadMap(id, append) {
   const rev = ++mapRequest;
-  const params = { hops: Number($("hops").value) };
-  if (id) params.id = id;
-  $("plot-state").textContent = "Mapping neighborhood…";
+  const before = !id && append ? nextSector : null;
+  const params = id ? { id, hops: Number($("hops").value) } : before ? { before } : {};
+  abort(id ? "map" : "neighborhood");
+  $("load-sector").disabled = true;
+  $("plot-state").textContent = id ? "Mapping neighborhood…" : "Loading sector…";
   $("plot-state").hidden = false;
   try {
-    const data = await api("neighborhood", params);
+    const data = await api(id ? "neighborhood" : "map", params);
     if (rev !== mapRequest) return;
+    nextSector = id ? null : data.next_before;
+    sector = id ? 0 : before ? sector + 1 : 1;
     setGraph(data, append, id);
+    if (id) flyToEntity(id);
   } catch (err) {
     if (rev === mapRequest && err.name !== "AbortError") {
-      setGraph({ nodes: [], edges: [], truncated: false }, false, null);
-      $("plot-state").textContent = "The neighborhood could not be loaded.";
+      $("load-sector").disabled = false;
+      if (!before) {
+        nextSector = null;
+        sector = 0;
+        setGraph({ nodes: [], edges: [], truncated: false }, false, null);
+        $("plot-state").textContent = "This part of the map could not be loaded.";
+      } else $("plot-state").hidden = true;
       failed(err);
     }
   }
 }
 
+const world = SurveyWorld.create($("world-gpu"), colors, paint);
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const locator = $("locator");
+const locatorImage = document.createElement("canvas");
+const flightKeys = new Set();
+let stars = [], landmarks = [], cells = new Map(), bounds, cellSize = 1;
+let targetCamera = null, lastFrame = 0, mini = null;
+
+function hash(value) {
+  let h = 2166136261;
+  for (const c of String(value)) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  return h >>> 0;
+}
+
+function mapArea() {
+  const rect = canvas.getBoundingClientRect(), dock = $("sidebar").getBoundingClientRect();
+  const docked = width > 710 && dock.left > rect.left + width / 2 && dock.left < rect.right;
+  const right = docked ? dock.left - rect.left - 16 : width;
+  const top = Math.min(84, height * .14), bottom = height - Math.min(128, height * .18);
+  return { x: right / 2, y: (top + bottom) / 2, w: right, h: bottom - top };
+}
+
 function layout() {
-  if (!nodes.size) return;
-  const ranked = [...nodes.values()].sort((a, b) => b.degree - a.degree || a.id.localeCompare(b.id));
-  const center = nodes.get(root) || ranked[0], seen = new Set(), points = [];
-  for (const start of [center, ...ranked]) {
-    if (seen.has(start.id)) continue;
-    const queue = [start];
-    seen.add(start.id);
+  stars = [...nodes.values()].sort((a, b) => b.degree - a.degree || a.id.localeCompare(b.id));
+  landmarks = []; cells = new Map(); bounds = null; mini = null;
+  if (!stars.length) { world.upload([], new Float32Array()); if (locator) locator.hidden = true; return; }
+  stars.forEach((n, i) => { n.index = i; n.tint = typeIndex(n.type); n.seed = hash(n.id) / 4294967296; n.routes = []; });
+
+  const groups = [];
+  if (stars.length < 160) {
+    const anchors = [nodes.get(root) || stars[0]];
+    const k = Math.min(7, Math.ceil(Math.sqrt(stars.length) * .64));
+    for (const n of stars) {
+      if (anchors.length >= k || !n.degree) break;
+      if (anchors.every(a => a !== n && !n.neighbors.has(a.id))) anchors.push(n);
+    }
+    const queue = anchors.slice(), seen = new Map();
+    anchors.forEach((a, i) => { seen.set(a.id, i); groups.push([]); });
     for (let i = 0; i < queue.length; i++) {
-      const n = queue[i];
-      points.push(n);
-      for (const id of n.neighbors) {
+      const a = queue[i], group = seen.get(a.id);
+      groups[group].push(a);
+      for (const id of a.neighbors) {
         if (seen.has(id)) continue;
-        seen.add(id);
-        queue.push(nodes.get(id));
+        seen.set(id, group); queue.push(nodes.get(id));
       }
     }
-  }
-
-  const aspect = Math.min(1.9, Math.max(.8, width / height));
-  for (const [i, n] of points.entries()) {
-    const theta = i * 2.399963 + .4, r = Math.sqrt(i) * 68;
-    n.x = Math.cos(theta) * r * aspect;
-    n.y = Math.sin(theta) * r;
-    n.radius = 4.5 + Math.min(8, Math.sqrt(n.degree) * 1.7);
-    n.dx = n.dy = 0;
-  }
-
-  const pairs = [];
-  for (const n of points) for (const id of n.neighbors) if (id > n.id) pairs.push([n, nodes.get(id)]);
-  for (let step = 0; step < 85; step++) {
-    for (const n of points) {
-      n.dx = -n.x * .009 / aspect;
-      n.dy = -n.y * .013;
+    for (const n of stars) if (!seen.has(n.id)) groups[n.tint % groups.length].push(n);
+  } else {
+    const byType = new Map();
+    for (const n of stars) {
+      let type = n.type;
+      if (!byType.has(type) && byType.size >= 24) type = null;
+      if (!byType.has(type)) byType.set(type, []);
+      byType.get(type).push(n);
     }
-    for (let i = 0; i < points.length; i++) {
-      const a = points[i];
-      for (let j = i + 1; j < points.length; j++) {
-        const b = points[j], dx = (a.x - b.x) / aspect, dy = a.y - b.y;
-        const d = Math.max(1, Math.hypot(dx, dy));
-        const f = (Math.min(14, 1700 / (d * d)) + Math.max(0, 71 - d) * .17) / d;
-        a.dx += dx * f * aspect; a.dy += dy * f;
-        b.dx -= dx * f * aspect; b.dy -= dy * f;
+    groups.push(...[...byType.values()].sort((a, b) => b.length - a.length));
+  }
+
+  const area = mapArea();
+  const stretch = Math.max(.76, Math.min(1.85, area.w / Math.max(1, area.h) * .91));
+  const placed = [], maxRadius = Math.max(...groups.map(g => Math.sqrt(g.length) * 45));
+  for (const [i, group] of groups.entries()) {
+    const radius = 35 + Math.sqrt(group.length - 1) * 45;
+    let cx = 0, cy = 0;
+    if (i) {
+      for (let step = 1; ; step++) {
+        const angle = step * 2.399963 + i * .82, dist = Math.sqrt(step) * (maxRadius + 44) * .24;
+        cx = dist * Math.cos(angle); cy = dist * Math.sin(angle);
+        if (placed.every(p => Math.hypot(cx - p.x, cy - p.y) > .83 * (radius + p.r))) break;
       }
     }
-    for (const [a, b] of pairs) {
-      const dx = (b.x - a.x) / aspect, dy = b.y - a.y, d = Math.max(1, Math.hypot(dx, dy));
-      const f = (d - 95) * .038 / d;
-      a.dx += dx * f * aspect; a.dy += dy * f;
-      b.dx -= dx * f * aspect; b.dy -= dy * f;
+    placed.push({ x: cx, y: cy, r: radius });
+    const seed = group[0];
+    const member = new Set(group), ordered = [];
+    for (const start of group) {
+      if (!member.delete(start)) continue;
+      const queue = [start];
+      for (let j = 0; j < queue.length; j++) {
+        const n = queue[j]; ordered.push(n);
+        for (const id of n.neighbors) {
+          const neighbor = nodes.get(id);
+          if (member.delete(neighbor)) queue.push(neighbor);
+        }
+      }
     }
-    const speed = 1 - .68 * step / 85;
-    for (const n of points) {
-      n.x += Math.max(-18, Math.min(18, n.dx)) * speed;
-      n.y += Math.max(-18, Math.min(18, n.dy)) * speed;
+    for (const [j, n] of ordered.entries()) {
+      const t = j * 2.399963 + seed.seed * 6.28 + (n.seed - .5) * .32;
+      const r = Math.sqrt(j) * 46 * (.82 + n.seed * .25 + .09 * Math.sin(3 * t + i));
+      let sx = Math.cos(t) * r, sy = Math.sin(t) * r;
+      if (group.length > 50) {
+        const twist = seed.seed * 4.9, bulge = Math.sin(sx / radius * 4.6 + twist);
+        sy = sy * (.48 + .19 * Math.cos(sx / radius * 5.3)) + bulge * radius * .19;
+        const a = sx * Math.cos(twist) - sy * Math.sin(twist);
+        sy = sx * Math.sin(twist) + sy * Math.cos(twist); sx = a;
+      }
+      n.x = (cx + sx) * stretch;
+      n.y = cy + sy;
+      n.landmark = j === 0 || n.index === 0;
+      n.sectorCount = j === 0 && stars.length >= 160 && group.every(m => m.type === n.type) ? group.length : 0;
+      n.radius = n.landmark ? 12 + 6 / (1 + n.index * .2) : 4.1 + Math.min(5, Math.log2(1 + n.degree)) + n.seed * 1.4;
+      n.tile = n.tint + (n.landmark || stars.length < 60 && n.degree > 1 ? 0 : 2 * colors.length);
+      if (n.landmark) landmarks.push(n);
     }
+    seed.sectorRadius = radius * Math.max(1, stretch);
+  }
+
+  bounds = { x1: Infinity, x2: -Infinity, y1: Infinity, y2: -Infinity };
+  for (const n of stars) {
+    bounds.x1 = Math.min(bounds.x1, n.x); bounds.x2 = Math.max(bounds.x2, n.x);
+    bounds.y1 = Math.min(bounds.y1, n.y); bounds.y2 = Math.max(bounds.y2, n.y);
+  }
+  cellSize = Math.max(30, Math.max(bounds.x2 - bounds.x1, bounds.y2 - bounds.y1) / 48);
+  const bucket = (x, y) => {
+    const key = Math.floor(x / cellSize) + ":" + Math.floor(y / cellSize);
+    if (!cells.has(key)) cells.set(key, { nodes: [], edges: [] });
+    return cells.get(key);
+  };
+  for (const n of stars) bucket(n.x, n.y).nodes.push(n);
+
+  const segments = [];
+  for (const e of graph.edges) {
+    const a = nodes.get(e.subject_id), b = nodes.get(e.object_id);
+    if (!a || !b) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
+    const level = stars.length < 160 ? .75 + .35 * a.seed : Math.max(.035, Math.min(1.3, 250 / Math.max(d, 1)) ** 2);
+    const link = { a, b, e, level, distance: d };
+    a.routes.push(link);
+    if (b !== a) b.routes.push(link);
+    const bins = new Set();
+    const add = (x1, y1, x2, y2) => {
+      segments.push(x1, y1, a.index, b.index, level, x2, y2, a.index, b.index, level);
+      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(x2 - x1), Math.abs(y2 - y1)) / cellSize));
+      let px = x1, py = y1;
+      bins.add(bucket(px, py));
+      for (let i = 1; i <= steps; i++) {
+        const x = x1 + (x2 - x1) * i / steps, y = y1 + (y2 - y1) * i / steps;
+        bins.add(bucket(x, y));
+        if (Math.floor(px / cellSize) !== Math.floor(x / cellSize) && Math.floor(py / cellSize) !== Math.floor(y / cellSize)) {
+          bins.add(bucket(px, y)); bins.add(bucket(x, py));
+        }
+        px = x; py = y;
+      }
+    };
+    if (a === b) {
+      const r = a.radius * 1.45, x = a.x + r, y = a.y - r;
+      for (let j = 0; j < 20; j++) {
+        const t = j * Math.PI / 10, u = t + Math.PI / 10;
+        add(x + r * Math.cos(t), y + r * Math.sin(t), x + r * Math.cos(u), y + r * Math.sin(u));
+      }
+    } else add(a.x, a.y, b.x, b.y);
+
+    for (const bin of bins) bin.edges.push(link);
+  }
+  for (const n of stars) {
+    if (n.routes.length < 2) continue;
+    n.routes.sort((a, b) => a.distance - b.distance);
+    const seen = new Set();
+    n.routes = n.routes.filter(link => {
+      const neighbor = link.a === n ? link.b : link.a;
+      if (seen.has(neighbor) || seen.size >= 60) return false;
+      seen.add(neighbor); return true;
+    });
+  }
+  world.upload(stars, new Float32Array(segments));
+  rebuildLocator();
+}
+
+function rebuildLocator() {
+  if (!locator || !bounds) return;
+  locator.hidden = false;
+  const w = locator.width, h = locator.height;
+  const z = Math.min((w - 20) / Math.max(64, bounds.x2 - bounds.x1), (h - 16) / Math.max(48, bounds.y2 - bounds.y1));
+  mini = { z, x: (w - (bounds.x1 + bounds.x2) * z) / 2, y: (h - (bounds.y1 + bounds.y2) * z) / 2 };
+  locatorImage.width = w; locatorImage.height = h;
+  const c = locatorImage.getContext("2d"), r = stars.length > 1200 ? 1 : 2;
+  for (const n of stars) {
+    c.fillStyle = colors[n.tint];
+    c.fillRect(mini.x + n.x * z - r / 2, mini.y + n.y * z - r / 2, r, r);
   }
 }
 
-function fit() {
-  let x1 = 0, y1 = 0, x2 = 0, y2 = 0;
-  if (nodes.size) {
-    const list = [...nodes.values()];
-    x1 = Math.min(...list.map(n => n.x)); x2 = Math.max(...list.map(n => n.x));
-    y1 = Math.min(...list.map(n => n.y)); y2 = Math.max(...list.map(n => n.y));
-  }
-  fitScale = Math.max(.02, Math.min(1.65, (width - Math.min(110, width * .22)) / Math.max(x2 - x1, 1), (height - 120) / Math.max(y2 - y1, 1)));
-  scale = fitScale;
-  ox = (width - (x1 + x2) * scale) / 2;
-  oy = (height - (y1 + y2) * scale) / 2;
-  paint();
+function drawLocator(area, light) {
+  if (!locator || !mini || !locator.clientWidth) return;
+  const c = locator.getContext("2d"), w = locator.width, h = locator.height;
+  c.clearRect(0, 0, w, h);
+  c.drawImage(locatorImage, 0, 0);
+  c.strokeStyle = light ? "#297789" : "#75d5dd"; c.lineWidth = 1;
+  const x = mini.x + ((area.x - area.w / 2 - ox) / scale) * mini.z;
+  const y = mini.y + ((area.y - area.h / 2 - oy) / scale) * mini.z;
+  const left = Math.max(1, x), top = Math.max(1, y);
+  c.strokeRect(left, top, Math.max(0, Math.min(w - 1, x + area.w / scale * mini.z) - left), Math.max(0, Math.min(h - 1, y + area.h / scale * mini.z) - top));
+}
+
+if (locator) locator.onclick = e => {
+  if (!mini) return;
+  const rect = locator.getBoundingClientRect(), area = mapArea();
+  const x = ((e.clientX - rect.left) * locator.width / rect.width - mini.x) / mini.z;
+  const y = ((e.clientY - rect.top) * locator.height / rect.height - mini.y) / mini.z;
+  steer(scale, area.x - x * scale, area.y - y * scale);
+};
+
+function fit(animate) {
+  const area = mapArea(), b = bounds || { x1: 0, x2: 0, y1: 0, y2: 0 };
+  fitScale = Math.max(.005, Math.min(2.15, (area.w - Math.min(120, area.w * .18)) / Math.max(1, b.x2 - b.x1),
+    (area.h - Math.min(95, area.h * .16)) / Math.max(1, b.y2 - b.y1)));
+  const x = area.x - (b.x1 + b.x2) * fitScale / 2, y = area.y - (b.y1 + b.y2) * fitScale / 2;
+  if (animate) steer(fitScale, x, y);
+  else { targetCamera = null; scale = fitScale; ox = x; oy = y; paint(); }
 }
 
 function resize() {
-  const r = canvas.getBoundingClientRect();
-  const previousAspect = width / height;
-  width = Math.max(1, r.width);
-  height = Math.max(1, r.height);
-  const density = Math.min(2.5, devicePixelRatio || 1);
-  canvas.width = Math.round(width * density);
-  canvas.height = Math.round(height * density);
+  const rect = canvas.getBoundingClientRect(), z = Math.min(2.5, devicePixelRatio || 1);
+  if (width === rect.width && height === rect.height && canvas.width === Math.round(width * z)) return;
+  width = Math.max(1, rect.width); height = Math.max(1, rect.height);
+  for (const layer of [canvas, $("world-gpu")]) {
+    if (!layer) continue;
+    layer.width = Math.round(width * z); layer.height = Math.round(height * z);
+  }
   ctx.setTransform(canvas.width / width, 0, 0, canvas.height / height, 0, 0);
-  if (Math.abs(previousAspect - width / height) > .12) layout();
   fit();
 }
 
@@ -576,130 +729,230 @@ function paint() {
   if (!frame) frame = requestAnimationFrame(draw);
 }
 
-function line(x1, y1, x2, y2, stroke, weight = 1) {
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.lineWidth = weight;
-  ctx.strokeStyle = stroke;
-  ctx.stroke();
+function steer(next, x, y) {
+  hover = null;
+  if (reducedMotion.matches) { scale = next; ox = x; oy = y; targetCamera = null; }
+  else targetCamera = { scale: next, x, y };
+  paint();
 }
 
-function circle(x, y, r, fill, stroke) {
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, 2 * Math.PI);
-  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+function flyToEntity(id) {
+  const n = nodes.get(id);
+  if (!n) return false;
+  const area = mapArea(), next = Math.min(4, Math.max(scale, fitScale * 2.2, 1.5));
+  steer(next, area.x - n.x * next, area.y - n.y * next);
+  return true;
 }
 
-function guides() {
-  const cx = width * .51, cy = height * .5;
-  const base = Math.max(62, Math.min(width, height) * .22);
-  for (const r of [base, base * 1.7, base * 2.4]) circle(cx, cy, r, null, "#a4d3ad10");
-  ctx.setLineDash([3, 7]);
-  line(0, cy, width, cy, "#b0d9b515");
-  line(cx, 0, cx, height, "#b0d9b515");
-  ctx.setLineDash([]);
-  for (let i = 0; i < 48; i++) {
-    const theta = i * Math.PI / 24, r = base * 1.7;
-    const dx = Math.cos(theta), dy = Math.sin(theta);
-    line(cx + dx * r, cy + dy * r, cx + dx * (r + (i % 4 ? 3 : 7)), cy + dy * (r + (i % 4 ? 3 : 7)), "#b1d4bc22");
+function advanceCamera(time) {
+  const dt = Math.min(40, Math.max(1, time - lastFrame));
+  lastFrame = time;
+  if (targetCamera) {
+    const t = 1 - Math.exp(-dt / 69), target = targetCamera;
+    ox += (target.x - ox) * t; oy += (target.y - oy) * t; scale += (target.scale - scale) * t;
+    if (Math.abs(target.x - ox) + Math.abs(target.y - oy) + Math.abs(target.scale - scale) * 400 < .28) {
+      ox = target.x; oy = target.y; scale = target.scale; targetCamera = null;
+    } else paint();
   }
-  const ax = 27, ay = height - 25;
-  line(ax - 8, ay, ax + 8, ay, "#729380");
-  line(ax, ay - 8, ax, ay + 8, "#729380");
-  circle(ax, ay, 3, "#152720", "#729380");
-}
-
-function intersect(a, b) {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-}
-
-function draw() {
-  frame = 0;
-  ctx.clearRect(0, 0, width, height);
-  guides();
-  const focus = hover?.node?.id || selected;
-  const sorted = [...nodes.values()].sort((a, b) => Number(b.id === focus) - Number(a.id === focus) || b.degree - a.degree);
-  for (const n of sorted) {
-    n.sx = ox + n.x * scale;
-    n.sy = oy + n.y * scale;
-    n.sr = Math.max(3, Math.min(17, n.radius * Math.sqrt(scale)));
+  if (flightKeys.size) {
+    const dx = Number(flightKeys.has("a") || flightKeys.has("arrowleft")) - Number(flightKeys.has("d") || flightKeys.has("arrowright"));
+    const dy = Number(flightKeys.has("w") || flightKeys.has("arrowup")) - Number(flightKeys.has("s") || flightKeys.has("arrowdown"));
+    const speed = dt * .62 / Math.max(1, Math.hypot(dx, dy));
+    ox += dx * speed; oy += dy * speed;
+    paint();
   }
+}
 
-  for (const e of graph.edges) {
-    const a = nodes.get(e.subject_id), b = nodes.get(e.object_id);
-    const lit = focus === a.id || focus === b.id || hover?.edge === e;
-    const stroke = lit ? "#addbb8b5" : "#769c8685";
-    if (a === b) {
-      circle(a.sx + a.sr, a.sy - a.sr, a.sr, null, stroke);
-      continue;
+function inCells(x1, y1, x2, y2, visit) {
+  if (!bounds) return;
+  const left = Math.max(Math.floor(bounds.x1 / cellSize) - 2, Math.floor(x1 / cellSize));
+  const right = Math.min(Math.floor(bounds.x2 / cellSize) + 2, Math.floor(x2 / cellSize));
+  const top = Math.max(Math.floor(bounds.y1 / cellSize) - 2, Math.floor(y1 / cellSize));
+  const bottom = Math.min(Math.floor(bounds.y2 / cellSize) + 2, Math.floor(y2 / cellSize));
+  for (let y = top; y <= bottom; y++) for (let x = left; x <= right; x++) {
+    const bin = cells.get(x + ":" + y);
+    if (bin) visit(bin);
+  }
+}
+
+function line(x1, y1, x2, y2) {
+  ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+}
+
+function orbits(n, light, focus, primary) {
+  const x = ox + n.x * scale, y = oy + n.y * scale, r = world.radius(n, scale, focus);
+  if (x < -130 || x > width + 130 || y < -130 || y > height + 130) return;
+  const size = Math.max(primary ? 23 : 12, r * (primary ? 1.95 : 1.65));
+  const ink = light ? "#355762" : colors[n.tint];
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate((n.seed - .5) * .9 - .28);
+  ctx.strokeStyle = ink + (primary ? "a8" : "88"); ctx.lineWidth = .85;
+  ctx.beginPath(); ctx.ellipse(0, 0, size * 1.16, size * .91, 0, .18, 5.99); ctx.stroke();
+  ctx.strokeStyle = ink + "45";
+  ctx.beginPath(); ctx.ellipse(0, 0, size * 1.39, size, 0, 1.38, 3.9); ctx.stroke();
+  if (primary || n.index === focus) {
+    ctx.strokeStyle = ink + "70";
+    ctx.beginPath();
+    for (let i = 0; i < 24; i++) {
+      const t = i * Math.PI / 12;
+      line(Math.cos(t) * size * 1.62, Math.sin(t) * size * 1.62, Math.cos(t) * (size * 1.62 + (i % 6 ? 2 : 5)), Math.sin(t) * (size * 1.62 + (i % 6 ? 2 : 5)));
     }
-    line(a.sx, a.sy, b.sx, b.sy, stroke, lit ? 1.5 : 1);
-    if (lit) {
-      const theta = Math.atan2(b.sy - a.sy, b.sx - a.sx), x = b.sx - Math.cos(theta) * (b.sr + 4), y = b.sy - Math.sin(theta) * (b.sr + 4);
-      for (const delta of [-.48, .48]) line(x, y, x - 6 * Math.cos(theta + delta), y - 6 * Math.sin(theta + delta), stroke);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function surveyGrid(light) {
+  if (!stars.length) return;
+  const center = nodes.get(root) || stars[0], x = ox + center.x * scale, y = oy + center.y * scale;
+  const size = Math.max(35, Math.min(105, world.radius(center, scale, -1) * 3.2));
+  ctx.save(); ctx.translate(x, y);
+  ctx.strokeStyle = light ? "#526c802a" : "#88bdbc28"; ctx.lineWidth = .7;
+  for (const r of [size * 2.5, size * 4.8, size * 7.3]) {
+    ctx.setLineDash([2, 8]);
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function labelField(visible, focus, light, area) {
+  const ratio = scale / fitScale;
+  const budget = Math.ceil(Math.min(58, area.w * area.h / 28000 * Math.min(2.3, Math.max(.6, ratio * .65))));
+  const grid = new Map(), cell = 52;
+  const keys = function* (x, y, w, h) {
+    for (let j = Math.floor(y / cell); j <= Math.floor((y + h) / cell); j++)
+      for (let i = Math.floor(x / cell); i <= Math.floor((x + w) / cell); i++) yield i + ":" + j;
+  };
+  const occupy = box => {
+    for (const k of keys(box.x, box.y, box.w, box.h)) {
+      if (!grid.has(k)) grid.set(k, []);
+      grid.get(k).push(box);
     }
-  }
+  };
+  const intersects = box => {
+    for (const k of keys(box.x, box.y, box.w, box.h)) {
+      if (grid.get(k)?.some(b => box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y)) return true;
+    }
+    return false;
+  };
 
-  const occupied = [
-    { x: width - 137, y: height - 51, w: 135, h: 51 },
-    { x: 8, y: 6, w: $("map-mode").parentElement.offsetWidth + 16, h: 30 },
-  ];
-  for (const n of sorted) {
-    const { sx: x, sy: y, sr: r } = n, color = colors[typeIndex(n.type)], lit = n.id === focus;
-    if (x < -20 || x > width + 20 || y < -20 || y > height + 20) continue;
-    if (lit || n.degree >= 3) circle(x, y, r + (lit ? 5 : 3), color + "12", color + (lit ? "c9" : "70"));
-    circle(x, y, r, color + "32", color);
-    circle(x, y, Math.max(2, r * .53), color);
-    occupied.push({ x: x - r - 2, y: y - r - 2, w: r * 2 + 4, h: r * 2 + 4 });
-  }
-
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.textBaseline = "middle";
+  const local = ratio >= 2 || stars.length < 65;
+  const candidates = local ? visible.slice().sort((a, b) => Number(b.index === focus) - Number(a.index === focus) ||
+    Number(b.landmark) - Number(a.landmark) || a.index - b.index) : [...landmarks];
+  if (!local && focus >= 0) candidates.unshift(stars[focus]);
   labels = [];
-  for (const n of sorted) {
-    const name = n.name.length > 25 ? n.name.slice(0, 23) + "…" : n.name;
-    const w = ctx.measureText(name).width + 7, h = 16, r = n.sr + 5;
-    const candidates = [[n.sx - w / 2, n.sy + r], [n.sx + r, n.sy - h / 2], [n.sx - w - r, n.sy - h / 2], [n.sx - w / 2, n.sy - h - r]];
-    for (const [x, y] of candidates) {
-      const rect = { x, y, w, h };
-      if (x < 4 || x + w > width - 4 || y < 4 || y + h > height - 4 || occupied.some(b => intersect(rect, b))) continue;
-      occupied.push(rect);
-      labels.push({ ...rect, node: n });
-      ctx.lineJoin = "round"; ctx.lineWidth = 3.5; ctx.strokeStyle = "#192a22";
-      ctx.strokeText(name, x + 3.5, y + h / 2);
-      ctx.fillStyle = n.id === focus ? "#f4ffe9" : "#d4e1d6";
-      ctx.fillText(name, x + 3.5, y + h / 2);
-      break;
+  for (const n of candidates) {
+    const sx = ox + n.x * scale, sy = oy + n.y * scale;
+    if (sx < 0 || sx > area.w || sy < 25 || sy > height - 40) continue;
+    const prominent = n.index === focus || n.index === 0;
+    const sectorLabel = !local && n.sectorCount && n.index !== focus;
+    ctx.font = sectorLabel ? "600 11px ui-monospace, monospace" : prominent ? "600 14px system-ui, sans-serif" : "11px ui-monospace, monospace";
+    const title = sectorLabel ? pretty(n.type).toUpperCase() : n.name;
+    const name = title.length > 27 ? title.slice(0, 25) + "…" : title;
+    const sub = sectorLabel ? number.format(n.sectorCount) + " ENTITIES" : pretty(n.type).toUpperCase();
+    const w = Math.max(ctx.measureText(name).width, sectorLabel || prominent ? sub.length * 5.8 + 8 : 0) + 10;
+    const h = prominent || sectorLabel ? 36 : 19;
+    const r = world.radius(n, scale, focus) * (n.landmark || prominent ? 2.3 : 1.1) + 4;
+    const positions = [[sx + r, sy - h / 2], [sx - w - r, sy - h / 2], [sx - w / 2, sy + r], [sx - w / 2, sy - r - h]];
+    for (const [x, y] of positions) {
+      const box = { x, y, w, h, node: n, sector: Boolean(sectorLabel) };
+      if (x < 3 || x + w > area.w - 3 || y < 48 || y + h > height - 72 || intersects(box)) continue;
+      const textY = y + (sectorLabel ? 12 : prominent ? 26 : 10);
+      ctx.textBaseline = "middle"; ctx.lineJoin = "round"; ctx.lineWidth = 4;
+      ctx.strokeStyle = light ? "#eef3f0e0" : "#0c1622e8";
+      ctx.strokeText(name, x + 5, textY);
+      ctx.fillStyle = light ? "#223948" : sectorLabel ? colors[n.tint] : prominent ? "#f3f6e9" : "#c6d5df";
+      ctx.fillText(name, x + 5, textY);
+      if (prominent || sectorLabel) {
+        ctx.font = "9px ui-monospace, monospace";
+        ctx.fillStyle = light ? "#375969" : sectorLabel ? "#b9c6d4" : colors[n.tint];
+        ctx.strokeText(sub, x + 5, y + (sectorLabel ? 25 : 10));
+        ctx.fillText(sub, x + 5, y + (sectorLabel ? 25 : 10));
+      }
+      occupy(box); labels.push(box); break;
     }
+    if (labels.length >= budget) break;
   }
+}
 
-  if (hover && hoverAt && !drag) {
-    const text = hover.node ? hover.node.name + " · " + pretty(hover.node.type) : pretty(hover.edge.relation) + (hover.edge.confidence == null ? "" : " · " + Math.round(hover.edge.confidence * 100) + "%");
-    ctx.font = "12px system-ui, sans-serif";
-    const w = Math.min(width - 16, ctx.measureText(text).width + 20);
-    const x = Math.max(8, Math.min(width - w - 8, hoverAt.x + 10)), y = Math.max(8, Math.min(height - 35, hoverAt.y - 36));
-    ctx.fillStyle = "#deeadb";
-    ctx.fillRect(x, y, w, 25);
-    ctx.fillStyle = "#17291d";
-    ctx.fillText(text, x + 10, y + 12.5, w - 20);
+function draw(time) {
+  frame = 0;
+  advanceCamera(time);
+  const area = mapArea(), light = document.documentElement.dataset.theme === "light";
+  const focusNode = (!hover?.sector && hover?.node) || nodes.get(selected), focus = focusNode?.index ?? -1;
+  const visible = [];
+  inCells((-70 - ox) / scale, (-70 - oy) / scale, (width + 70 - ox) / scale, (height + 70 - oy) / scale,
+    b => { for (const n of b.nodes) visible.push(n); });
+  const alpha = Math.min(.5, (.32 / Math.max(1, Math.sqrt(stars.length / 70))) * Math.max(1, Math.min(8, scale / fitScale)));
+  ctx.clearRect(0, 0, width, height);
+  surveyGrid(light);
+  world.draw(ctx, width, height, ox, oy, scale, light, focus, alpha, visible);
+  if (focusNode) {
+    ctx.beginPath(); ctx.lineWidth = 1.5; ctx.strokeStyle = light ? "#247988b5" : "#72ddedb0";
+    for (const { a, b, distance } of focusNode.routes) {
+      if (distance * scale < 28) continue;
+      const dx = (b.x - a.x) / distance, dy = (b.y - a.y) / distance;
+      const r = world.radius(b, scale, focus) + 3, x = ox + b.x * scale - dx * r, y = oy + b.y * scale - dy * r;
+      const start = world.radius(a, scale, focus) + 2;
+      line(ox + a.x * scale + dx * start, oy + a.y * scale + dy * start, x, y);
+      line(x - 5 * dx + 2 * dy, y - 5 * dy - 2 * dx, x, y);
+      line(x - 5 * dx - 2 * dy, y - 5 * dy + 2 * dx, x, y);
+    }
+    ctx.stroke();
   }
+  if (hover?.edge) {
+    const a = nodes.get(hover.edge.subject_id), b = nodes.get(hover.edge.object_id);
+    ctx.beginPath(); ctx.lineWidth = 1.6; ctx.strokeStyle = light ? "#247988" : "#8bd8e7";
+    if (a === b) {
+      const r = a.radius * 1.45 * scale;
+      ctx.arc(ox + a.x * scale + r, oy + a.y * scale - r, r, 0, Math.PI * 2);
+    } else line(ox + a.x * scale, oy + a.y * scale, ox + b.x * scale, oy + b.y * scale);
+    ctx.stroke();
+  }
+  for (const n of landmarks) if (stars.length < 160 || n.index === 0 || n.index === focus) orbits(n, light, focus, n === stars[0]);
+  if (focusNode && !focusNode.landmark) orbits(focusNode, light, focus, true);
+  labelField(visible, focus, light, area);
+  if (hover && hoverAt && !drag) {
+    const text = hover.sector ? "Zoom into " + pretty(hover.node.type) : hover.node ? hover.node.name + " · " + pretty(hover.node.type) :
+      pretty(hover.edge.relation) + (hover.edge.confidence == null ? "" : " · " + Math.round(hover.edge.confidence * 100) + "%");
+    ctx.font = "11px ui-monospace, monospace"; ctx.textBaseline = "middle";
+    const w = Math.min(width - 16, ctx.measureText(text).width + 18);
+    const x = Math.max(8, Math.min(width - w - 8, hoverAt.x + 12)), y = Math.max(8, Math.min(height - 33, hoverAt.y - 34));
+    ctx.fillStyle = light ? "#e7f3f0" : "#172634"; ctx.fillRect(x, y, w, 24);
+    ctx.strokeStyle = light ? "#829c9e" : "#405968"; ctx.lineWidth = 1; ctx.strokeRect(x, y, w, 24);
+    ctx.fillStyle = light ? "#183340" : "#e1eada"; ctx.fillText(text, x + 9, y + 12, w - 18);
+  }
+  drawLocator(area, light);
   $("zoom").textContent = Math.round(scale / fitScale * 100) + "%";
 }
 
 function hit(x, y) {
-  for (const n of nodes.values()) if (Math.hypot(x - n.sx, y - n.sy) <= Math.max(9, n.sr + 3)) return { node: n };
   const label = labels.find(l => x >= l.x && x <= l.x + l.w && y >= l.y && y <= l.y + l.h);
-  if (label) return { node: label.node };
-  let nearest = null, distance = 5;
-  for (const e of graph.edges) {
-    const a = nodes.get(e.subject_id), b = nodes.get(e.object_id), dx = b.sx - a.sx, dy = b.sy - a.sy;
+  if (label) return { node: label.node, sector: label.sector };
+  const wx = (x - ox) / scale, wy = (y - oy) / scale;
+  let node = null, distance = Infinity;
+  const edges = new Set();
+  inCells(wx - 30 / scale, wy - 30 / scale, wx + 30 / scale, wy + 30 / scale, bin => {
+    for (const n of bin.nodes) {
+      const d = Math.hypot(wx - n.x, wy - n.y) * scale;
+      if (d < Math.max(7, world.radius(n, scale, -1) + 3) && d < distance) { distance = d; node = n; }
+    }
+  });
+  if (node) return { node };
+  inCells(wx - 5 / scale, wy - 5 / scale, wx + 5 / scale, wy + 5 / scale,
+    bin => { for (const edge of bin.edges) edges.add(edge); });
+  let nearest = null;
+  distance = 4 / scale;
+  for (const { a, b, e, level } of edges) {
+    if (stars.length > 160 && level < .18 && scale < fitScale * 2 && a.id !== selected && b.id !== selected) continue;
+    const dx = b.x - a.x, dy = b.y - a.y;
     let d;
-    if (!dx && !dy) d = Math.abs(Math.hypot(x - a.sx - a.sr, y - a.sy + a.sr) - a.sr);
-    else {
-      const t = Math.max(0, Math.min(1, ((x - a.sx) * dx + (y - a.sy) * dy) / (dx * dx + dy * dy)));
-      d = Math.hypot(x - a.sx - t * dx, y - a.sy - t * dy);
+    if (a === b) {
+      const r = a.radius * 1.45;
+      d = Math.abs(Math.hypot(wx - a.x - r, wy - a.y + r) - r);
+    } else {
+      const t = Math.max(0, Math.min(1, ((wx - a.x) * dx + (wy - a.y) * dy) / (dx * dx + dy * dy)));
+      d = Math.hypot(wx - a.x - t * dx, wy - a.y - t * dy);
     }
     if (d < distance) { nearest = e; distance = d; }
   }
@@ -711,14 +964,18 @@ function point(event) {
   return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
 
-function zoomAt(factor, x = width / 2, y = height / 2) {
-  const next = Math.min(Math.max(6, fitScale * 4), Math.max(fitScale * .25, scale * factor));
-  ox = x - (x - ox) * next / scale;
-  oy = y - (y - oy) * next / scale;
-  scale = next;
-  hover = null;
-  paint();
+function zoomAt(factor, x, y) {
+  const area = mapArea(), current = targetCamera || { scale, x: ox, y: oy };
+  x ??= area.x; y ??= area.y;
+  const next = Math.min(Math.max(6, fitScale * 5), Math.max(fitScale * .22, current.scale * factor));
+  steer(next, x - (x - current.x) * next / current.scale, y - (y - current.y) * next / current.scale);
 }
+
+new MutationObserver(paint).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+canvas.addEventListener("contextrestored", () => {
+  ctx.setTransform(canvas.width / width, 0, 0, canvas.height / height, 0, 0);
+  rebuildLocator(); paint();
+});
 
 function inspectFromMap(id) {
   inspect(id);
@@ -727,6 +984,8 @@ function inspectFromMap(id) {
 
 canvas.onpointerdown = e => {
   if (e.button !== 0 || !e.isPrimary) return;
+  targetCamera = null;
+  canvas.focus({ preventScroll: true });
   const p = point(e);
   drag = { ...p, id: e.pointerId, ox, oy, moved: false };
   canvas.setPointerCapture(e.pointerId);
@@ -756,7 +1015,11 @@ canvas.onpointerup = e => {
   canvas.releasePointerCapture(e.pointerId);
   canvas.dataset.cursor = "";
   const target = !moved && hit(p.x, p.y);
-  if (target?.node) inspectFromMap(target.node.id);
+  if (target?.sector) {
+    const n = target.node, area = mapArea();
+    const next = Math.max(fitScale * 2.1, Math.min(4, Math.min(area.w, area.h) / (2.2 * n.sectorRadius)));
+    steer(next, area.x - n.x * next, area.y - n.y * next);
+  } else if (target?.node) inspectFromMap(target.node.id);
   paint();
 };
 canvas.onpointercancel = () => { drag = null; hover = null; canvas.dataset.cursor = ""; paint(); };
@@ -770,18 +1033,29 @@ canvas.addEventListener("wheel", e => {
   const p = point(e), delta = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? height : 1);
   zoomAt(Math.exp(-Math.max(-180, Math.min(180, delta)) * .0018), p.x, p.y);
 }, { passive: false });
-canvas.onkeydown = e => {
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || $("auth").open || e.target.closest("input,select,textarea,[contenteditable=true]")) return;
+  const key = e.key.toLowerCase();
+  if (e.target !== canvas && e.target !== document.body && e.target !== document.documentElement && !["w", "a", "s", "d"].includes(key)) return;
   if (e.key === "+" || e.key === "=") zoomAt(1.25);
   else if (e.key === "-") zoomAt(.8);
-  else if (e.key === "Home") fit();
-  else if (e.key === "ArrowLeft") ox += 35;
-  else if (e.key === "ArrowRight") ox -= 35;
-  else if (e.key === "ArrowUp") oy += 35;
-  else if (e.key === "ArrowDown") oy -= 35;
+  else if (e.key === "Home") fit(true);
+  else if (["w", "a", "s", "d", "arrowleft", "arrowright", "arrowup", "arrowdown"].includes(key)) {
+    targetCamera = null; hover = null;
+    if (!flightKeys.has(key)) {
+      if (key === "a" || key === "arrowleft") ox += 12;
+      if (key === "d" || key === "arrowright") ox -= 12;
+      if (key === "w" || key === "arrowup") oy += 12;
+      if (key === "s" || key === "arrowdown") oy -= 12;
+    }
+    flightKeys.add(key);
+  }
   else return;
   e.preventDefault();
   paint();
-};
+});
+document.addEventListener("keyup", e => flightKeys.delete(e.key.toLowerCase()));
+window.addEventListener("blur", () => flightKeys.clear());
 
 function signedOut() {
   for (const key of requests.keys()) abort(key);
@@ -803,6 +1077,8 @@ function signedOut() {
   options("type", [], "All types");
   options("relation", [], "All relations");
   $("filter-count").hidden = $("time-dot").hidden = true;
+  nextSector = null;
+  sector = 0;
   setGraph({ nodes: [], edges: [], truncated: false }, false, null);
   $("plot-state").textContent = "Sign in to explore this graph.";
   closeInspector();
@@ -873,6 +1149,7 @@ $("hops").onchange = () => {
   if (session.mode !== "anonymous") loadMap(selected || root, false);
 };
 $("map-reset").onclick = () => { closeInspector(); loadMap(null, false); };
+$("load-sector").onclick = () => { if (nextSector && !root) loadMap(null, true); };
 $("close-inspector").onclick = closeInspector;
 $("fit").onclick = fit;
 $("zoom-in").onclick = () => zoomAt(1.25);

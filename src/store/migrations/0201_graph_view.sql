@@ -93,5 +93,9 @@ CREATE INDEX IF NOT EXISTS fact_graph_object_page ON fact (graph_id, object_id, 
 CREATE INDEX IF NOT EXISTS fact_graph_project_relation ON fact (graph_id, project, relation, id DESC);
 CREATE INDEX IF NOT EXISTS fact_graph_relation_page ON fact (graph_id, relation, id DESC);
 CREATE INDEX IF NOT EXISTS fact_graph_confidence ON fact (graph_id, confidence) WHERE object_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS fact_graph_map_page ON fact (graph_id, id DESC)
+  INCLUDE (subject_id, object_id, relation, project, confidence, valid, known) WHERE object_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS entity_graph_map_node ON entity (graph_id, id)
+  INCLUDE (name, type) WHERE merged_into IS NULL;
 CREATE INDEX IF NOT EXISTS merge_graph_from_page ON merge_log (graph_id, from_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS merge_graph_into_page ON merge_log (graph_id, into_id, created_at DESC);

@@ -45,6 +45,7 @@ const Endpoint = union(enum) {
 const Asset = enum {
     index,
     js,
+    world,
     css,
     favicon,
 
@@ -52,6 +53,7 @@ const Asset = enum {
         return switch (asset) {
             .index => .{ .status = .ok, .content_type = "text/html; charset=utf-8", .body = @embedFile("viewer/index.html") },
             .js => .{ .status = .ok, .content_type = "text/javascript; charset=utf-8", .body = @embedFile("viewer/viewer.js") },
+            .world => .{ .status = .ok, .content_type = "text/javascript; charset=utf-8", .body = @embedFile("viewer/world.js") },
             .css => .{ .status = .ok, .content_type = "text/css; charset=utf-8", .body = @embedFile("viewer/viewer.css") },
             .favicon => .{ .status = .no_content },
         };
@@ -63,10 +65,12 @@ const Route = struct { method: std.http.Method, endpoint: Endpoint };
 const fixed_routes = [_]struct { path: []const u8, route: Route }{
     .{ .path = "/", .route = .{ .method = .GET, .endpoint = .{ .asset = .index } } },
     .{ .path = "/viewer.js", .route = .{ .method = .GET, .endpoint = .{ .asset = .js } } },
+    .{ .path = "/world.js", .route = .{ .method = .GET, .endpoint = .{ .asset = .world } } },
     .{ .path = "/viewer.css", .route = .{ .method = .GET, .endpoint = .{ .asset = .css } } },
     .{ .path = "/favicon.ico", .route = .{ .method = .GET, .endpoint = .{ .asset = .favicon } } },
     .{ .path = "/v1/graph/session", .route = .{ .method = .GET, .endpoint = .session } },
     .{ .path = "/v1/graph/overview", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .graph_overview } } } },
+    .{ .path = "/v1/graph/map", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .graph_map } } } },
     .{ .path = "/v1/graph/neighborhood", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .graph_neighborhood } } } },
     .{ .path = "/v1/graph/search", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .graph_search } } } },
     .{ .path = "/v1/graph/entity", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .graph_entity } } } },
@@ -401,7 +405,7 @@ const Identity = struct {
             .session, .health, .asset => true,
             .mcp => false,
             .op => |op| switch (op.op) {
-                .graph_overview, .graph_neighborhood, .graph_search, .graph_entity => id.mode == .tailscale,
+                .graph_overview, .graph_map, .graph_neighborhood, .graph_search, .graph_entity => id.mode == .tailscale,
                 else => false,
             },
         };
@@ -572,6 +576,7 @@ test "http routes over tcp and unix socket" {
         .{ .path = "/v1/graph/neighborhood", .op = .graph_neighborhood },
         .{ .path = "/v1/graph/search", .op = .graph_search },
         .{ .path = "/v1/graph/entity", .op = .graph_entity },
+        .{ .path = "/v1/graph/map", .op = .graph_map },
         .{ .path = "/v1/entries", .op = .entries },
         .{ .path = "/v1/search", .op = .search },
         .{ .path = "/v1/entity", .op = .entity },

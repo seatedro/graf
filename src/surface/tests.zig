@@ -266,6 +266,12 @@ test "graph endpoints return structured data over authenticated TCP" {
     const counts = try std.json.parseFromSliceLeaky(std.json.Value, arena, overview.body, .{});
     try testing.expectEqual(@as(i64, 7), counts.object.get("entities").?.integer);
 
+    const world = try h.handle(arena, .{ .op = .graph_map });
+    try testing.expectEqual(@as(u16, 200), world.status);
+    const page = try std.json.parseFromSliceLeaky(std.json.Value, arena, world.body, .{});
+    try testing.expect(page.object.get("edges").?.array.items.len > 0);
+    try testing.expect(page.object.get("next_before").? == .null);
+
     const graph = try h.handle(arena, .{ .op = .graph_neighborhood, .body = focus });
     try testing.expectEqual(@as(u16, 200), graph.status);
     const neighborhood = try std.json.parseFromSliceLeaky(std.json.Value, arena, graph.body, .{});

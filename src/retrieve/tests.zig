@@ -370,6 +370,46 @@ fn contains(hits: []const mod.Hit, id: core.Id) bool {
     return indexOf(hits, id) != null;
 }
 
+test "graph map pages real edges without gaps or duplicate nodes" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+
+    _ = try f.s.pool.exec(
+        \\INSERT INTO fact (id, graph_id, subject_id, relation, object_id, text, project, scope, valid, known, author, confidence, emb, created_seq)
+        \\SELECT md5($1::uuid::text || i)::uuid, $1, $2, 'connects', $3, 'Connection', 'harbor', 'project',
+        \\  tstzrange('2020-01-01', '2021-01-01'), tstzrange('2020-01-02', NULL), 'user', 0.8,
+        \\  array_fill(0::real, ARRAY[512])::halfvec, 0 FROM generate_series(1, 2050) i
+    , .{ &f.seed.graph.bytes, &f.seed.graf.bytes, &f.seed.postgres.bytes });
+
+    var input: mod.graph.Input = .{ .project = "harbor", .type = "software", .relation = "connects", .as_of = "2020-02-01", .min_confidence = 0.75 };
+    const first = (try f.graph(.map, input)).object;
+    const rows = first.get("edges").?.array.items;
+    try std.testing.expect(first.get("truncated").?.bool);
+    try std.testing.expectEqual(@as(usize, 2048), rows.len);
+    try std.testing.expectEqual(@as(usize, 2), first.get("nodes").?.array.items.len);
+    for (rows[1..], rows[0 .. rows.len - 1]) |next, previous| {
+        try std.testing.expect(std.mem.order(u8, next.object.get("id").?.string, previous.object.get("id").?.string) == .lt);
+    }
+
+    const cursor = first.get("next_before").?.string;
+    try std.testing.expectEqualStrings(rows[2047].object.get("id").?.string, cursor);
+    input.before = cursor;
+    const last = (try f.graph(.map, input)).object;
+    const remaining = last.get("edges").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), remaining.len);
+    try std.testing.expect(std.mem.order(u8, remaining[0].object.get("id").?.string, cursor) == .lt);
+    try std.testing.expect(last.get("next_before").? == .null);
+    try std.testing.expect(!last.get("truncated").?.bool);
+
+    input.as_of = "2022-01-01";
+    try std.testing.expectEqual(@as(usize, 0), (try f.graph(.map, input)).object.get("edges").?.array.items.len);
+    input.include_history = true;
+    try std.testing.expectEqual(@as(usize, 2), (try f.graph(.map, input)).object.get("edges").?.array.items.len);
+    input.type = "person";
+    try std.testing.expectEqual(@as(usize, 0), (try f.graph(.map, input)).object.get("edges").?.array.items.len);
+}
+
 fn indexOf(hits: []const mod.Hit, id: core.Id) ?usize {
     for (hits, 0..) |h, i| if (h.fact.id.eql(id)) return i;
     return null;

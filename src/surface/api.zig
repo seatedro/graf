@@ -11,6 +11,7 @@ pub const Op = enum {
     warm,
     recall,
     graph_overview,
+    graph_map,
     graph_neighborhood,
     graph_search,
     graph_entity,
