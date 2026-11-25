@@ -89,11 +89,33 @@ fn isCodebase(t: EntityType) bool {
     return t == .project or t == .repository;
 }
 
-pub fn compatible(a: EntityType, b: EntityType) bool {
+pub fn mergeCompatible(a: EntityType, b: EntityType) bool {
     if (a == b) return true;
     if (isSoftware(a) and isSoftware(b)) return true;
-    if (isCodebase(a) and isCodebase(b)) return true;
-    if ((a == .other and b != .person) or (b == .other and a != .person)) return true;
+    return isCodebase(a) and isCodebase(b);
+}
+
+pub fn compatible(a: EntityType, b: EntityType) bool {
+    if (mergeCompatible(a, b)) return true;
+    return (a == .other and b != .person) or (b == .other and a != .person);
+}
+
+const generic_aliases = [_][]const u8{
+    "main",   "master", "core",    "test",    "tests",    "prod",    "local",
+    "server", "client", "service", "backend", "frontend", "config",  "data",
+    "docs",   "repo",   "project", "model",   "agent",    "tool",    "tools",
+    "script", "build",  "default", "latest",  "stable",   "machine", "laptop",
+};
+
+pub fn specificAlias(norm: []const u8) bool {
+    if (norm.len <= 3) return false;
+    for (generic_aliases) |g| if (std.mem.eql(u8, norm, g)) return false;
+
+    var it = std.mem.tokenizeScalar(u8, norm, ' ');
+    while (it.next()) |tok| {
+        const digits = if (tok.len > 1 and tok[0] == 'v') tok[1..] else tok;
+        for (digits) |c| if (!std.ascii.isDigit(c)) return true;
+    }
     return false;
 }
 
@@ -423,6 +445,19 @@ test "entity type guards" {
     try testing.expect(!compatible(.organization, .code));
     try testing.expect(compatible(.other, .software));
     try testing.expect(!compatible(.other, .person));
+
+    try testing.expect(mergeCompatible(.code, .software));
+    try testing.expect(mergeCompatible(.repository, .project));
+    try testing.expect(!mergeCompatible(.other, .environment));
+    try testing.expect(!mergeCompatible(.environment, .repository));
+    try testing.expect(mergeCompatible(.other, .other));
+}
+
+test "short, versioned and generic aliases are not specific" {
+    for ([_][]const u8{ "p", "q", "v1", "v2", "v3", "app", "mac", "gpu", "api", "web", "run", "main", "core", "2024", "v1 2", "1 2 3" }) |n|
+        try testing.expect(!specificAlias(n));
+    for ([_][]const u8{ "pg zig", "brackwater", "postgres 17", "zig 0 17 1", "harbor ops", "tidewright" }) |n|
+        try testing.expect(specificAlias(n));
 }
 
 test "token jaccard and cosine" {

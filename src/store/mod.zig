@@ -9,6 +9,7 @@ const committer = @import("commit.zig");
 pub const Id = core.Id;
 
 pub const embedding_dims = 512;
+pub const max_merge_facts = committer.max_merge_facts;
 
 pub const Store = struct {
     allocator: std.mem.Allocator,

@@ -336,17 +336,16 @@ pub const MemoryBackend = struct {
         for (req.entity_norms, req.entity_embs, 0..) |norms, emb, i| {
             for (b.entities.items) |e| {
                 if (e.merged_into != null) continue;
-                var alias = false;
+                var via: std.ArrayList([]const u8) = .empty;
                 for (norms) |n| {
-                    if (std.mem.eql(u8, n, e.norm)) alias = true;
-                    for (e.aliases.items) |al| if (std.mem.eql(u8, n, al)) {
-                        alias = true;
-                    };
+                    var hit = std.mem.eql(u8, n, e.norm);
+                    for (e.aliases.items) |al| hit = hit or std.mem.eql(u8, n, al);
+                    if (hit) try via.append(a, n);
                 }
 
                 const cos = rules.cosine(emb, e.emb);
-                if (!alias and cos < 0.5) continue;
-                try ents.append(a, .{ .item = @intCast(i), .id = e.id, .name = e.name, .norm = e.norm, .type = e.type, .alias_match = alias, .cosine = cos });
+                if (via.items.len == 0 and cos < 0.5) continue;
+                try ents.append(a, .{ .item = @intCast(i), .id = e.id, .name = e.name, .norm = e.norm, .type = e.type, .via = via.items, .cosine = cos });
             }
         }
 
