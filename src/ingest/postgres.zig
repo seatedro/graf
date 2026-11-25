@@ -97,8 +97,7 @@ pub const prefetch_sql =
     \\  FROM req, jsonb_array_elements(r->'entities') WITH ORDINALITY e(value, ord)
     \\),
     \\ent_norms AS (
-    \\  SELECT (e.ord - 1)::int AS item, n.value #>> '{}' AS norm
-    \\  FROM req, jsonb_array_elements(r->'entities') WITH ORDINALITY e(value, ord), jsonb_array_elements(e.value->'norms') n
+    \\  SELECT item, norm FROM unnest($3::int[], $4::text[]) AS n(item, norm)
     \\),
     \\hits AS (
     \\  SELECT en.item, COALESCE(x.merged_into, x.id) AS id, true AS alias
@@ -167,13 +166,14 @@ pub const prefetch_sql =
 pub const touched_sql =
     \\WITH log AS (SELECT touched_entities, touched_facts FROM commit_log WHERE graph_id = $1::uuid AND seq > $2 AND seq <= $3),
     \\te AS (SELECT DISTINCT unnest(touched_entities) AS id FROM log),
-    \\tf AS (SELECT DISTINCT unnest(touched_facts) AS id FROM log)
+    \\tf AS (SELECT DISTINCT unnest(touched_facts) AS id FROM log),
+    \\ta AS (SELECT a.entity_id, json_agg(a.norm) AS norms FROM te JOIN entity_alias a ON a.entity_id = te.id GROUP BY a.entity_id)
     \\SELECT json_build_object(
     \\  'entities', COALESCE((SELECT json_agg(json_build_object(
     \\      'id', e.id, 'name', e.name, 'norm', e.norm, 'type', e.type, 'merged_into', e.merged_into,
-    \\      'aliases', COALESCE((SELECT json_agg(a.norm) FROM entity_alias a WHERE a.entity_id = e.id), '[]'::json),
+    \\      'aliases', COALESCE(ta.norms, '[]'::json),
     \\      'emb', COALESCE(e.name_emb::text::json, '[]'::json)))
-    \\    FROM entity e JOIN te ON te.id = e.id), '[]'::json),
+    \\    FROM entity e JOIN te ON te.id = e.id LEFT JOIN ta ON ta.entity_id = e.id), '[]'::json),
     \\  'facts', COALESCE((SELECT json_agg(json_build_object(
     \\      'active', upper_inf(f.known) AND upper_inf(f.valid),
     \\      'fact', json_build_object('item', 0, 'id', f.id, 'subject_id', f.subject_id, 'relation', f.relation,
@@ -252,6 +252,13 @@ pub const PgBackend = struct {
     pub fn prefetch(b: *PgBackend, arena: Allocator, req: pipeline.PrefetchRequest) !resolve.Prefetch {
         const payload = try prefetchPayload(arena, req);
 
+        var norm_items: std.ArrayList(i32) = .empty;
+        var norms: std.ArrayList([]const u8) = .empty;
+        for (req.entity_norms, 0..) |list, i| for (list) |norm| {
+            try norm_items.append(arena, @intCast(i));
+            try norms.append(arena, norm);
+        };
+
         const conn = try b.store.pool.acquire();
         defer conn.release();
         var gbuf: [36]u8 = undefined;
@@ -259,7 +266,7 @@ pub const PgBackend = struct {
         try conn.begin();
         errdefer conn.rollback() catch {};
         _ = conn.exec("SET LOCAL hnsw.iterative_scan = relaxed_order", .{}) catch |err| return logPgError(conn, err);
-        const out = jsonRow(resolve.Prefetch, arena, conn, prefetch_sql, .{ payload, b.graph_id.toString(&gbuf) }) catch |err| return logPgError(conn, err);
+        const out = jsonRow(resolve.Prefetch, arena, conn, prefetch_sql, .{ payload, b.graph_id.toString(&gbuf), norm_items.items, norms.items }) catch |err| return logPgError(conn, err);
         try conn.commit();
         return out;
     }
@@ -391,11 +398,11 @@ pub fn finishOn(arena: Allocator, conn: *pg.Conn, io: std.Io, lease: store.Lease
 }
 
 pub fn prefetchPayload(arena: Allocator, req: pipeline.PrefetchRequest) ![]const u8 {
-    const E = struct { norms: []const []const u8, emb: []const f32 };
+    const E = struct { emb: []const f32 };
     const F = struct { subject: u32, object: ?u32, relation: []const u8, opposed: ?[]const u8, text: []const u8, emb: []const f32 };
 
-    const ents = try arena.alloc(E, req.entity_norms.len);
-    for (ents, 0..) |*e, i| e.* = .{ .norms = req.entity_norms[i], .emb = req.entity_embs[i] };
+    const ents = try arena.alloc(E, req.entity_embs.len);
+    for (ents, req.entity_embs) |*e, emb| e.* = .{ .emb = emb };
 
     const facts = try arena.alloc(F, req.fact_subject.len);
     for (facts, 0..) |*f, j| f.* = .{

@@ -338,6 +338,39 @@ test "migrations apply, are idempotent, and create halfvec(512) columns" {
     try std.testing.expectEqualStrings("halfvec(512)", try row.get([]const u8, 0));
 }
 
+test "hot path indexes exist after migrate and migration 4 reapplies over them" {
+    var s = try testing.open();
+    defer s.close();
+
+    const indexes = [_][]const u8{
+        "entity_alias_entity_idx", "entity_graph_norm_idx", "entity_merged_into_idx",
+        "fact_subject_idx",        "fact_object_idx",       "fact_evidence_entry_idx",
+        "llm_call_entry_idx",      "entry_claim_idx",       "entry_source_pending_idx",
+    };
+    for (indexes) |name| {
+        var row = (try s.pool.row("SELECT to_regclass($1::text) IS NOT NULL", .{name})).?;
+        defer row.deinit() catch {};
+        if (!try row.get(bool, 0)) {
+            std.debug.print("missing index {s}\n", .{name});
+            return error.MissingIndex;
+        }
+    }
+
+    var opts = (try s.pool.row("SELECT 'fastupdate=off' = ANY(reloptions) FROM pg_class WHERE oid = 'entity_alias_norm_trgm'::regclass", .{})).?;
+    defer opts.deinit() catch {};
+    try std.testing.expect(try opts.get(bool, 0));
+
+    const sql = for (migrations.all) |m| {
+        if (m.version == 4) break m.sql;
+    } else return error.MissingMigration;
+
+    const conn = try s.pool.acquire();
+    defer conn.release();
+    try conn.begin();
+    defer conn.rollback() catch {};
+    try conn.execIgnoringState(sql);
+}
+
 test "test stores bound statement and lock waits" {
     var s = try testing.open();
     defer s.close();

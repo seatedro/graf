@@ -137,8 +137,9 @@ pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const 
         \\), next AS (
         \\  SELECT e.id FROM entry e
         \\  WHERE e.graph_id = $1
-        \\    AND (e.status IN ('queued', 'extracted', 'staged') OR (e.status = 'extracting' AND e.lease_until < now()))
+        \\    AND e.status IN ('queued', 'extracting', 'extracted', 'staged')
         \\    AND (e.lease_until IS NULL OR e.lease_until < now())
+        \\    AND (e.status <> 'extracting' OR e.lease_until < now())
         \\    AND (e.not_before IS NULL OR e.not_before <= now())
         \\    AND (NOT e.backfill OR $4::float8 IS NULL OR (SELECT usd FROM backfill_spent) < $4::float8)
         \\    AND NOT EXISTS (

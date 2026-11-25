@@ -11,6 +11,7 @@ pub const all = [_]Migration{
     .{ .version = 1, .name = "init", .sql = @embedFile("migrations/0001_init.sql") },
     .{ .version = 2, .name = "lease_token", .sql = @embedFile("migrations/0002_lease_token.sql") },
     .{ .version = 3, .name = "entry_backfill", .sql = @embedFile("migrations/0003_entry_backfill.sql") },
+    .{ .version = 4, .name = "hot_path_indexes", .sql = @embedFile("migrations/0004_hot_path_indexes.sql") },
     .{ .version = 100, .name = "ingest", .sql = @embedFile("migrations/0100_ingest.sql") },
     .{ .version = 200, .name = "project_brief", .sql = @embedFile("migrations/0200_project_brief.sql") },
 };
