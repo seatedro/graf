@@ -12,20 +12,64 @@ pub const Options = struct {
     listen: []const u8 = "127.0.0.1:7420",
     socket_path: ?[]const u8 = null,
     token: []const u8 = "",
+    tailscale_origin: []const u8 = "",
+    tailscale_logins: []const []const u8 = &.{},
     version: []const u8 = "",
+
+    pub fn validate(o: Options) !void {
+        const address = if (o.listen.len > 0) try net.IpAddress.parseLiteral(o.listen) else null;
+        if (o.tailscale_origin.len > 0) {
+            const authority = std.mem.cutPrefix(u8, o.tailscale_origin, "https://") orelse return error.InvalidTailscaleOrigin;
+            const host, const port = std.mem.cut(u8, authority, ":") orelse .{ authority, "443" };
+            net.HostName.validate(host) catch return error.InvalidTailscaleOrigin;
+            if (!std.mem.endsWith(u8, host, ".ts.net")) return error.InvalidTailscaleOrigin;
+            for (port) |c| if (!std.ascii.isDigit(c)) return error.InvalidTailscaleOrigin;
+            if ((std.fmt.parseInt(u16, port, 10) catch return error.InvalidTailscaleOrigin) == 0) return error.InvalidTailscaleOrigin;
+            if (address == null or !isLoopback(address.?)) return error.TailscaleRequiresLoopback;
+        } else if (o.tailscale_logins.len != 0) return error.MissingTailscaleOrigin;
+
+        if (address != null and !isLoopback(address.?) and o.token.len == 0) return error.TokenRequired;
+    }
 };
 
 const Transport = enum { tcp, unix };
 
 const Endpoint = union(enum) {
     health,
+    asset: Asset,
+    session,
     mcp,
     op: struct { op: api.Op, session_id: ?[]const u8 = null },
+};
+
+const Asset = enum {
+    index,
+    js,
+    css,
+    favicon,
+
+    fn response(asset: Asset) Response {
+        return switch (asset) {
+            .index => .{ .status = .ok, .content_type = "text/html; charset=utf-8", .body = @embedFile("viewer/index.html") },
+            .js => .{ .status = .ok, .content_type = "text/javascript; charset=utf-8", .body = @embedFile("viewer/viewer.js") },
+            .css => .{ .status = .ok, .content_type = "text/css; charset=utf-8", .body = @embedFile("viewer/viewer.css") },
+            .favicon => .{ .status = .no_content },
+        };
+    }
 };
 
 const Route = struct { method: std.http.Method, endpoint: Endpoint };
 
 const fixed_routes = [_]struct { path: []const u8, route: Route }{
+    .{ .path = "/", .route = .{ .method = .GET, .endpoint = .{ .asset = .index } } },
+    .{ .path = "/viewer.js", .route = .{ .method = .GET, .endpoint = .{ .asset = .js } } },
+    .{ .path = "/viewer.css", .route = .{ .method = .GET, .endpoint = .{ .asset = .css } } },
+    .{ .path = "/favicon.ico", .route = .{ .method = .GET, .endpoint = .{ .asset = .favicon } } },
+    .{ .path = "/v1/graph/session", .route = .{ .method = .GET, .endpoint = .session } },
+    .{ .path = "/v1/graph/overview", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .graph_overview } } } },
+    .{ .path = "/v1/graph/neighborhood", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .graph_neighborhood } } } },
+    .{ .path = "/v1/graph/search", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .graph_search } } } },
+    .{ .path = "/v1/graph/entity", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .graph_entity } } } },
     .{ .path = "/v1/health", .route = .{ .method = .GET, .endpoint = .health } },
     .{ .path = "/mcp", .route = .{ .method = .POST, .endpoint = .mcp } },
     .{ .path = "/v1/entries", .route = .{ .method = .POST, .endpoint = .{ .op = .{ .op = .entries } } } },
@@ -40,6 +84,7 @@ const fixed_routes = [_]struct { path: []const u8, route: Route }{
 const Response = struct {
     status: std.http.Status,
     body: []const u8 = "",
+    content_type: []const u8 = "application/json",
     close: bool = false,
     allow: ?[]const u8 = null,
 };
@@ -60,6 +105,7 @@ pub const Server = struct {
     }
 
     pub fn start(s: *Server) !void {
+        try s.options.validate();
         if (s.options.listen.len > 0) {
             const address = try net.IpAddress.parseLiteral(s.options.listen);
             s.tcp = try address.listen(s.io, .{ .reuse_address = true });
@@ -131,13 +177,23 @@ pub const Server = struct {
             _ = arena_state.reset(.retain_capacity);
             var request = http_server.receiveHead() catch return;
             const keep_alive = request.head.keep_alive;
-            const response = s.respondTo(arena_state.allocator(), &request, transport) catch return;
+            const loopback = transport == .tcp and isLoopback(s.tcp.?.socket.address) and isLoopback(stream.socket.address);
+            const response = s.respondTo(arena_state.allocator(), &request, transport, loopback) catch return;
 
-            var headers: [3]std.http.Header = undefined;
-            var count: usize = 0;
+            var headers = [_]std.http.Header{
+                .{ .name = "content-security-policy", .value = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" },
+                .{ .name = "x-content-type-options", .value = "nosniff" },
+                .{ .name = "cache-control", .value = "no-store" },
+                .{ .name = "referrer-policy", .value = "no-referrer" },
+                .{ .name = "cross-origin-resource-policy", .value = "same-origin" },
+                undefined,
+                undefined,
+                undefined,
+            };
+            var count: usize = headers.len - 3;
 
             if (response.body.len > 0) {
-                headers[count] = .{ .name = "content-type", .value = "application/json" };
+                headers[count] = .{ .name = "content-type", .value = response.content_type };
                 count += 1;
             }
             if (response.allow) |allow| {
@@ -159,14 +215,16 @@ pub const Server = struct {
         }
     }
 
-    fn respondTo(s: *Server, arena: Allocator, request: *std.http.Server.Request, transport: Transport) !Response {
+    fn respondTo(s: *Server, arena: Allocator, request: *std.http.Server.Request, transport: Transport, loopback: bool) !Response {
         const target = try arena.dupe(u8, request.head.target);
         const path, const query = std.mem.cut(u8, target, "?") orelse .{ target, "" };
-        if (!originAllowed(request)) return errorResponse(arena, .forbidden, "origin not allowed");
-
+        const headers = RequestHeaders.parse(request) orelse return errorResponse(arena, .forbidden, "invalid request headers");
         const route = try resolve(arena, path);
-        const authorized = transport == .unix or s.options.token.len == 0 or bearerMatches(request, s.options.token);
-        if (!authorized and !(route != null and route.?.endpoint == .health))
+        const port = if (transport == .tcp) s.boundPort() else 80;
+        const identity = headers.identity(s.options, transport, loopback, port) orelse return errorResponse(arena, .forbidden, "origin not allowed");
+        if (headers.cross_site and !(route != null and route.?.endpoint == .asset))
+            return errorResponse(arena, .forbidden, "cross-origin request");
+        if (!identity.permits(route))
             return errorResponse(arena, .unauthorized, "unauthorized");
 
         const found = route orelse return errorResponse(arena, .not_found, "not found");
@@ -177,6 +235,8 @@ pub const Server = struct {
         }
 
         switch (found.endpoint) {
+            .asset => |asset| return asset.response(),
+            .session => return .{ .status = .ok, .body = try std.json.Stringify.valueAlloc(arena, identity, .{ .emit_null_optional_fields = false }) },
             .health => return .{
                 .status = .ok,
                 .body = try std.json.Stringify.valueAlloc(arena, .{ .ok = true, .version = s.options.version }, .{}),
@@ -299,8 +359,8 @@ fn header(request: *const std.http.Server.Request, name: []const u8) ?[]const u8
     return null;
 }
 
-fn bearerMatches(request: *const std.http.Server.Request, token: []const u8) bool {
-    const value = header(request, "authorization") orelse return false;
+fn bearerMatches(value: []const u8, token: []const u8) bool {
+    if (token.len == 0) return false;
     const scheme, const credentials = std.mem.cut(u8, value, " ") orelse return false;
     if (!std.ascii.eqlIgnoreCase(scheme, "bearer")) return false;
 
@@ -312,21 +372,107 @@ fn bearerMatches(request: *const std.http.Server.Request, token: []const u8) boo
     return std.crypto.timing_safe.eql([Sha256.digest_length]u8, presented, expected);
 }
 
-fn originAllowed(request: *const std.http.Server.Request) bool {
-    const origin = header(request, "origin") orelse return true;
-    const rest = std.mem.cutPrefix(u8, origin, "http://") orelse std.mem.cutPrefix(u8, origin, "https://") orelse return false;
-    if (header(request, "host")) |host| if (std.ascii.eqlIgnoreCase(host, rest)) return true;
-
-    const host = if (std.mem.startsWith(u8, rest, "["))
-        rest[0 .. (std.mem.findScalar(u8, rest, ']') orelse return false) + 1]
-    else
-        rest[0 .. std.mem.findScalar(u8, rest, ':') orelse rest.len];
-
-    for ([_][]const u8{ "localhost", "127.0.0.1", "[::1]" }) |allowed| {
-        if (std.ascii.eqlIgnoreCase(host, allowed)) return true;
-    }
-    return false;
+fn isLoopback(address: net.IpAddress) bool {
+    return switch (address) {
+        .ip4 => |a| a.bytes[0] == 127,
+        .ip6 => |a| std.mem.eql(u8, &a.bytes, &net.Ip6Address.loopback(0).bytes),
+    };
 }
+
+fn localAuthority(host: []const u8, port: u16) bool {
+    const name, const explicit = std.mem.cut(u8, host, ":") orelse .{ host, "" };
+    if (std.ascii.eqlIgnoreCase(name, "localhost")) {
+        if (std.mem.eql(u8, name, host)) return port == 80;
+        return (std.fmt.parseInt(u16, explicit, 10) catch return false) == port;
+    }
+
+    const address = net.IpAddress.parseLiteral(host) catch return false;
+    const actual = address.getPort();
+    return isLoopback(address) and (if (actual == 0) port == 80 else actual == port);
+}
+
+const Identity = struct {
+    mode: enum { anonymous, local, bearer, tailscale } = .anonymous,
+    login: ?[]const u8 = null,
+
+    fn permits(id: Identity, route: ?Route) bool {
+        if (id.mode == .local or id.mode == .bearer) return true;
+        return switch ((route orelse return false).endpoint) {
+            .session, .health, .asset => true,
+            .mcp => false,
+            .op => |op| switch (op.op) {
+                .graph_overview, .graph_neighborhood, .graph_search, .graph_entity => id.mode == .tailscale,
+                else => false,
+            },
+        };
+    }
+};
+
+const RequestHeaders = struct {
+    host: ?[]const u8 = null,
+    origin: ?[]const u8 = null,
+    authorization: ?[]const u8 = null,
+    login: ?[]const u8 = null,
+    forwarded_host: ?[]const u8 = null,
+    forwarded_proto: ?[]const u8 = null,
+    forwarded: bool = false,
+    funnel: bool = false,
+    cross_site: bool = false,
+
+    fn parse(request: *const std.http.Server.Request) ?RequestHeaders {
+        var fields: RequestHeaders = .{};
+        var it = request.iterateHeaders();
+        while (it.next()) |h| {
+            inline for (.{
+                .{ "host", "host" },                  .{ "origin", "origin" },                   .{ "authorization", "authorization" },
+                .{ "tailscale-user-login", "login" }, .{ "x-forwarded-host", "forwarded_host" }, .{ "x-forwarded-proto", "forwarded_proto" },
+            }) |f| {
+                if (std.ascii.eqlIgnoreCase(h.name, f[0])) {
+                    if (@field(fields, f[1]) != null) return null;
+                    @field(fields, f[1]) = h.value;
+                }
+            }
+            if (std.ascii.startsWithIgnoreCase(h.name, "x-forwarded-") or std.ascii.startsWithIgnoreCase(h.name, "tailscale-") or
+                std.ascii.eqlIgnoreCase(h.name, "forwarded") or std.ascii.eqlIgnoreCase(h.name, "x-real-ip")) fields.forwarded = true;
+            if (std.ascii.eqlIgnoreCase(h.name, "tailscale-funnel-request")) fields.funnel = true;
+            if (std.ascii.eqlIgnoreCase(h.name, "sec-fetch-site") and
+                !std.mem.eql(u8, h.value, "same-origin") and !std.mem.eql(u8, h.value, "none")) fields.cross_site = true;
+        }
+        return fields;
+    }
+
+    fn identity(h: RequestHeaders, options: Options, transport: Transport, loopback: bool, port: u16) ?Identity {
+        const host = h.host orelse return null;
+        if (host.len == 0) return null;
+        const local_host = localAuthority(host, port);
+        const expected_host = std.mem.cutPrefix(u8, options.tailscale_origin, "https://");
+        const proxy_host = expected_host != null and std.ascii.eqlIgnoreCase(expected_host.?, host);
+        if (options.token.len == 0 and !local_host and !proxy_host) return null;
+
+        if (h.origin) |origin| {
+            const scheme, const authority = std.mem.cut(u8, origin, "://") orelse return null;
+            if (!std.ascii.eqlIgnoreCase(authority, host)) return null;
+            const expected_scheme: []const u8 = if (local_host and !h.forwarded) "http" else "https";
+            if (!std.mem.eql(u8, scheme, expected_scheme)) return null;
+            if (h.forwarded_proto) |proto| if (!std.mem.eql(u8, scheme, proto)) return null;
+        }
+
+        if (transport == .unix and local_host and !h.forwarded) return .{ .mode = .local };
+        if (h.authorization) |auth| return if (bearerMatches(auth, options.token)) .{ .mode = .bearer } else .{};
+        if (!loopback) return .{};
+        if (options.token.len == 0 and expected_host == null and local_host and !h.forwarded) return .{ .mode = .local };
+
+        if (!proxy_host or h.funnel or !std.ascii.eqlIgnoreCase(h.forwarded_host orelse "", host) or
+            !std.mem.eql(u8, h.forwarded_proto orelse "", "https")) return .{};
+        const login = h.login orelse return .{};
+        if (login.len == 0) return .{};
+        for (login) |c| if (c <= ' ' or c >= 127 or c == ',') return .{};
+        for (options.tailscale_logins) |allowed| {
+            if (std.mem.eql(u8, allowed, login)) return .{ .mode = .tailscale, .login = login };
+        }
+        return if (options.tailscale_logins.len == 0) .{ .mode = .tailscale, .login = login } else .{};
+    }
+};
 
 const testing = std.testing;
 const Client = @import("client.zig").Client;
@@ -422,6 +568,10 @@ test "http routes over tcp and unix socket" {
     };
 
     const posts = [_]struct { path: []const u8, op: api.Op }{
+        .{ .path = "/v1/graph/overview", .op = .graph_overview },
+        .{ .path = "/v1/graph/neighborhood", .op = .graph_neighborhood },
+        .{ .path = "/v1/graph/search", .op = .graph_search },
+        .{ .path = "/v1/graph/entity", .op = .graph_entity },
         .{ .path = "/v1/entries", .op = .entries },
         .{ .path = "/v1/search", .op = .search },
         .{ .path = "/v1/entity", .op = .entity },
@@ -458,6 +608,9 @@ test "http routes over tcp and unix socket" {
         r = try c.request(arena, .GET, "/v1/health", null);
         try testing.expectEqual(200, r.status);
         try testing.expectEqualStrings("{\"ok\":true,\"version\":\"9.9.9\"}", r.body);
+
+        r = try c.request(arena, .GET, "/v1/graph/session", null);
+        try testing.expectEqualStrings(if (c.target == .unix) "{\"mode\":\"local\"}" else "{\"mode\":\"bearer\"}", r.body);
 
         const count = fake.count;
         try testing.expectEqual(404, (try c.request(arena, .GET, "/v1/nope", null)).status);
@@ -525,9 +678,124 @@ test "http routes over tcp and unix socket" {
     defer gpa.free(foreign);
     try testing.expect(std.mem.startsWith(u8, foreign, "HTTP/1.1 403 "));
 
-    const local = try rawExchange(io, port, "GET /v1/health HTTP/1.1\r\nhost: x\r\norigin: http://localhost:3000\r\nconnection: close\r\n\r\n");
+    const other_loopback_origin = try rawExchange(io, port, "GET /v1/health HTTP/1.1\r\nhost: x\r\norigin: http://localhost:3000\r\nconnection: close\r\n\r\n");
+    defer gpa.free(other_loopback_origin);
+    try testing.expect(std.mem.startsWith(u8, other_loopback_origin, "HTTP/1.1 403 "));
+
+    const local = try rawExchange(io, port, try std.fmt.allocPrint(arena, "GET /v1/graph/session HTTP/1.1\r\nhost: localhost:{d}\r\norigin: http://localhost:{d}\r\nconnection: close\r\n\r\n", .{ port, port }));
     defer gpa.free(local);
     try testing.expect(std.mem.startsWith(u8, local, "HTTP/1.1 200 "));
+    try testing.expect(std.mem.endsWith(u8, local, "{\"mode\":\"anonymous\"}"));
+
+    const remote = try rawExchange(io, port, "POST /v1/graph/overview HTTP/1.1\r\nhost: hub.example.ts.net:7443\r\norigin: https://hub.example.ts.net:7443\r\nx-forwarded-proto: https\r\nauthorization: Bearer s3cret\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}");
+    defer gpa.free(remote);
+    try testing.expect(std.mem.startsWith(u8, remote, "HTTP/1.1 200 "));
+    try testing.expect(std.mem.endsWith(u8, remote, "{\"text\":\"ok graph_overview\"}"));
+}
+
+test "viewer validates the identity proxy configuration before listening" {
+    const https = "https://hub.example.ts.net:7443";
+    try (Options{ .tailscale_origin = https }).validate();
+    try (Options{ .listen = "[::1]:7420", .tailscale_origin = https }).validate();
+    try testing.expectError(error.TailscaleRequiresLoopback, (Options{ .listen = "0.0.0.0:7420", .token = "test-token", .tailscale_origin = https }).validate());
+    try testing.expectError(error.MissingTailscaleOrigin, (Options{ .tailscale_logins = &.{"user@example.org"} }).validate());
+    for ([_][]const u8{ "http://hub.example.ts.net", https ++ "/", "https://*.example.ts.net", "https://user@hub.example.ts.net", "https://hub.example.ts.net:99999", "https://hub.example.ts.net.invalid" }) |bad|
+        try testing.expectError(error.InvalidTailscaleOrigin, (Options{ .tailscale_origin = bad }).validate());
+}
+
+test "viewer accepts only the configured proxy on a loopback connection" {
+    const options: Options = .{ .token = "test-token", .tailscale_origin = "https://hub.example.ts.net:7443", .tailscale_logins = &.{"user@example.org"} };
+    const headers: RequestHeaders = .{ .host = "hub.example.ts.net:7443", .forwarded_host = "hub.example.ts.net:7443", .forwarded_proto = "https", .login = "user@example.org", .forwarded = true };
+
+    try testing.expectEqual(.tailscale, headers.identity(options, .tcp, true, 7420).?.mode);
+    try testing.expectEqual(.anonymous, headers.identity(options, .tcp, false, 7420).?.mode);
+    try testing.expectEqual(.anonymous, headers.identity(.{ .token = "test-token" }, .tcp, true, 7420).?.mode);
+    var altered = headers;
+    altered.funnel = true;
+    try testing.expectEqual(.anonymous, altered.identity(options, .tcp, true, 7420).?.mode);
+    altered = headers;
+    altered.login = "other@example.org";
+    try testing.expectEqual(.anonymous, altered.identity(options, .tcp, true, 7420).?.mode);
+    altered = headers;
+    altered.origin = "http://hub.example.ts.net:7443";
+    try testing.expect(altered.identity(options, .tcp, true, 7420) == null);
+    altered = headers;
+    altered.forwarded_proto = "http";
+    try testing.expectEqual(.anonymous, altered.identity(options, .tcp, true, 7420).?.mode);
+    altered = headers;
+    altered.forwarded_host = "hub.example.ts.net";
+    try testing.expectEqual(.anonymous, altered.identity(options, .tcp, true, 7420).?.mode);
+    altered = headers;
+    altered.authorization = "Bearer test-token";
+    altered.origin = "https://hub.example.ts.net:7443";
+    try testing.expectEqual(.bearer, altered.identity(.{ .token = "test-token" }, .tcp, true, 7420).?.mode);
+
+    for ([_][]const u8{ "localhost:7420", "127.0.0.1:7420", "[::1]:7420" }) |host| {
+        const local: RequestHeaders = .{ .host = host };
+        try testing.expectEqual(.local, local.identity(.{}, .tcp, true, 7420).?.mode);
+        try testing.expectEqual(.anonymous, local.identity(.{ .tailscale_origin = options.tailscale_origin }, .tcp, true, 7420).?.mode);
+        var proxied = local;
+        proxied.forwarded = true;
+        try testing.expectEqual(.anonymous, proxied.identity(.{}, .tcp, true, 7420).?.mode);
+    }
+    for ([_][]const u8{ "hub.example.ts.net:7443", "localhost.invalid:7420", "127.0.0.1:8000", "127.0.0.1:7420@other.invalid" }) |host| {
+        const rebinding: RequestHeaders = .{ .host = host };
+        try testing.expect(rebinding.identity(.{}, .tcp, true, 7420) == null);
+    }
+}
+
+test "viewer shell and session bootstrap never grant anonymous data access" {
+    const io = testing.io;
+    const gpa = testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var fake: FakeHandler = .{ .io = io };
+    defer fake.deinit();
+    var server = Server.init(gpa, io, fake.handler(), .{ .listen = "127.0.0.1:0", .tailscale_origin = "https://hub.example.ts.net:7443" });
+    try server.start();
+    defer server.deinit();
+    var running = try io.concurrent(Server.run, .{&server});
+    defer {
+        server.stop();
+        running.await(io) catch {};
+    }
+
+    const proxy = "host: hub.example.ts.net:7443\r\nx-forwarded-host: hub.example.ts.net:7443\r\nx-forwarded-proto: https\r\n";
+    const user = proxy ++ "tailscale-user-login: user@example.org\r\n";
+    const origin = "origin: https://hub.example.ts.net:7443\r\n";
+    const Case = struct { method: []const u8, path: []const u8, headers: []const u8, status: []const u8, contains: []const u8 = "" };
+    for ([_]Case{
+        .{ .method = "GET", .path = "/", .headers = proxy, .status = "200", .contains = "content-type: text/html" },
+        .{ .method = "GET", .path = "/viewer.css", .headers = proxy, .status = "200", .contains = "content-type: text/css" },
+        .{ .method = "GET", .path = "/viewer.js", .headers = proxy, .status = "200", .contains = "content-type: text/javascript" },
+        .{ .method = "GET", .path = "/favicon.ico", .headers = proxy, .status = "204" },
+        .{ .method = "GET", .path = "/v1/graph/session", .headers = proxy, .status = "200", .contains = "{\"mode\":\"anonymous\"}" },
+        .{ .method = "GET", .path = "/v1/graph/session", .headers = user, .status = "200", .contains = "{\"mode\":\"tailscale\",\"login\":\"user@example.org\"}" },
+        .{ .method = "POST", .path = "/v1/graph/neighborhood", .headers = proxy ++ origin, .status = "401" },
+        .{ .method = "POST", .path = "/v1/graph/overview", .headers = proxy ++ "tailscale-user-login:  \r\n", .status = "401" },
+        .{ .method = "POST", .path = "/v1/graph/overview", .headers = user ++ origin, .status = "200", .contains = "ok graph_overview" },
+        .{ .method = "POST", .path = "/v1/graph/entity", .headers = user ++ "origin: https://other.example.ts.net:7443\r\n", .status = "403" },
+        .{ .method = "POST", .path = "/v1/graph/entity", .headers = user ++ "tailscale-user-login: another@example.org\r\n", .status = "403" },
+        .{ .method = "POST", .path = "/v1/graph/search", .headers = user ++ "host: other.invalid\r\n", .status = "403" },
+        .{ .method = "POST", .path = "/v1/remember", .headers = user ++ origin, .status = "401" },
+        .{ .method = "POST", .path = "/mcp", .headers = user, .status = "401" },
+        .{ .method = "GET", .path = "/v1/brief", .headers = user, .status = "401" },
+        .{ .method = "POST", .path = "/v1/graph/entity", .headers = "host: other.invalid\r\n", .status = "403" },
+        .{ .method = "POST", .path = "/v1/graph/entity", .headers = user ++ "sec-fetch-site: cross-site\r\n", .status = "403" },
+    }) |case| {
+        const bytes = try std.fmt.allocPrint(arena, "{s} {s} HTTP/1.1\r\n{s}connection: close\r\n{s}", .{
+            case.method, case.path, case.headers, if (std.mem.eql(u8, case.method, "POST")) "content-length: 2\r\n\r\n{}" else "\r\n",
+        });
+        const response = try rawExchange(io, server.boundPort(), bytes);
+        defer gpa.free(response);
+        try testing.expect(std.mem.startsWith(u8, response, try std.fmt.allocPrint(arena, "HTTP/1.1 {s} ", .{case.status})));
+        if (case.contains.len > 0) try testing.expect(std.mem.find(u8, response, case.contains) != null);
+        try testing.expect(std.mem.find(u8, response, "script-src 'self'; style-src 'self'") != null);
+        try testing.expect(std.mem.find(u8, response, "cache-control: no-store") != null);
+    }
+    try testing.expectEqual(1, fake.count);
 }
 
 test "unix socket refuses to replace a live daemon" {

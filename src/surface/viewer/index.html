@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Graph atlas · graf</title>
+  <link rel="stylesheet" href="/viewer.css">
+  <script src="/viewer.js" defer></script>
+</head>
+<body>
+  <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-brand" viewBox="0 0 24 24"><path d="m2 15 8-12 11 5-7 13Z M2 15l19-7 M10 3l4 18"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><path d="m5 17 5-10 9 7M5 17l14-3"/><circle cx="5" cy="17" r="2.4"/><circle cx="10" cy="7" r="2.4"/><circle cx="19" cy="14" r="2.4"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 7h8m4 0h6M3 17h3m4 0h11"/><circle cx="13" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m3 8 9-5 9 5-9 5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5"/><circle cx="12" cy="12" r="2"/></symbol>
+    <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 7.5 3v5q0 6-7.5 10-7.5-4-7.5-10V6Z"/><path d="m8.5 11.5 2.5 2.5 4.5-5"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="18" cy="5" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m7 10.5 9-4m-9 7L16 18"/></symbol>
+    <symbol id="i-index" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12 M4 6h.1M4 12h.1M4 18h.1"/></symbol>
+    <symbol id="i-mark" viewBox="0 0 24 24"><path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 5v6h6M4.5 10a8 8 0 1 1 .5 6"/></symbol>
+  </svg>
+  <header class="masthead">
+    <div class="brand"><svg class="icon" aria-hidden="true"><use href="#i-brand"/></svg>graf</div>
+    <span class="head-rule"></span><span class="mast-label">Knowledge workspace</span>
+    <div class="head-actions">
+      <button id="session" class="session"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><span id="identity">Connecting</span></button>
+      <button id="theme" class="icon-button" aria-label="Switch color theme" title="Switch color theme"><svg class="icon" aria-hidden="true"><use href="#i-theme"/></svg></button>
+    </div>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="atlas-title">
+      <div>
+        <div class="eyebrow"><span class="mint-rule"></span> Exploration workspace</div>
+        <h1 id="atlas-title">Graph atlas<span class="period">.</span></h1>
+        <p class="lede">Explore entities, trace relationships, and inspect the evidence.</p>
+      </div>
+      <dl class="metrics">
+        <div><dt>Entities</dt><dd id="entity-count">—</dd></div>
+        <div><dt>Facts</dt><dd id="fact-count">—</dd></div>
+        <div><dt>Entity types</dt><dd id="type-count">—</dd></div>
+      </dl>
+    </section>
+    <section class="query-bar" aria-label="Explore graph">
+      <div class="search-wrap">
+        <form id="search-form" class="search-field" role="search">
+          <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" id="query" aria-label="Search entities and facts" aria-controls="results" placeholder="Search entities and facts…" maxlength="200" autocomplete="off"><kbd>/</kbd>
+        </form>
+        <section id="results" class="popover results" aria-label="Search results" hidden></section>
+      </div>
+      <div class="query-actions">
+        <button id="filters-button" class="tool" aria-controls="filters" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-filter"/></svg>Filters<span id="filter-count" class="badge" hidden></span></button>
+        <button id="time-button" class="tool" aria-controls="time-panel" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>Timeline<span id="time-dot" class="live-dot" hidden></span></button>
+      </div>
+    </section>
+    <form id="filters" class="settings" hidden>
+      <label>Project<select id="project"><option value="">All projects</option></select></label>
+      <label>Entity type<select id="type"><option value="">All types</option></select></label>
+      <label>Relation<select id="relation"><option value="">All relations</option></select></label>
+      <label>Min. confidence<select id="confidence"><option value="">Any confidence</option><option value=".5">50%</option><option value=".75">75%</option><option value=".9">90%</option><option value="1">100%</option></select></label>
+      <button type="button" id="clear-filters" class="text-button">Reset filters</button>
+    </form>
+    <form id="time-panel" class="settings" hidden>
+      <label>As of · local time<input type="datetime-local" id="as-of"></label>
+      <label class="check"><input type="checkbox" id="history"> Include historical facts</label>
+      <button type="button" id="clear-time" class="text-button">Return to present</button>
+    </form>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div class="workspace">
+      <section class="panel graph-panel" aria-labelledby="map-title">
+        <header class="panel-head">
+          <div class="section-name"><span class="motif"><svg class="icon" aria-hidden="true"><use href="#i-network"/></svg></span><h2 id="map-title">Relationship map</h2></div>
+          <label class="depth">Depth <select id="hops"><option value="1">1 hop</option><option value="2">2 hops</option></select></label>
+        </header>
+        <div class="plot">
+          <canvas id="map" tabindex="0" aria-label="Relationship map. Arrow keys move the map, plus and minus zoom. Use the entity list to inspect nodes."></canvas>
+          <div class="plot-label"><span class="live-dot"></span><span id="map-mode">Hub neighborhood</span></div>
+          <button id="map-reset" class="map-reset" title="Return to hub neighborhood" aria-label="Return to hub neighborhood" hidden><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg></button>
+          <div class="plot-state" id="plot-state" role="status">Connecting to the graph…</div>
+          <div class="map-controls">
+            <button id="fit" title="Fit graph" aria-label="Fit graph"><svg class="icon" aria-hidden="true"><use href="#i-fit"/></svg></button><span></span>
+            <button id="zoom-out" title="Zoom out" aria-label="Zoom out"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button><output id="zoom">100%</output>
+            <button id="zoom-in" title="Zoom in" aria-label="Zoom in"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
+          </div>
+        </div>
+        <footer class="map-footer"><span id="shown">— nodes · — edges</span><span>Click to inspect <b>·</b> Double-click to expand</span></footer>
+        <details class="node-index"><summary>Browse visible entities</summary><div id="node-list"></div></details>
+      </section>
+      <aside class="panel sidebar" aria-label="Graph details" id="sidebar">
+        <header class="panel-head">
+          <div class="section-name"><span class="motif"><svg class="icon" aria-hidden="true"><use href="#i-index"/></svg></span><h2 id="side-title">Graph index</h2></div>
+          <span class="plate" id="side-code">IDX / 01</span>
+          <button class="icon-button" id="close-inspector" aria-label="Close entity inspector" hidden><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+        </header>
+        <div id="side-body" class="side-body"><p class="muted">Loading the graph index…</p></div>
+      </aside>
+    </div>
+    <footer class="colophon"><span><svg class="icon" aria-hidden="true"><use href="#i-brand"/></svg> graf <b>/</b> Graph exploration</span><span>Read-only workspace</span></footer>
+  </main>
+  <dialog id="auth">
+    <form id="auth-form">
+      <div class="dialog-top"><span class="motif"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg></span><button id="auth-close" type="button" class="icon-button" aria-label="Close sign-in dialog"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+      <div class="eyebrow">Workspace access</div><h2 id="auth-title">Connect to the hub</h2>
+      <p id="auth-description">Use your hub’s bearer token to open its graph. The token stays in this browser tab.</p>
+      <label id="token-label">Bearer token<input type="password" id="token" autocomplete="off" spellcheck="false" required></label>
+      <div id="auth-error" role="alert" class="auth-error"></div>
+      <button id="connect" type="submit" class="primary">Connect <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+      <button id="disconnect" type="button" class="text-button" hidden>Forget this tab’s token</button>
+    </form>
+  </dialog>
+</body>
+</html>

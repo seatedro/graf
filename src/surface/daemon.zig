@@ -113,14 +113,18 @@ pub const Options = struct {
 };
 
 pub fn checkExposure(config: *const core.Config) !void {
-    if (config.serve.listen.len == 0 or config.serve.token.len > 0) return;
+    try httpOptions(config, .{ .socket_path = null, .version = "" }).validate();
+}
 
-    const address = try std.Io.net.IpAddress.parseLiteral(config.serve.listen);
-    const loopback = switch (address) {
-        .ip4 => |a| a.bytes[0] == 127,
-        .ip6 => |a| std.mem.eql(u8, &a.bytes, &std.Io.net.Ip6Address.loopback(0).bytes),
+fn httpOptions(config: *const core.Config, opts: Options) http.Options {
+    return .{
+        .listen = config.serve.listen,
+        .socket_path = opts.socket_path,
+        .version = opts.version,
+        .token = config.serve.token,
+        .tailscale_origin = config.serve.tailscale_origin,
+        .tailscale_logins = config.serve.tailscale_logins,
     };
-    if (!loopback) return error.TokenRequired;
 }
 
 fn replayHookSpool(cap: *capture.Capture) void {
@@ -151,12 +155,7 @@ pub fn run(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, config: 
     defer svc.deinit();
 
     if (opts.socket_path) |p| if (std.fs.path.dirname(p)) |dir| Io.Dir.cwd().createDirPath(io, dir) catch {};
-    var server: http.Server = .init(gpa, io, svc.handler(), .{
-        .listen = config.serve.listen,
-        .socket_path = opts.socket_path,
-        .token = config.serve.token,
-        .version = opts.version,
-    });
+    var server: http.Server = .init(gpa, io, svc.handler(), httpOptions(config, opts));
     try server.start();
     defer server.deinit();
 
@@ -205,12 +204,7 @@ pub fn runEdge(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, conf
     var proxy: edge.Edge = .{ .upstream = &up, .spool = &spool, .flusher = flusher(&cap) };
 
     if (opts.socket_path) |p| if (std.fs.path.dirname(p)) |dir| Io.Dir.cwd().createDirPath(io, dir) catch {};
-    var server: http.Server = .init(gpa, io, proxy.handler(), .{
-        .listen = config.serve.listen,
-        .socket_path = opts.socket_path,
-        .token = config.serve.token,
-        .version = opts.version,
-    });
+    var server: http.Server = .init(gpa, io, proxy.handler(), httpOptions(config, opts));
     try server.start();
     defer server.deinit();
 

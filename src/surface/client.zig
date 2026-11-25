@@ -112,6 +112,10 @@ pub const Call = struct {
 
 pub fn route(arena: Allocator, req: api.Request) !Call {
     return switch (req.op) {
+        .graph_overview => .{ .method = .POST, .path = "/v1/graph/overview", .body = req.body },
+        .graph_neighborhood => .{ .method = .POST, .path = "/v1/graph/neighborhood", .body = req.body },
+        .graph_search => .{ .method = .POST, .path = "/v1/graph/search", .body = req.body },
+        .graph_entity => .{ .method = .POST, .path = "/v1/graph/entity", .body = req.body },
         .entries => .{ .method = .POST, .path = "/v1/entries", .body = req.body },
         .search => .{ .method = .POST, .path = "/v1/search", .body = req.body },
         .entity => .{ .method = .POST, .path = "/v1/entity", .body = req.body },

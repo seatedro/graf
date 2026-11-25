@@ -77,6 +77,8 @@ pub const Config = struct {
         listen: []const u8 = "127.0.0.1:7420",
         socket: []const u8 = "",
         token: []const u8 = "",
+        tailscale_origin: []const u8 = "",
+        tailscale_logins: []const []const u8 = &.{},
     };
 
     pub const Capture = struct {
@@ -134,6 +136,7 @@ pub const env_vars = [_]struct { []const u8, []const u8, []const u8 }{
     .{ "GRAF_DECISION_BASE_URL", "decision", "base_url" },
     .{ "GRAF_DECISION_API_KEY", "decision", "api_key" },
     .{ "GRAF_SERVE_TOKEN", "serve", "token" },
+    .{ "GRAF_SERVE_TAILSCALE_ORIGIN", "serve", "tailscale_origin" },
     .{ "GRAF_UPSTREAM_URL", "edge", "upstream" },
     .{ "GRAF_UPSTREAM_TOKEN", "edge", "token" },
     .{ "GRAF_DECISION_MODEL", "decision", "model" },
@@ -499,8 +502,10 @@ test "hub and edge settings come from the file and the environment" {
     const arena = arena_state.allocator();
 
     var diag: toml.Diagnostic = .{};
-    var cfg = try parse(arena, "[edge]\nupstream = \"https://hub.example.ts.net\"\ntimeout_ms = 2500\n", &diag);
+    var cfg = try parse(arena, "[serve]\ntailscale_origin = \"https://hub.example.ts.net\"\ntailscale_logins = [\"user@example.org\"]\n[edge]\nupstream = \"https://hub.example.ts.net\"\ntimeout_ms = 2500\n", &diag);
 
+    try std.testing.expectEqualStrings("https://hub.example.ts.net", cfg.serve.tailscale_origin);
+    try std.testing.expectEqualStrings("user@example.org", cfg.serve.tailscale_logins[0]);
     try std.testing.expectEqualStrings("https://hub.example.ts.net", cfg.edge.upstream);
     try std.testing.expectEqual(@as(u32, 2500), cfg.edge.timeout_ms);
     try std.testing.expectEqual(@as(u32, 10_000), (Config{}).edge.timeout_ms);
@@ -508,11 +513,13 @@ test "hub and edge settings come from the file and the environment" {
     var env = Environ.Map.init(std.testing.allocator);
     defer env.deinit();
     try env.put("GRAF_SERVE_TOKEN", "serve-secret");
+    try env.put("GRAF_SERVE_TAILSCALE_ORIGIN", "https://hub.example.ts.net:7443");
     try env.put("GRAF_UPSTREAM_URL", "https://other.example.ts.net");
     try env.put("GRAF_UPSTREAM_TOKEN", "edge-secret");
 
     applyEnv(&cfg, &env);
     try std.testing.expectEqualStrings("serve-secret", cfg.serve.token);
+    try std.testing.expectEqualStrings("https://hub.example.ts.net:7443", cfg.serve.tailscale_origin);
     try std.testing.expectEqualStrings("https://other.example.ts.net", cfg.edge.upstream);
     try std.testing.expectEqualStrings("edge-secret", cfg.edge.token);
 
