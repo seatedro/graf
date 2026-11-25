@@ -120,10 +120,29 @@ test "ingest SQL runs against the store schema" {
     try testing.expect(pre.facts[0].id.eql(fact));
     try testing.expect(pre.facts[0].valid_lower != null);
 
+    const empty = try b.prefetch(arena, .{
+        .entity_norms = &.{},
+        .entity_embs = &.{},
+        .fact_subject = &.{},
+        .fact_object = &.{},
+        .fact_relations = &.{},
+        .fact_opposed = &.{},
+        .fact_embs = &.{},
+        .fact_texts = &.{},
+    });
+    try testing.expectEqual(@as(usize, 0), empty.entities.len);
+    try testing.expectEqual(@as(usize, 0), empty.facts.len);
+
     const touched = try postgres.jsonRow(rebase.Touched, arena, conn, postgres.touched_sql, .{ t[0], @as(i64, 0), @as(i64, 1) });
     try testing.expectEqual(@as(usize, 2), touched.entities.len);
     try testing.expectEqual(@as(usize, 1), touched.facts.len);
     try testing.expect(touched.facts[0].active);
+
+    for (touched.entities) |e| {
+        const want: []const []const u8 = if (e.id.eql(cache)) &.{"brackwater cache service"} else &.{};
+        try testing.expectEqual(want.len, e.aliases.len);
+        for (want, e.aliases) |w, got| try testing.expectEqualStrings(w, got);
+    }
 
     _ = try conn.exec(postgres.bump_sql, .{try std.fmt.allocPrint(arena, "{{\"entities\":[\"{s}\"],\"facts\":[\"{s}\"]}}", .{ t[4], t[6] })});
     try testing.expectEqual(@as(i32, 2), try scalar(i32, conn, "SELECT facts_since_summary FROM entity WHERE id = $1::uuid", .{t[4]}));
