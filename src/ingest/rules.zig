@@ -132,13 +132,6 @@ fn firstToken(norm: []const u8) []const u8 {
     return it.next() orelse "";
 }
 
-fn tokenCount(norm: []const u8) usize {
-    var n: usize = 0;
-    var it = std.mem.tokenizeScalar(u8, norm, ' ');
-    while (it.next()) |_| n += 1;
-    return n;
-}
-
 fn hasToken(norm: []const u8, tok: []const u8) bool {
     var it = std.mem.tokenizeScalar(u8, norm, ' ');
     while (it.next()) |t| if (std.mem.eql(u8, t, tok)) return true;
@@ -169,10 +162,6 @@ pub fn sameFirstName(a_norm: []const u8, b_norm: []const u8) bool {
     return a.len >= 3 and std.mem.eql(u8, a, firstToken(b_norm));
 }
 
-pub fn singleToken(norm: []const u8) bool {
-    return tokenCount(norm) == 1;
-}
-
 pub const Signals = struct {
     cosine: f32,
     lexical: f32 = 0,
@@ -181,10 +170,7 @@ pub const Signals = struct {
 
 pub fn contextualGray(a_type: EntityType, b_type: EntityType, a_norm: []const u8, b_norm: []const u8, s: Signals) bool {
     if (a_type != b_type or std.mem.eql(u8, a_norm, b_norm) or distinctMarkers(a_norm, b_norm)) return false;
-    if (a_type == .person) {
-        if (!sameFirstName(a_norm, b_norm) or s.cosine < person_floor_cosine) return false;
-        return singleToken(a_norm) or singleToken(b_norm) or s.shares_project;
-    }
+    if (a_type == .person) return s.shares_project and sameFirstName(a_norm, b_norm) and s.cosine >= person_floor_cosine;
 
     if (s.lexical >= gray_lexical and s.cosine >= lexical_floor_cosine) return true;
     return s.shares_project and s.cosine >= shared_project_cosine;
@@ -545,14 +531,13 @@ test "numbered phases, tickets, lanes and versions carry distinct markers" {
 }
 
 test "contextual gray admits first names and handles, and lexical project variants" {
-    try testing.expect(contextualGray(.person, .person, "maren", "maren hollis", .{ .cosine = 0.44 }));
-    try testing.expect(contextualGray(.person, .person, "maren", "maren brackwater", .{ .cosine = 0.60 }));
-    try testing.expect(contextualGray(.person, .person, "maren hollis", "maren brackwater", .{ .cosine = 0.50, .shares_project = true }));
-    try testing.expect(!contextualGray(.person, .person, "maren hollis", "maren brackwater", .{ .cosine = 0.50 }));
-    try testing.expect(!contextualGray(.person, .person, "maren", "juno maren", .{ .cosine = 0.70 }));
-    try testing.expect(!contextualGray(.person, .person, "al", "al hollis", .{ .cosine = 0.70 }));
-    try testing.expect(!contextualGray(.person, .person, "maren", "maren hollis", .{ .cosine = 0.20 }));
-    try testing.expect(!contextualGray(.person, .organization, "maren", "maren hollis", .{ .cosine = 0.90 }));
+    try testing.expect(contextualGray(.person, .person, "maren", "maren hollis", .{ .cosine = 0.44, .shares_project = true }));
+    try testing.expect(contextualGray(.person, .person, "maren brackwater", "maren hollis", .{ .cosine = 0.50, .shares_project = true }));
+    try testing.expect(!contextualGray(.person, .person, "maren", "maren hollis", .{ .cosine = 0.44 }));
+    try testing.expect(!contextualGray(.person, .person, "maren", "juno maren", .{ .cosine = 0.70, .shares_project = true }));
+    try testing.expect(!contextualGray(.person, .person, "al", "al hollis", .{ .cosine = 0.70, .shares_project = true }));
+    try testing.expect(!contextualGray(.person, .person, "maren", "maren hollis", .{ .cosine = 0.20, .shares_project = true }));
+    try testing.expect(!contextualGray(.person, .organization, "maren", "maren hollis", .{ .cosine = 0.90, .shares_project = true }));
 
     try testing.expect(contextualGray(.project, .project, "quay slot ordering research", "quay slot order research", .{ .cosine = 0.72, .lexical = 0.62 }));
     try testing.expect(contextualGray(.project, .project, "slot ordering", "quay slot ordering review", .{ .cosine = 0.74, .shares_project = true }));

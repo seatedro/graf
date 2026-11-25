@@ -192,8 +192,7 @@ test "prefetch surfaces first names and project phrasings that name-only cosine 
     const pre = try b.prefetch(arena, req);
     const p = try resolve.plan(arena, checked, pre);
 
-    try testing.expectEqual(resolve.EntityDecision.ask, p.entities[0].decision);
-    try testing.expect(p.entities[0].gray[0].eql(hollis));
+    try testing.expectEqual(resolve.EntityDecision.new, p.entities[0].decision);
     const cand = resolve.findEntity(pre, hollis).?;
     try testing.expect(cand.cosine < 0.5);
     try testing.expectEqualStrings("Engineer on the brinelog relay.", cand.description);
@@ -207,16 +206,18 @@ test "prefetch surfaces first names and project phrasings that name-only cosine 
     try testing.expectEqual(resolve.EntityDecision.new, p.entities[3].decision);
     for (pre.entities) |c| if (c.item == 3 and c.id.eql(phase)) try testing.expect(c.cosine > 0.95);
 
-    const q = try resolve.decisionQuestions(arena, p, checked, pre);
-    try testing.expect(std.mem.indexOf(u8, q.asks[0].choice.prompt, "share a first name") != null);
-    try testing.expect(std.mem.indexOf(u8, q.asks[0].choice.options[0].description, "known facts: Maren Hollis owns the brinelog relay.") != null);
-
     req.project = "brinelog";
     const same_team = try b.prefetch(arena, req);
     const p2 = try resolve.plan(arena, checked, same_team);
     try testing.expect(resolve.findEntity(same_team, hollis).?.shares_project);
-    try testing.expectEqual(resolve.EntityDecision.ask, p2.entities[1].decision);
-    try testing.expect(p2.entities[1].gray[0].eql(hollis));
+    for (p2.entities[0..2]) |e| {
+        try testing.expectEqual(resolve.EntityDecision.ask, e.decision);
+        try testing.expect(e.gray[0].eql(hollis));
+    }
+
+    const q = try resolve.decisionQuestions(arena, p2, checked, same_team);
+    try testing.expect(std.mem.indexOf(u8, q.asks[0].choice.prompt, "share a first name") != null);
+    try testing.expect(std.mem.indexOf(u8, q.asks[0].choice.options[0].description, "known facts: Maren Hollis owns the brinelog relay.; active in this entry's project") != null);
 }
 
 test "consolidate previews without writing, then merges, keeps apart, and never re-asks a decided pair" {
