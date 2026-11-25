@@ -53,6 +53,7 @@ pub const Service = struct {
             error.MissingSessionId => api.errorReply(arena, 400, "missing session id"),
             error.InvalidId => api.errorReply(arena, 400, "invalid fact_id"),
             error.EmptyText => api.errorReply(arena, 400, "text must not be empty"),
+            error.InvalidGraphInput => api.errorReply(arena, 400, "invalid graph query"),
             else => if (isInputError(err))
                 api.errorReply(arena, 400, try std.fmt.allocPrint(arena, "invalid arguments: {s}", .{@errorName(err)}))
             else
@@ -62,6 +63,11 @@ pub const Service = struct {
 
     fn handle(s: *Service, arena: Allocator, req: api.Request) !api.Reply {
         return switch (req.op) {
+            .graph_overview => s.graph(arena, .overview, req.body),
+            .graph_map => s.graph(arena, .map, req.body),
+            .graph_neighborhood => s.graph(arena, .neighborhood, req.body),
+            .graph_search => s.graph(arena, .search, req.body),
+            .graph_entity => s.graph(arena, .entity, req.body),
             .search => s.search(arena, try parse(SearchInput, arena, req.body)),
             .entity => s.entity(arena, try parse(EntityInput, arena, req.body)),
             .remember => s.remember(arena, try parse(RememberInput, arena, req.body)),
@@ -72,6 +78,11 @@ pub const Service = struct {
             .warm => s.warm(req.session_id orelse return error.MissingSessionId, try parse(PromptInput, arena, req.body)),
             .recall => s.recall(arena, req.session_id orelse return error.MissingSessionId, try parse(PromptInput, arena, req.body)),
         };
+    }
+
+    fn graph(s: *Service, arena: Allocator, op: retrieve.graph.Op, body: []const u8) !api.Reply {
+        const input = try std.json.parseFromSliceLeaky(retrieve.graph.Input, arena, body, .{});
+        return .{ .body = try retrieve.graph.run(s.engine, arena, op, input) };
     }
 
     const SearchInput = struct {

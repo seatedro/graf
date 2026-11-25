@@ -4,6 +4,7 @@ const store = @import("store");
 const llm = @import("llm");
 
 pub const time = @import("time.zig");
+pub const graph = @import("graph.zig");
 pub const rank = @import("rank.zig");
 const render_ = @import("render.zig");
 const db = @import("db.zig");

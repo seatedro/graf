@@ -56,8 +56,11 @@ workers = 4
 
 [serve]
 listen = "127.0.0.1:7420"
-# Bearer token required on /mcp and /v1/* over TCP (GRAF_SERVE_TOKEN). Unix socket requests skip it.
+# Hub token for API clients and browser sign-in (GRAF_SERVE_TOKEN).
 token = ""
+# Optional read-only viewer sign-in via Tailscale Serve. See docs/hub.md.
+# tailscale_origin = "https://hub.example.ts.net"
+# tailscale_logins = ["user@example.org"]
 
 [capture]
 exclude_projects = []

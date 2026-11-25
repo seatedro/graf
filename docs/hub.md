@@ -32,9 +32,31 @@ tailscale serve --bg 7420
 curl -fsS https://hub.example.ts.net/v1/health
 ```
 
-With a token set, every TCP request to `/mcp` and `/v1/*` needs `Authorization: Bearer <token>`; requests over the local Unix socket and `GET /v1/health` do not. `graf serve` refuses to listen on a non-loopback address without a token.
+If port 443 already serves another app, use `tailscale serve --bg --https=7443 http://127.0.0.1:7420` and open the URL with `:7443`. If Serve already proxies that port to graf, keep the existing mapping.
+
+Open the HTTPS address in a browser to [explore the graph](graph-viewer.md). The viewer ships inside `graf`; it doesn't load code, fonts, or graph data from a third party. By default, sign in with the hub bearer token. The viewer keeps it in this tab's session storage. The token still has its full API privileges, so give it only to trusted operators.
+
+The viewer shell, static assets, `GET /v1/health`, and the session bootstrap are public. An anonymous session reports only `{"mode":"anonymous"}`. With a token configured, TCP requests for graph data, MCP, ingestion, and hooks otherwise need `Authorization: Bearer <token>`. Local clients can use the permission-restricted Unix socket without a token. Never publish that socket through a proxy.
 
 `/mcp` speaks MCP Streamable HTTP: `POST` a JSON-RPC message or batch and get one JSON response, or `202 Accepted` for notifications. The server keeps no sessions and opens no server-initiated streams, so `GET` and `DELETE` answer `405`.
+
+### Sign in with Tailscale Serve
+
+To grant read-only viewer access without sharing the hub token, set the exact HTTPS origin printed by `tailscale serve status` (including any non-default port, without a trailing slash) and restart `graf serve`:
+
+```toml
+# ~/.config/graf/config.toml
+[serve]
+listen = "127.0.0.1:7420"
+tailscale_origin = "https://hub.example.ts.net"
+tailscale_logins = ["user@example.org"]
+```
+
+`GRAF_SERVE_TAILSCALE_ORIGIN` overrides the origin. The login list matches exact Tailscale user logins. If you omit it or leave it empty, **every untagged user allowed to reach Serve by the tailnet policy** can read the entire graph, including evidence quotes. Project filters are navigation, not access controls. Tagged devices, Funnel requests, and users outside the list do not get header-authenticated access. Tagged automation can keep using its bearer token.
+
+Point Tailscale **Serve** directly at the loopback TCP listener. Graf checks that both the listener and the connecting peer are loopback, the request Host and forwarded HTTPS host match the configured origin, and Serve supplied a user login. The identity grants access only to the viewer's read-only graph operations, never to MCP, writes, hooks, or the older API. Loopback is a **host trust boundary**: another process on the hub could impersonate Serve. Enable this mode only when you trust all local users and applications, and no other proxy passes client-supplied identity headers to this port.
+
+Keep a bearer token configured on any published hub. Without one, a direct loopback client can use a standalone local hub, but enabling `tailscale_origin` disables tokenless TCP access to the older API even from localhost. Graf refuses a non-loopback listener without a token and refuses Tailscale header authentication on a non-loopback listener. Other reverse proxies should preserve the public Host, serve over HTTPS, and use bearer sign-in; do not enable identity-header authentication for them.
 
 ## Edge
 

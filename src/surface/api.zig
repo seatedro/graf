@@ -1,6 +1,21 @@
 const std = @import("std");
 
-pub const Op = enum { search, entity, remember, forget, entries, brief, flush, warm, recall };
+pub const Op = enum {
+    search,
+    entity,
+    remember,
+    forget,
+    entries,
+    brief,
+    flush,
+    warm,
+    recall,
+    graph_overview,
+    graph_map,
+    graph_neighborhood,
+    graph_search,
+    graph_entity,
+};
 
 pub const Request = struct {
     op: Op,

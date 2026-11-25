@@ -240,10 +240,174 @@ const Fixture = struct {
         cleanup(&f.s, f.seed.graph);
         f.s.close();
     }
+
+    fn graph(f: *Fixture, op: mod.graph.Op, in: mod.graph.Input) !std.json.Value {
+        const arena = f.arena.allocator();
+        return std.json.parseFromSliceLeaky(std.json.Value, arena, try mod.graph.run(&f.engine, arena, op, in), .{});
+    }
 };
+
+test "graph viewer filters both timelines, matches aliases, and isolates graph ids" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    var id_buf: [36]u8 = undefined;
+    const id = f.seed.graf.toString(&id_buf);
+
+    const overview = (try f.graph(.overview, .{})).object;
+    try std.testing.expectEqual(@as(i64, 7), overview.get("entities").?.integer);
+    try std.testing.expectEqual(@as(i64, 9), overview.get("facts").?.integer);
+    try std.testing.expectEqual(@as(usize, 2), overview.get("projects").?.array.items.len);
+
+    const current = (try f.graph(.neighborhood, .{ .id = id, .relation = "uses", .type = "software" })).object;
+    try std.testing.expectEqual(@as(usize, 1), current.get("edges").?.array.items.len);
+    try std.testing.expectEqual(@as(usize, 2), current.get("nodes").?.array.items.len);
+    try std.testing.expect(!current.get("truncated").?.bool);
+
+    const history = (try f.graph(.neighborhood, .{ .id = id, .relation = "uses", .include_history = true })).object;
+    try std.testing.expectEqual(@as(usize, 2), history.get("edges").?.array.items.len);
+    const then = try std.fmt.allocPrint(f.arena.allocator(), "{f}", .{mod.time.Date{ .t = f.seed.now - 15 * day }});
+    const snapshot = (try f.graph(.neighborhood, .{ .id = id, .relation = "uses", .as_of = then })).object;
+    try std.testing.expectEqual(@as(usize, 2), snapshot.get("edges").?.array.items.len);
+    const before_records = (try f.graph(.neighborhood, .{ .as_of = "1900-01-01", .include_history = true })).object;
+    try std.testing.expectEqual(@as(usize, 0), before_records.get("edges").?.array.items.len);
+
+    const result = (try f.graph(.search, .{ .query = "PostgreSQL", .project = "graf" })).object;
+    try std.testing.expectEqualStrings("Postgres", result.get("entities").?.array.items[0].object.get("name").?.string);
+    const details = (try f.graph(.entity, .{ .id = id, .relation = "uses", .project = "graf" })).object;
+    const facts = details.get("facts").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), facts.len);
+    try std.testing.expectEqualStrings("Postgres", facts[0].object.get("object_name").?.string);
+    try std.testing.expectEqualStrings("stated", facts[0].object.get("evidence").?.array.items[0].object.get("kind").?.string);
+    try std.testing.expect(facts[0].object.get("valid_to").? == .null);
+    try std.testing.expect(facts[0].object.get("known_from").? == .string);
+
+    const foreign = try store.testing.freshGraph(&f.s);
+    defer cleanup(&f.s, foreign);
+    var sd: Seeder = .{ .s = &f.s, .io = std.testing.io, .graph = foreign };
+    const other = try sd.entity("Unrelated", "unrelated", "project", "", &.{});
+    var foreign_buf: [36]u8 = undefined;
+    const other_id = other.toString(&foreign_buf);
+    try std.testing.expectError(error.EntityNotFound, f.graph(.entity, .{ .id = other_id }));
+    try std.testing.expectError(error.EntityNotFound, f.graph(.neighborhood, .{ .id = other_id }));
+    const empty = (try f.graph(.search, .{ .query = "Unrelated" })).object;
+    try std.testing.expectEqual(@as(usize, 0), empty.get("entities").?.array.items.len);
+
+    _ = try f.s.pool.exec("UPDATE entity SET type = 'library', merged_into = $2 WHERE id = $1", .{ &f.seed.sqlite.bytes, &f.seed.postgres.bytes });
+    const merged = (try f.graph(.overview, .{})).object;
+    try std.testing.expectEqual(@as(i64, 6), merged.get("entities").?.integer);
+    _ = try f.s.pool.exec("UPDATE entity SET merged_into = NULL WHERE id = $1", .{&f.seed.sqlite.bytes});
+    const restored = (try f.graph(.overview, .{ .type = "library", .include_history = true })).object;
+    try std.testing.expectEqualStrings("SQLite", restored.get("hubs").?.array.items[0].object.get("name").?.string);
+
+    _ = try f.s.pool.exec("DELETE FROM entity_alias WHERE entity_id = $1", .{&other.bytes});
+    _ = try f.s.pool.exec("DELETE FROM entity WHERE id = $1", .{&other.bytes});
+    var row = (try f.s.pool.row("SELECT count(*) FROM graph_entity_rank WHERE id = $1", .{&other.bytes})).?;
+    defer row.deinit() catch {};
+    try std.testing.expectEqual(@as(i64, 0), try row.get(i64, 0));
+}
+
+test "graph viewer bounds a hot neighborhood and filters before capping focused edges" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    const g = &f.seed.graph.bytes;
+    const root = &f.seed.graf.bytes;
+    const dst = &f.seed.postgres.bytes;
+    var id_buf: [36]u8 = undefined;
+    const id = f.seed.graf.toString(&id_buf);
+
+    _ = try f.s.pool.exec(
+        \\INSERT INTO fact (id, graph_id, subject_id, relation, object_id, text, project, scope, valid, known, author, confidence, emb, created_seq)
+        \\SELECT ('ffffffff-ffff-ffff-ffff-' || right(md5($1::uuid::text || i),12))::uuid, $1, $2, 'links', $3,
+        \\  'Extra connection', 'test', 'project', tstzrange(now(), NULL), tstzrange(now(), NULL), 'user', 0.5,
+        \\  array_fill(0::real, ARRAY[512])::halfvec, 0 FROM generate_series(1, 120) i
+    , .{ g, root, dst });
+
+    const capped = (try f.graph(.neighborhood, .{ .id = id, .hops = 2 })).object;
+    try std.testing.expect(capped.get("truncated").?.bool);
+    try std.testing.expect(capped.get("nodes").?.array.items.len <= 108);
+    try std.testing.expect(capped.get("edges").?.array.items.len <= 96);
+
+    const filtered = (try f.graph(.neighborhood, .{ .id = id, .project = "graf", .relation = "uses", .min_confidence = 0.85 })).object;
+    try std.testing.expectEqual(@as(usize, 1), filtered.get("edges").?.array.items.len);
+    try std.testing.expect(!filtered.get("truncated").?.bool);
+    const then = try std.fmt.allocPrint(f.arena.allocator(), "{f}", .{mod.time.Date{ .t = f.seed.now - 15 * day }});
+    const past = (try f.graph(.neighborhood, .{ .id = id, .as_of = then })).object;
+    try std.testing.expectEqual(@as(usize, 2), past.get("edges").?.array.items.len);
+
+    const two = (try f.graph(.neighborhood, .{ .id = id, .hops = 2, .relation = "uses" })).object;
+    try std.testing.expectEqual(@as(usize, 2), two.get("edges").?.array.items.len);
+    try std.testing.expectEqual(@as(usize, 3), two.get("nodes").?.array.items.len);
+
+    const page = (try f.graph(.entity, .{ .id = id, .relation = "links" })).object;
+    const cursor = page.get("next_before").?.string;
+    const first_page = page.get("facts").?.array.items;
+    try std.testing.expectEqual(@as(usize, 64), first_page.len);
+    try std.testing.expectEqualStrings(first_page[63].object.get("id").?.string, cursor);
+    const last = (try f.graph(.entity, .{ .id = id, .relation = "links", .before = cursor })).object;
+    const rest = last.get("facts").?.array.items;
+    try std.testing.expectEqual(@as(usize, 56), rest.len);
+    try std.testing.expect(std.mem.order(u8, cursor, rest[0].object.get("id").?.string) == .gt);
+    try std.testing.expect(last.get("next_before").? == .null);
+    const target = rest[25].object.get("id").?.string;
+    const pinned = (try f.graph(.entity, .{ .id = id, .fact_id = target })).object.get("facts").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), pinned.len);
+    try std.testing.expectEqualStrings(target, pinned[0].object.get("id").?.string);
+    const hidden = (try f.graph(.entity, .{ .id = id, .fact_id = target, .relation = "uses" })).object;
+    try std.testing.expectEqual(@as(usize, 0), hidden.get("facts").?.array.items.len);
+
+    _ = try f.s.pool.exec("UPDATE fact SET relation = 'part_of', subject_id = $2 WHERE graph_id = $1 AND relation = 'links'", .{ g, dst });
+    _ = try f.s.pool.exec("DELETE FROM fact WHERE graph_id = $1 AND relation = 'part_of'", .{g});
+    const overview = (try f.graph(.overview, .{})).object;
+    try std.testing.expectEqual(@as(i64, 9), overview.get("facts").?.integer);
+    var row = (try f.s.pool.row("SELECT degree FROM graph_entity_rank WHERE id = $1", .{root})).?;
+    defer row.deinit() catch {};
+    try std.testing.expectEqual(@as(i64, 3), try row.get(i64, 0));
+}
 
 fn contains(hits: []const mod.Hit, id: core.Id) bool {
     return indexOf(hits, id) != null;
+}
+
+test "graph map pages real edges without gaps or duplicate nodes" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+
+    _ = try f.s.pool.exec(
+        \\INSERT INTO fact (id, graph_id, subject_id, relation, object_id, text, project, scope, valid, known, author, confidence, emb, created_seq)
+        \\SELECT md5($1::uuid::text || i)::uuid, $1, $2, 'connects', $3, 'Connection', 'harbor', 'project',
+        \\  tstzrange('2020-01-01', '2021-01-01'), tstzrange('2020-01-02', NULL), 'user', 0.8,
+        \\  array_fill(0::real, ARRAY[512])::halfvec, 0 FROM generate_series(1, 2050) i
+    , .{ &f.seed.graph.bytes, &f.seed.graf.bytes, &f.seed.postgres.bytes });
+
+    var input: mod.graph.Input = .{ .project = "harbor", .type = "software", .relation = "connects", .as_of = "2020-02-01", .min_confidence = 0.75 };
+    const first = (try f.graph(.map, input)).object;
+    const rows = first.get("edges").?.array.items;
+    try std.testing.expect(first.get("truncated").?.bool);
+    try std.testing.expectEqual(@as(usize, 2048), rows.len);
+    try std.testing.expectEqual(@as(usize, 2), first.get("nodes").?.array.items.len);
+    for (rows[1..], rows[0 .. rows.len - 1]) |next, previous| {
+        try std.testing.expect(std.mem.order(u8, next.object.get("id").?.string, previous.object.get("id").?.string) == .lt);
+    }
+
+    const cursor = first.get("next_before").?.string;
+    try std.testing.expectEqualStrings(rows[2047].object.get("id").?.string, cursor);
+    input.before = cursor;
+    const last = (try f.graph(.map, input)).object;
+    const remaining = last.get("edges").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), remaining.len);
+    try std.testing.expect(std.mem.order(u8, remaining[0].object.get("id").?.string, cursor) == .lt);
+    try std.testing.expect(last.get("next_before").? == .null);
+    try std.testing.expect(!last.get("truncated").?.bool);
+
+    input.as_of = "2022-01-01";
+    try std.testing.expectEqual(@as(usize, 0), (try f.graph(.map, input)).object.get("edges").?.array.items.len);
+    input.include_history = true;
+    try std.testing.expectEqual(@as(usize, 2), (try f.graph(.map, input)).object.get("edges").?.array.items.len);
+    input.type = "person";
+    try std.testing.expectEqual(@as(usize, 0), (try f.graph(.map, input)).object.get("edges").?.array.items.len);
 }
 
 fn indexOf(hits: []const mod.Hit, id: core.Id) ?usize {

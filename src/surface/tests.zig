@@ -237,6 +237,61 @@ test "serve and hook round trip over the Unix socket" {
     try testing.expect(std.mem.indexOf(u8, over_tcp.body, "alice prefers tabs over spaces") != null);
 }
 
+test "graph endpoints return structured data over authenticated TCP" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = testing.io;
+
+    var server: http.Server = .init(testing.allocator, io, f.svc.handler(), .{ .listen = "127.0.0.1:0", .token = "test-token" });
+    try server.start();
+    defer server.deinit();
+    var running = try io.concurrent(http.Server.run, .{&server});
+    defer {
+        server.stop();
+        running.await(io) catch {};
+    }
+
+    const addr = try std.fmt.allocPrint(arena, "127.0.0.1:{d}", .{server.boundPort()});
+    var c = client.Client.init(io, .{ .tcp = addr }, "test-token");
+    const h = c.handler();
+    const focus = try std.json.Stringify.valueAlloc(arena, .{ .id = f.seed.graf }, .{});
+
+    const overview = try h.handle(arena, .{ .op = .graph_overview });
+    try testing.expectEqual(@as(u16, 200), overview.status);
+    const counts = try std.json.parseFromSliceLeaky(std.json.Value, arena, overview.body, .{});
+    try testing.expectEqual(@as(i64, 7), counts.object.get("entities").?.integer);
+
+    const world = try h.handle(arena, .{ .op = .graph_map });
+    try testing.expectEqual(@as(u16, 200), world.status);
+    const page = try std.json.parseFromSliceLeaky(std.json.Value, arena, world.body, .{});
+    try testing.expect(page.object.get("edges").?.array.items.len > 0);
+    try testing.expect(page.object.get("next_before").? == .null);
+
+    const graph = try h.handle(arena, .{ .op = .graph_neighborhood, .body = focus });
+    try testing.expectEqual(@as(u16, 200), graph.status);
+    const neighborhood = try std.json.parseFromSliceLeaky(std.json.Value, arena, graph.body, .{});
+    try testing.expect(neighborhood.object.get("edges").?.array.items.len > 0);
+
+    const search = try h.handle(arena, .{ .op = .graph_search, .body = "{\"query\":\"Postgres\"}" });
+    try testing.expectEqual(@as(u16, 200), search.status);
+    const matches = try std.json.parseFromSliceLeaky(std.json.Value, arena, search.body, .{});
+    try testing.expect(matches.object.get("entities").?.array.items.len > 0);
+    try testing.expect(matches.object.get("facts").?.array.items.len > 0);
+
+    const profile = try h.handle(arena, .{ .op = .graph_entity, .body = focus });
+    try testing.expectEqual(@as(u16, 200), profile.status);
+    const entity = try std.json.parseFromSliceLeaky(std.json.Value, arena, profile.body, .{});
+    try testing.expectEqualStrings("graf", entity.object.get("entity").?.object.get("name").?.string);
+
+    const invalid = try h.handle(arena, .{ .op = .graph_neighborhood, .body = "{\"hops\":3}" });
+    try testing.expectEqual(@as(u16, 400), invalid.status);
+}
+
 test "default project fills requests that omit one" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
