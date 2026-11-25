@@ -33,7 +33,7 @@
   <header class="masthead">
     <div class="brand"><svg class="icon" aria-hidden="true"><use href="#i-brand"/></svg>graf</div>
     <span class="head-rule"></span>
-    <h1 id="atlas-title">World explorer</h1>
+    <h1 id="atlas-title">Graph survey</h1>
     <dl class="metrics" aria-label="Graph inventory">
       <div><dt>Entities</dt><dd id="entity-count">—</dd></div>
       <div><dt>Facts</dt><dd id="fact-count">—</dd></div>
@@ -47,8 +47,10 @@
   <main class="world" aria-label="Interactive graph world">
     <div class="plot">
       <canvas id="world-gpu" aria-hidden="true"></canvas>
-      <canvas id="map" tabindex="0" aria-label="Graph world. Use WASD or arrow keys to move, plus and minus to zoom, and the entity list to inspect nodes."></canvas>
+      <canvas id="map" tabindex="0" aria-label="Graph world. Use WASD or arrow keys to move, plus and minus to zoom, brackets to cycle through connected entities, Enter to fly to the target, Escape to release it, and the entity list to inspect nodes."></canvas>
       <div id="plot-state" class="plot-state" role="status">Connecting to the graph…</div>
+      <div id="announce" class="visually-hidden" aria-live="polite"></div>
+      <div id="zone" class="zone" aria-hidden="true"></div>
     </div>
     <div class="command-deck">
       <section class="query-bar" aria-label="Search and filter the world">
@@ -87,7 +89,7 @@
       <div id="side-body" class="side-body"><p class="muted">Loading the graph index…</p></div>
     </aside>
     <section class="sector" aria-labelledby="map-title">
-      <div class="sector-slug" id="map-title"><svg class="icon" aria-hidden="true"><use href="#i-fit"/></svg> Current sector</div>
+      <div class="sector-slug" id="map-title"><span class="visually-hidden">Current location: </span><span id="region">Deep field</span></div>
       <div class="sector-line"><h2 id="map-mode">Hub neighborhood</h2><button id="map-reset" class="icon-button" title="Return to hub neighborhood" aria-label="Return to hub neighborhood" hidden><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg></button></div>
       <span id="shown">— nodes · — edges</span>
       <div class="sector-actions">
@@ -96,17 +98,17 @@
       </div>
     </section>
     <div class="map-instruments">
-      <canvas id="locator" class="hud" width="132" height="84" aria-label="World locator. Click to recenter the map." title="World locator · click to recenter" hidden></canvas>
+      <canvas id="locator" width="148" height="148" aria-label="Radar locator. Click to fly the camera to that point." title="Radar locator · click to fly there" hidden></canvas>
       <details class="node-index hud"><summary><svg class="icon" aria-hidden="true"><use href="#i-index"/></svg> Entity list <svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg></summary><div id="node-list"></div></details>
       <div class="map-controls hud">
         <button id="fit" title="Fit graph" aria-label="Fit graph"><svg class="icon" aria-hidden="true"><use href="#i-fit"/></svg></button><span></span>
-        <button id="zoom-out" title="Zoom out" aria-label="Zoom out"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button><output id="zoom">100%</output>
+        <button id="zoom-out" title="Zoom out" aria-label="Zoom out"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button><output id="zoom" aria-label="Magnification">×1.0</output>
         <button id="zoom-in" title="Zoom in" aria-label="Zoom in"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
       </div>
     </div>
     <footer class="flight-bar">
-      <div class="render-mode"><span class="live-dot"></span><output id="renderer">Initializing</output></div>
-      <div id="flight-keys"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Pan</span><span><kbd>+</kbd><kbd>−</kbd> Zoom</span><span class="pointer-hint">Click to inspect <b>·</b> Double-click to expand</span><span class="touch-hint">Drag to pan <b>·</b> Tap an entity to inspect</span></div>
+      <div class="render-mode"><span class="live-dot"></span><output id="renderer">Initializing</output><output id="telemetry" aria-label="Camera position"></output></div>
+      <div id="flight-keys"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Pan</span><span><kbd>+</kbd><kbd>−</kbd> Zoom</span><span><kbd>[</kbd><kbd>]</kbd> Cycle targets</span><span class="pointer-hint">Click to inspect <b>·</b> Double-click to expand</span><span class="touch-hint">Drag to pan <b>·</b> Tap an entity to inspect</span></div>
     </footer>
   </main>
   <dialog id="auth">

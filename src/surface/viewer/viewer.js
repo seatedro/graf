@@ -245,6 +245,13 @@ function profile(data, factId, before) {
   const body = $("side-body"), top = el("section"), type = el("span", "tag");
   type.append(dot(entity.type), el("span", "", pretty(entity.type)));
   top.append(type, el("h3", "profile-name", entity.name));
+  const stats = el("dl", "readout");
+  for (const [label, value] of [["Facts", number.format(facts.length) + (data.next_before ? "+" : "")], ["Aliases", number.format(aliases.length)], ["Merges", number.format(merges.length)]]) {
+    const cell = el("div");
+    cell.append(el("dt", "", label), el("dd", "", value));
+    stats.append(cell);
+  }
+  top.append(stats);
   if (entity.summary) top.append(el("p", "profile-copy", entity.summary));
   if (entity.description && entity.description !== entity.summary) top.append(el("p", "profile-copy", entity.description));
   if (aliases.length) {
@@ -340,7 +347,8 @@ async function inspect(id, factId = null, before = null) {
   $("side-title").textContent = "Entity inspector";
   $("side-code").hidden = true;
   $("close-inspector").hidden = false;
-  $("side-body").replaceChildren(el("p", "muted", "Loading entity…"));
+  $("side-body").replaceChildren(el("p", "muted", "Acquiring target…"));
+  markRelated();
   paint();
   try {
     const params = { id };
@@ -363,7 +371,10 @@ function closeInspector() {
   selected = null;
   $("hops").disabled = !root;
   activeFacts = null;
+  cycling = null;
   renderOverview();
+  markRelated();
+  announce(null);
   paint();
 }
 
@@ -455,6 +466,7 @@ function setGraph(data, append, id) {
   root = id;
   $("hops").disabled = !root && !selected;
   hover = null;
+  cycling = null;
   $("map-reset").hidden = !root && sector < 2;
   $("map-mode").textContent = root ? nodes.get(root)?.name || "Focused neighborhood" : sector > 1 ? "World map · " + sector : "World map";
   $("plot-state").textContent = root ? "No entities match this view." : "No entity links in this sector. Search to inspect individual entities.";
@@ -480,15 +492,16 @@ async function loadMap(id, append) {
   const params = id ? { id, hops: Number($("hops").value) } : before ? { before } : {};
   abort(id ? "map" : "neighborhood");
   $("load-sector").disabled = true;
-  $("plot-state").textContent = id ? "Mapping neighborhood…" : "Loading sector…";
+  $("plot-state").textContent = id ? "Plotting a course…" : "Charting sector…";
   $("plot-state").hidden = false;
   try {
     const data = await api(id ? "neighborhood" : "map", params);
     if (rev !== mapRequest) return;
+    const known = id && nodes.get(id), prior = known && { x: ox + known.x * scale, y: oy + known.y * scale };
     nextSector = id ? null : data.next_before;
     sector = id ? 0 : before ? sector + 1 : 1;
     setGraph(data, append, id);
-    if (id) flyToEntity(id);
+    if (id) arrive(id, prior);
   } catch (err) {
     if (rev === mapRequest && err.name !== "AbortError") {
       $("load-sector").disabled = false;
@@ -507,9 +520,12 @@ const world = SurveyWorld.create($("world-gpu"), colors, paint);
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const locator = $("locator");
 const locatorImage = document.createElement("canvas");
-const flightKeys = new Set();
-let stars = [], landmarks = [], cells = new Map(), bounds, cellSize = 1;
-let targetCamera = null, lastFrame = 0, mini = null;
+const flightKeys = new Set(), touches = new Map();
+const kinds = { person: 0, organization: 0, ai_model: 0, task: 2, decision: 2, event: 2, change: 2, problem: 2, run: 2, session: 2 };
+let stars = [], landmarks = [], sectors = [], cells = new Map(), bounds, cellSize = 1;
+let targetCamera = null, flight = null, pinch = null, cycling = null, beacon = null, mini = null, tapped = null;
+let lastFrame = 0, lastInput = 0, lastPaint = 0, revealStart = 0, reveal = 1, lockStart = 0, gpuRatio = 1, pace = 16;
+const readouts = {};
 
 function hash(value) {
   let h = 2166136261;
@@ -517,18 +533,37 @@ function hash(value) {
   return h >>> 0;
 }
 
+function tone(hex, alpha) {
+  return "rgba(" + [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(",") + "," + alpha + ")";
+}
+
+function readout(id, text) {
+  if (readouts[id] === text) return;
+  readouts[id] = text;
+  $(id).textContent = text;
+}
+
 function mapArea() {
   const rect = canvas.getBoundingClientRect(), dock = $("sidebar").getBoundingClientRect();
   const docked = width > 710 && dock.left > rect.left + width / 2 && dock.left < rect.right;
   const right = docked ? dock.left - rect.left - 16 : width;
-  const top = Math.min(84, height * .14), bottom = height - Math.min(128, height * .18);
+  const top = Math.min(126, height * .17);
+  let bottom = height - Math.min(150, height * .2);
+  if (width <= 710 && dock.top > rect.top + height * .35) bottom = Math.min(bottom, dock.top - rect.top - 12);
   return { x: right / 2, y: (top + bottom) / 2, w: right, h: bottom - top };
+}
+
+function markRelated() {
+  const focus = nodes.get(selected);
+  for (const n of stars) n.related = !!focus && focus.neighbors.has(n.id);
+  world.relate(stars);
+  lockStart = performance.now();
 }
 
 function layout() {
   stars = [...nodes.values()].sort((a, b) => b.degree - a.degree || a.id.localeCompare(b.id));
-  landmarks = []; cells = new Map(); bounds = null; mini = null;
-  if (!stars.length) { world.upload([], new Float32Array()); if (locator) locator.hidden = true; return; }
+  landmarks = []; sectors = []; cells = new Map(); bounds = null; mini = null;
+  if (!stars.length) { world.upload([], new Float32Array(), []); if (locator) locator.hidden = true; return; }
   stars.forEach((n, i) => { n.index = i; n.tint = typeIndex(n.type); n.seed = hash(n.id) / 4294967296; n.routes = []; });
 
   const groups = [];
@@ -565,6 +600,7 @@ function layout() {
   const stretch = Math.max(.76, Math.min(1.85, area.w / Math.max(1, area.h) * .91));
   const placed = [], maxRadius = Math.max(...groups.map(g => Math.sqrt(g.length) * 45));
   for (const [i, group] of groups.entries()) {
+    if (!group.length) continue;
     const radius = 35 + Math.sqrt(group.length - 1) * 45;
     let cx = 0, cy = 0;
     if (i) {
@@ -602,18 +638,23 @@ function layout() {
       n.y = cy + sy;
       n.landmark = j === 0 || n.index === 0;
       n.sectorCount = j === 0 && stars.length >= 160 && group.every(m => m.type === n.type) ? group.length : 0;
-      n.radius = n.landmark ? 12 + 6 / (1 + n.index * .2) : 4.1 + Math.min(5, Math.log2(1 + n.degree)) + n.seed * 1.4;
-      n.tile = n.tint + (n.landmark || stars.length < 60 && n.degree > 1 ? 0 : 2 * colors.length);
+      n.kind = kinds[n.type] ?? 1;
+      n.radius = (n.landmark ? 12 + 6 / (1 + n.index * .2) : 4.1 + Math.min(5, Math.log2(1 + n.degree)) + n.seed * 1.4) * (n.kind === 0 ? 1.1 : n.kind === 2 ? .92 : 1) * (stars.length < 160 ? 1.4 : 1);
+      if (n.kind === 1 && (n.landmark || n.degree >= 8)) n.kind = 3;
       if (n.landmark) landmarks.push(n);
     }
     seed.sectorRadius = radius * Math.max(1, stretch);
+    sectors.push({ x: cx * stretch, y: cy, r: seed.sectorRadius, tint: seed.tint, count: group.length, node: seed, typed: seed.sectorCount > 0, rank: sectors.length + 1 });
   }
 
   bounds = { x1: Infinity, x2: -Infinity, y1: Infinity, y2: -Infinity };
+  let far = 1;
   for (const n of stars) {
     bounds.x1 = Math.min(bounds.x1, n.x); bounds.x2 = Math.max(bounds.x2, n.x);
     bounds.y1 = Math.min(bounds.y1, n.y); bounds.y2 = Math.max(bounds.y2, n.y);
+    far = Math.max(far, Math.hypot(n.x, n.y));
   }
+  for (const n of stars) n.delay = Math.hypot(n.x, n.y) / far * .75;
   cellSize = Math.max(30, Math.max(bounds.x2 - bounds.x1, bounds.y2 - bounds.y1) / 48);
   const bucket = (x, y) => {
     const key = Math.floor(x / cellSize) + ":" + Math.floor(y / cellSize);
@@ -633,7 +674,7 @@ function layout() {
     if (b !== a) b.routes.push(link);
     const bins = new Set();
     const add = (x1, y1, x2, y2) => {
-      segments.push(x1, y1, a.index, b.index, level, x2, y2, a.index, b.index, level);
+      segments.push(x1, y1, a.index, b.index, level, a.tint, x2, y2, a.index, b.index, level, b.tint);
       const steps = Math.max(1, Math.ceil(Math.max(Math.abs(x2 - x1), Math.abs(y2 - y1)) / cellSize));
       let px = x1, py = y1;
       bins.add(bucket(px, py));
@@ -666,101 +707,208 @@ function layout() {
       seen.add(neighbor); return true;
     });
   }
-  world.upload(stars, new Float32Array(segments));
+  const focus = nodes.get(selected);
+  for (const n of stars) n.related = !!focus && focus.neighbors.has(n.id);
+  world.upload(stars, new Float32Array(segments), sectors);
+  revealStart = reducedMotion.matches ? 0 : performance.now();
   rebuildLocator();
 }
 
 function rebuildLocator() {
   if (!locator || !bounds) return;
   locator.hidden = false;
-  const w = locator.width, h = locator.height;
-  const z = Math.min((w - 20) / Math.max(64, bounds.x2 - bounds.x1), (h - 16) / Math.max(48, bounds.y2 - bounds.y1));
-  mini = { z, x: (w - (bounds.x1 + bounds.x2) * z) / 2, y: (h - (bounds.y1 + bounds.y2) * z) / 2 };
-  locatorImage.width = w; locatorImage.height = h;
-  const c = locatorImage.getContext("2d"), r = stars.length > 1200 ? 1 : 2;
+  const size = 148, ratio = Math.min(2, devicePixelRatio || 1), mid = size / 2;
+  locator.width = locator.height = locatorImage.width = locatorImage.height = Math.round(size * ratio);
+  const cx = (bounds.x1 + bounds.x2) / 2, cy = (bounds.y1 + bounds.y2) / 2;
+  let reach = 48;
+  for (const n of stars) reach = Math.max(reach, Math.hypot(n.x - cx, n.y - cy));
+  const z = (mid - 14) / reach;
+  mini = { z, x: mid - cx * z, y: mid - cy * z, size, ratio };
+  const c = locatorImage.getContext("2d"), dot = stars.length > 1200 ? .9 : 1.6;
+  c.setTransform(ratio, 0, 0, ratio, 0, 0);
+  c.clearRect(0, 0, size, size);
+  c.globalAlpha = stars.length > 1200 ? .75 : .95;
   for (const n of stars) {
     c.fillStyle = colors[n.tint];
+    const r = n.landmark ? dot * 1.8 : dot;
     c.fillRect(mini.x + n.x * z - r / 2, mini.y + n.y * z - r / 2, r, r);
   }
 }
 
-function drawLocator(area, light) {
+function drawLocator(area, light, time, motion) {
   if (!locator || !mini || !locator.clientWidth) return;
-  const c = locator.getContext("2d"), w = locator.width, h = locator.height;
-  c.clearRect(0, 0, w, h);
-  c.drawImage(locatorImage, 0, 0);
-  c.strokeStyle = light ? "#297789" : "#75d5dd"; c.lineWidth = 1;
-  const x = mini.x + ((area.x - area.w / 2 - ox) / scale) * mini.z;
-  const y = mini.y + ((area.y - area.h / 2 - oy) / scale) * mini.z;
-  const left = Math.max(1, x), top = Math.max(1, y);
-  c.strokeRect(left, top, Math.max(0, Math.min(w - 1, x + area.w / scale * mini.z) - left), Math.max(0, Math.min(h - 1, y + area.h / scale * mini.z) - top));
+  const c = locator.getContext("2d"), { size, ratio } = mini, mid = size / 2, R = mid - 3;
+  const ink = light ? "#1e5f6a" : "#86e6ee";
+  c.setTransform(ratio, 0, 0, ratio, 0, 0);
+  c.clearRect(0, 0, size, size);
+  c.save();
+  c.beginPath(); c.arc(mid, mid, R, 0, Math.PI * 2);
+  c.fillStyle = light ? "#eef1f6e8" : "#050911e0"; c.fill();
+  c.clip();
+  c.strokeStyle = tone(ink, .14); c.lineWidth = 1;
+  c.beginPath();
+  for (const k of [1 / 3, 2 / 3]) { c.moveTo(mid + R * k, mid); c.arc(mid, mid, R * k, 0, Math.PI * 2); }
+  c.moveTo(mid - R, mid); c.lineTo(mid + R, mid); c.moveTo(mid, mid - R); c.lineTo(mid, mid + R);
+  c.stroke();
+  if (motion && c.createConicGradient) {
+    const sweep = c.createConicGradient(time / 2400, mid, mid);
+    sweep.addColorStop(0, tone(ink, .16)); sweep.addColorStop(.12, tone(ink, 0)); sweep.addColorStop(1, tone(ink, 0));
+    c.fillStyle = sweep; c.fillRect(0, 0, size, size);
+  }
+  c.drawImage(locatorImage, 0, 0, size, size);
+  const x = mini.x + ((area.x - area.w / 2 - ox) / scale) * mini.z, y = mini.y + ((area.y - area.h / 2 - oy) / scale) * mini.z;
+  const w = area.w / scale * mini.z, h = area.h / scale * mini.z;
+  c.strokeStyle = ink; c.lineWidth = 1.2;
+  if (w < size * 1.4) {
+    const k = Math.min(7, w / 3, h / 3);
+    c.beginPath();
+    for (const [px, py, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
+      c.moveTo(px + dx * k, py); c.lineTo(px, py); c.lineTo(px, py + dy * k);
+    }
+    c.stroke();
+    c.fillStyle = tone(ink, .06); c.fillRect(x, y, w, h);
+  }
+  const target = nodes.get(selected);
+  if (target) {
+    const tx = mini.x + target.x * mini.z, ty = mini.y + target.y * mini.z;
+    c.fillStyle = light ? "#a3520d" : "#ffd28a";
+    c.beginPath(); c.arc(tx, ty, 2.6, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = tone(light ? "#a3520d" : "#ffd28a", .6);
+    c.beginPath(); c.arc(tx, ty, 6 + (motion ? 2 * Math.sin(time / 300) : 0), 0, Math.PI * 2); c.stroke();
+  }
+  c.restore();
+  c.strokeStyle = tone(ink, .5); c.lineWidth = 1;
+  c.beginPath(); c.arc(mid, mid, R, 0, Math.PI * 2); c.stroke();
+  c.beginPath();
+  for (let i = 0; i < 48; i++) {
+    const t = i * Math.PI / 24, inner = i % 12 ? R - 2.5 : R - 6;
+    c.moveTo(mid + Math.cos(t) * inner, mid + Math.sin(t) * inner); c.lineTo(mid + Math.cos(t) * R, mid + Math.sin(t) * R);
+  }
+  c.stroke();
 }
 
 if (locator) locator.onclick = e => {
   if (!mini) return;
-  const rect = locator.getBoundingClientRect(), area = mapArea();
-  const x = ((e.clientX - rect.left) * locator.width / rect.width - mini.x) / mini.z;
-  const y = ((e.clientY - rect.top) * locator.height / rect.height - mini.y) / mini.z;
-  steer(scale, area.x - x * scale, area.y - y * scale);
+  const rect = locator.getBoundingClientRect();
+  const x = ((e.clientX - rect.left) * mini.size / rect.width - mini.x) / mini.z;
+  const y = ((e.clientY - rect.top) * mini.size / rect.height - mini.y) / mini.z;
+  flyTo(x, y, scale);
 };
 
 function fit(animate) {
   const area = mapArea(), b = bounds || { x1: 0, x2: 0, y1: 0, y2: 0 };
   fitScale = Math.max(.005, Math.min(2.15, (area.w - Math.min(120, area.w * .18)) / Math.max(1, b.x2 - b.x1),
     (area.h - Math.min(95, area.h * .16)) / Math.max(1, b.y2 - b.y1)));
-  const x = area.x - (b.x1 + b.x2) * fitScale / 2, y = area.y - (b.y1 + b.y2) * fitScale / 2;
-  if (animate) steer(fitScale, x, y);
-  else { targetCamera = null; scale = fitScale; ox = x; oy = y; paint(); }
+  if (animate) flyTo((b.x1 + b.x2) / 2, (b.y1 + b.y2) / 2, fitScale);
+  else { targetCamera = null; flight = null; place((b.x1 + b.x2) / 2, (b.y1 + b.y2) / 2, fitScale); paint(); }
 }
 
 function resize() {
   const rect = canvas.getBoundingClientRect(), z = Math.min(2.5, devicePixelRatio || 1);
   if (width === rect.width && height === rect.height && canvas.width === Math.round(width * z)) return;
   width = Math.max(1, rect.width); height = Math.max(1, rect.height);
-  for (const layer of [canvas, $("world-gpu")]) {
-    if (!layer) continue;
-    layer.width = Math.round(width * z); layer.height = Math.round(height * z);
-  }
+  canvas.width = Math.round(width * z); canvas.height = Math.round(height * z);
+  sizeScene(Math.min(1.75, z));
   ctx.setTransform(canvas.width / width, 0, 0, canvas.height / height, 0, 0);
   fit();
+}
+
+function sizeScene(ratio) {
+  const gpu = $("world-gpu");
+  const w = Math.max(1, Math.round(width * ratio)), h = Math.max(1, Math.round(height * ratio));
+  gpuRatio = ratio;
+  if (gpu.width !== w) gpu.width = w;
+  if (gpu.height !== h) gpu.height = h;
 }
 
 function paint() {
   if (!frame) frame = requestAnimationFrame(draw);
 }
 
+function place(cx, cy, next) {
+  const area = mapArea();
+  scale = next; ox = area.x - cx * next; oy = area.y - cy * next;
+}
+
 function steer(next, x, y) {
-  hover = null;
+  hover = null; flight = null;
   if (!targetCamera) lastFrame = performance.now();
   if (reducedMotion.matches) { scale = next; ox = x; oy = y; targetCamera = null; }
   else targetCamera = { scale: next, x, y };
   paint();
 }
 
+function flyTo(cx, cy, next) {
+  hover = null; targetCamera = null;
+  const area = mapArea();
+  if (reducedMotion.matches) { flight = null; place(cx, cy, next); paint(); return; }
+  const x0 = (area.x - ox) / scale, y0 = (area.y - oy) / scale, w0 = area.w / scale, w1 = area.w / next;
+  const dx = cx - x0, dy = cy - y0, d = Math.hypot(dx, dy), rho = 1.42, r2 = rho * rho;
+  let path, length;
+  if (d < w0 * 1e-4) {
+    length = Math.abs(Math.log(w1 / w0)) / rho;
+    path = t => [x0 + dx * t, y0 + dy * t, w0 * (w1 / w0) ** t];
+  } else {
+    const r0 = -Math.asinh((w1 * w1 - w0 * w0 + r2 * r2 * d * d) / (2 * w0 * r2 * d));
+    const r1 = -Math.asinh((w1 * w1 - w0 * w0 - r2 * r2 * d * d) / (2 * w1 * r2 * d));
+    length = (r1 - r0) / rho;
+    path = t => {
+      const s = t * length, u = w0 / r2 * (Math.cosh(r0) * Math.tanh(rho * s + r0) - Math.sinh(r0));
+      return [x0 + dx / d * u, y0 + dy / d * u, t === 1 ? w1 : w0 * Math.cosh(r0) / Math.cosh(rho * s + r0)];
+    };
+  }
+  if (!Number.isFinite(length) || length < .02) { flight = null; place(cx, cy, next); paint(); return; }
+  flight = { path, area, start: performance.now(), duration: Math.max(420, Math.min(1900, 520 * length ** .7)) };
+  paint();
+}
+
+function framing(n) {
+  const area = mapArea(), reach = n.routes.map(l => l.distance).sort((a, b) => a - b);
+  const d = reach.length ? reach[Math.min(reach.length - 1, Math.floor(reach.length * .7))] : 140;
+  return Math.min(4, Math.max(fitScale * 1.15, Math.min(area.w, area.h) * .4 / Math.max(d, 40)));
+}
+
 function flyToEntity(id) {
   const n = nodes.get(id);
   if (!n) return false;
-  const area = mapArea(), next = Math.min(4, Math.max(scale, fitScale * 2.2, 1.5));
-  steer(next, area.x - n.x * next, area.y - n.y * next);
+  flyTo(n.x, n.y, framing(n));
   return true;
 }
 
+function arrive(id, prior) {
+  const n = nodes.get(id);
+  if (!n) return;
+  const area = mapArea(), start = Math.min(fitScale * .9, framing(n) * .5);
+  if (!reducedMotion.matches) {
+    scale = start;
+    ox = (prior?.x ?? area.x) - n.x * start;
+    oy = (prior?.y ?? area.y) - n.y * start;
+  }
+  flyToEntity(id);
+}
+
 function advanceCamera(time) {
-  const elapsed = Math.max(1, time - lastFrame), dt = Math.min(40, elapsed);
+  const elapsed = Math.max(1, time - lastFrame), dt = Math.min(100, elapsed);
   lastFrame = time;
+  if (flight) {
+    const t = Math.min(1, Math.max(0, (time - flight.start) / flight.duration));
+    const e = t < .5 ? 4 * t * t * t : 1 - (2 - 2 * t) ** 3 / 2;
+    const [cx, cy, w] = flight.path(e);
+    scale = flight.area.w / w; ox = flight.area.x - cx * scale; oy = flight.area.y - cy * scale;
+    if (t >= 1) flight = null;
+  }
   if (targetCamera) {
     const t = 1 - Math.exp(-elapsed / 69), target = targetCamera;
     ox += (target.x - ox) * t; oy += (target.y - oy) * t; scale += (target.scale - scale) * t;
     if (Math.abs(target.x - ox) + Math.abs(target.y - oy) + Math.abs(target.scale - scale) * 400 < .28) {
       ox = target.x; oy = target.y; scale = target.scale; targetCamera = null;
-    } else paint();
+    }
   }
   if (flightKeys.size) {
     const dx = Number(flightKeys.has("a") || flightKeys.has("arrowleft")) - Number(flightKeys.has("d") || flightKeys.has("arrowright"));
     const dy = Number(flightKeys.has("w") || flightKeys.has("arrowup")) - Number(flightKeys.has("s") || flightKeys.has("arrowdown"));
     const speed = dt * .62 / Math.max(1, Math.hypot(dx, dy));
     ox += dx * speed; oy += dy * speed;
-    paint();
   }
 }
 
@@ -776,49 +924,107 @@ function inCells(x1, y1, x2, y2, visit) {
   }
 }
 
-function line(x1, y1, x2, y2) {
-  ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+function routes(n, light, time, motion, focus) {
+  ctx.lineWidth = 1.15;
+  ctx.setLineDash([3, 7]);
+  ctx.lineDashOffset = motion ? -time / 45 : 0;
+  const heads = new Path2D();
+  for (const { a, b, e, distance } of n.routes) {
+    if (a === b || distance * scale < 26) continue;
+    const from = e.subject_id === a.id ? a : b, to = from === a ? b : a, other = from === n ? to : from;
+    const dx = (to.x - from.x) / distance, dy = (to.y - from.y) / distance;
+    const r1 = world.radius(from, scale, focus) + 3, r2 = world.radius(to, scale, focus) + 4;
+    const x1 = ox + from.x * scale + dx * r1, y1 = oy + from.y * scale + dy * r1;
+    const x2 = ox + to.x * scale - dx * r2, y2 = oy + to.y * scale - dy * r2;
+    ctx.strokeStyle = tone(light ? "#25495a" : colors[other.tint], light ? .7 : .62);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    heads.moveTo(x2 - 7 * dx + 3 * dy, y2 - 7 * dy - 3 * dx); heads.lineTo(x2, y2); heads.lineTo(x2 - 7 * dx - 3 * dy, y2 - 7 * dy + 3 * dx);
+  }
+  ctx.setLineDash([]);
+  ctx.lineWidth = 1.3;
+  ctx.strokeStyle = light ? "#1e4a59" : "#d8f6fa";
+  ctx.stroke(heads);
 }
 
-function orbits(n, light, focus, primary) {
+function reticle(n, light, time, motion, focus) {
   const x = ox + n.x * scale, y = oy + n.y * scale, r = world.radius(n, scale, focus);
-  if (x < -130 || x > width + 130 || y < -130 || y > height + 130) return;
-  const size = Math.max(primary ? 23 : 12, r * (primary ? 1.95 : 1.65));
-  const ink = light ? "#355762" : colors[n.tint];
+  const lock = motion ? Math.min(1, Math.max(0, (time - lockStart) / 420)) : 1, ease = 1 - (1 - lock) ** 3;
+  const R = (r * (n.kind === 3 ? 2.35 : 1.45) + 9) * (1 + (1 - ease) * 1.4), arm = Math.max(5, R * .34);
+  const ink = light ? "#0b5f69" : "#93f1f4";
+  ctx.strokeStyle = tone(ink, .9 * ease + .1); ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    ctx.moveTo(x + sx * R, y + sy * (R - arm)); ctx.lineTo(x + sx * R, y + sy * R); ctx.lineTo(x + sx * (R - arm), y + sy * R);
+  }
+  ctx.stroke();
   ctx.save();
-  ctx.translate(x, y); ctx.rotate((n.seed - .5) * .9 - .28);
-  ctx.strokeStyle = ink + (primary ? "a8" : "88"); ctx.lineWidth = .85;
-  ctx.beginPath(); ctx.ellipse(0, 0, size * 1.16, size * .91, 0, .18, 5.99); ctx.stroke();
-  ctx.strokeStyle = ink + "45";
-  ctx.beginPath(); ctx.ellipse(0, 0, size * 1.39, size, 0, 1.38, 3.9); ctx.stroke();
-  if (primary || n.index === focus) {
-    ctx.strokeStyle = ink + "70";
-    ctx.beginPath();
-    for (let i = 0; i < 24; i++) {
-      const t = i * Math.PI / 12;
-      line(Math.cos(t) * size * 1.62, Math.sin(t) * size * 1.62, Math.cos(t) * (size * 1.62 + (i % 6 ? 2 : 5)), Math.sin(t) * (size * 1.62 + (i % 6 ? 2 : 5)));
-    }
-    ctx.stroke();
-  }
+  ctx.translate(x, y); ctx.rotate(motion ? time / 5200 : 0);
+  ctx.setLineDash([1.5, 6]); ctx.lineWidth = 1; ctx.strokeStyle = tone(ink, .45 * ease);
+  ctx.beginPath(); ctx.arc(0, 0, R * 1.3, 0, Math.PI * 2); ctx.stroke();
   ctx.restore();
+  ctx.setLineDash([]);
+
+  const text = n.name.length > 34 ? n.name.slice(0, 32) + "…" : n.name;
+  const meta = pretty(n.type).toUpperCase() + " · " + number.format(n.degree) + (n.degree === 1 ? " LANE" : " LANES");
+  ctx.font = "600 15px " + sans;
+  const tw = Math.max(ctx.measureText(text).width, meta.length * 6.4) + 12;
+  const area = mapArea(), right = x + R + 18 + tw < area.w - 8;
+  const kx = x + (right ? 1 : -1) * R * .7, ky = y - R * .7, ex = x + (right ? 1 : -1) * (R + 18), ey = y - R - 18;
+  const shift = Math.max(0, 8 - (right ? ex : ex - tw)), box = { x: (right ? ex : ex - tw) + shift, y: ey - 22, w: tw, h: 36, node: n };
+  ctx.strokeStyle = tone(ink, .75 * ease); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(kx, ky); ctx.lineTo(ex, ey); ctx.lineTo(right ? ex + tw : ex - tw, ey); ctx.stroke();
+  ctx.globalAlpha = ease;
+  ctx.textBaseline = "alphabetic"; ctx.textAlign = right ? "left" : "right";
+  halo(text, ex + shift + (right ? 4 : -4), ey - 6, light ? "#0e1a26" : "#f4f8ff", light);
+  ctx.font = "500 9.5px " + mono;
+  halo(meta, ex + shift + (right ? 4 : -4), ey + 12, light ? "#2d5865" : colors[n.tint], light);
+  ctx.textAlign = "left"; ctx.globalAlpha = 1;
+  return box;
 }
 
-function surveyGrid(light) {
-  if (!stars.length) return;
-  const center = nodes.get(root) || stars[0], x = ox + center.x * scale, y = oy + center.y * scale;
-  const size = Math.max(35, Math.min(105, world.radius(center, scale, -1) * 3.2));
-  ctx.save(); ctx.translate(x, y);
-  ctx.strokeStyle = light ? "#526c802a" : "#88bdbc28"; ctx.lineWidth = .7;
-  for (const r of [size * 2.5, size * 4.8, size * 7.3]) {
-    ctx.setLineDash([2, 8]);
-    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
-  }
-  ctx.restore();
+function halo(text, x, y, fill, light) {
+  ctx.lineJoin = "round"; ctx.lineWidth = 3.5;
+  ctx.strokeStyle = light ? "rgba(236,240,246,.85)" : "rgba(3,6,14,.8)";
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = fill;
+  ctx.fillText(text, x, y);
 }
 
-function labelField(visible, focus, light, area) {
+function offscreen(n, area, light, time, motion) {
+  beacon = null;
+  const x = ox + n.x * scale, y = oy + n.y * scale, left = 26, right = area.w - 26, top = 120, bottom = height - 130;
+  if (x > left && x < right && y > top && y < bottom) return;
+  const cx = area.x, cy = (top + bottom) / 2, dx = x - cx, dy = y - cy;
+  const k = Math.min(Math.abs((dx > 0 ? right - cx : left - cx) / (dx || 1e-6)), Math.abs((dy > 0 ? bottom - cy : top - cy) / (dy || 1e-6)));
+  const bx = cx + dx * k, by = cy + dy * k, angle = Math.atan2(dy, dx), pulse = motion ? 1 + .12 * Math.sin(time / 240) : 1;
+  const ink = light ? "#a3520d" : "#ffd28a";
+  ctx.save();
+  ctx.translate(bx, by); ctx.rotate(angle);
+  ctx.fillStyle = tone(ink, .92); ctx.strokeStyle = tone(ink, .5); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(9 * pulse, 0); ctx.lineTo(-5, -7); ctx.lineTo(-2, 0); ctx.lineTo(-5, 7); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, 15, -1, 1); ctx.stroke();
+  ctx.restore();
+  const label = n.name.length > 24 ? n.name.slice(0, 22) + "…" : n.name;
+  ctx.font = "500 11px " + sans; ctx.textBaseline = "middle";
+  ctx.textAlign = dx > 0 ? "right" : "left";
+  const tx = bx + (dx > 0 ? -22 : 22), ty = by + (Math.abs(dy * k) > Math.abs(dx * k) - 1 ? (dy > 0 ? -16 : 16) : 0);
+  halo(label, tx, ty, light ? "#5a2e05" : "#ffe3b3", light);
+  ctx.textAlign = "left";
+  beacon = { x: bx, y: by, id: n.id };
+}
+
+function ping(light) {
+  if (reveal >= 1 || !stars.length) return;
+  const x = ox, y = oy, r = reveal * Math.max(width, height) * 1.1;
+  ctx.strokeStyle = tone(light ? "#0b5f69" : "#8ee8f0", .35 * (1 - reveal)); ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+}
+
+const sans = "system-ui, -apple-system, 'Segoe UI', sans-serif", mono = "ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', monospace";
+
+function labelField(visible, focus, light, area, reserved, skip) {
   const ratio = scale / fitScale;
-  const budget = Math.ceil(Math.min(58, area.w * area.h / 28000 * Math.min(2.3, Math.max(.6, ratio * .65))));
+  const budget = Math.ceil(Math.min(58, area.w * area.h / 32000 * Math.min(2.3, Math.max(.6, ratio * .65))));
   const grid = new Map(), cell = 52;
   const keys = function* (x, y, w, h) {
     for (let j = Math.floor(y / cell); j <= Math.floor((y + h) / cell); j++)
@@ -837,97 +1043,174 @@ function labelField(visible, focus, light, area) {
     return false;
   };
 
-  const local = ratio >= 2 || stars.length < 65;
+  labels = [];
+  for (const box of reserved) { occupy(box); labels.push(box); }
+  const frame = canvas.getBoundingClientRect();
+  for (const zone of document.querySelectorAll(".sector, .map-instruments, #locator, #results, #filters, #time-panel, #sidebar, #node-list")) {
+    const r = zone.getBoundingClientRect();
+    if (r.width) occupy({ x: r.left - frame.left - 10, y: r.top - frame.top - 10, w: r.width + 20, h: r.height + 20 });
+  }
+  const local = ratio >= 2 || stars.length < 160;
   const candidates = local ? visible.slice().sort((a, b) => Number(b.index === focus) - Number(a.index === focus) ||
     Number(b.landmark) - Number(a.landmark) || a.index - b.index) : [...landmarks];
   if (!local && focus >= 0) candidates.unshift(stars[focus]);
-  labels = [];
+  ctx.textBaseline = "alphabetic";
   for (const n of candidates) {
+    if (n === skip || n.delay + .2 > reveal) continue;
     const sx = ox + n.x * scale, sy = oy + n.y * scale;
-    if (sx < 0 || sx > area.w || sy < 25 || sy > height - 40) continue;
+    const region = !local && n.sectorCount && n.index !== focus;
+    if (!region && (sx < 0 || sx > area.w || sy < 25 || sy > height - 40)) continue;
     const prominent = n.index === focus || n.index === 0;
-    const sectorLabel = !local && n.sectorCount && n.index !== focus;
-    ctx.font = sectorLabel ? "600 11px ui-monospace, monospace" : prominent ? "600 14px system-ui, sans-serif" : "11px ui-monospace, monospace";
-    const title = sectorLabel ? pretty(n.type).toUpperCase() : n.name;
-    const name = title.length > 27 ? title.slice(0, 25) + "…" : title;
-    const sub = sectorLabel ? number.format(n.sectorCount) + " ENTITIES" : pretty(n.type).toUpperCase();
-    const w = Math.max(ctx.measureText(name).width, sectorLabel || prominent ? sub.length * 5.8 + 8 : 0) + 10;
-    const h = prominent || sectorLabel ? 36 : 19;
-    const r = world.radius(n, scale, focus) * (n.landmark || prominent ? 2.3 : 1.1) + 4;
-    const positions = [[sx + r, sy - h / 2], [sx - w - r, sy - h / 2], [sx - w / 2, sy + r], [sx - w / 2, sy - r - h]];
+    const sector = region && sectors.find(s => s.node === n);
+    const title = region ? pretty(n.type).toUpperCase() : n.name.length > 28 ? n.name.slice(0, 26) + "…" : n.name;
+    const sub = region ? "S-" + String(sector.rank).padStart(2, "0") + " · " + number.format(n.sectorCount) + " ENTITIES" : n.index === focus ? bearing(n, skip).toUpperCase() : pretty(n.type).toUpperCase();
+    ctx.font = region ? "600 12px " + sans : prominent ? "600 13.5px " + sans : "500 11.5px " + sans;
+    if (region && "letterSpacing" in ctx) ctx.letterSpacing = "2.4px";
+    const w = Math.max(ctx.measureText(title).width, region || prominent ? sub.length * 6 : 0) + 10;
+    if ("letterSpacing" in ctx) ctx.letterSpacing = "0px";
+    const h = prominent || region ? 34 : 17;
+    let positions;
+    if (region) {
+      const rr = sector.r * scale * 1.02;
+      positions = [[sx - w / 2, sy - rr - h - 6], [sx - w / 2, sy + rr + 6], [sx - w / 2, sy - h / 2]];
+    } else {
+      const r = world.radius(n, scale, focus) * (n.kind === 3 ? 2.2 : 1.25) + 4;
+      positions = [[sx + r, sy - h / 2], [sx - w - r, sy - h / 2], [sx - w / 2, sy + r], [sx - w / 2, sy - r - h]];
+    }
     for (const [x, y] of positions) {
-      const box = { x, y, w, h, node: n, sector: Boolean(sectorLabel) };
-      if (x < 3 || x + w > area.w - 3 || y < 48 || y + h > height - 72 || intersects(box)) continue;
-      const textY = y + (sectorLabel ? 12 : prominent ? 26 : 10);
-      ctx.textBaseline = "middle"; ctx.lineJoin = "round"; ctx.lineWidth = 4;
-      ctx.strokeStyle = light ? "#eef3f0e0" : "#0c1622e8";
-      ctx.strokeText(name, x + 5, textY);
-      ctx.fillStyle = light ? "#223948" : sectorLabel ? colors[n.tint] : prominent ? "#f3f6e9" : "#c6d5df";
-      ctx.fillText(name, x + 5, textY);
-      if (prominent || sectorLabel) {
-        ctx.font = "9px ui-monospace, monospace";
-        ctx.fillStyle = light ? "#375969" : sectorLabel ? "#b9c6d4" : colors[n.tint];
-        ctx.strokeText(sub, x + 5, y + (sectorLabel ? 25 : 10));
-        ctx.fillText(sub, x + 5, y + (sectorLabel ? 25 : 10));
+      const box = { x, y, w, h, node: n, sector: Boolean(region) };
+      if (x < 3 || x + w > area.w - 3 || y < 112 || y + h > height - 64 || intersects(box)) continue;
+      if (region) {
+        ctx.font = "600 12px " + sans;
+        if ("letterSpacing" in ctx) ctx.letterSpacing = "2.4px";
+        halo(title, x + 5, y + 14, light ? "#26354a" : colors[n.tint], light);
+        if ("letterSpacing" in ctx) ctx.letterSpacing = "0px";
+        ctx.font = "500 9px " + mono;
+        halo(sub, x + 5, y + 28, light ? "#4b5a70" : "#9fb0c6", light);
+      } else if (prominent) {
+        halo(title, x + 5, y + 15, light ? "#14202e" : "#f2f6fc", light);
+        ctx.font = "500 9px " + mono;
+        halo(sub, x + 5, y + 28, light ? "#3c5868" : colors[n.tint], light);
+      } else {
+        halo(title, x + 5, y + 12.5, light ? "#2a3a4c" : n.related ? "#e4ecf6" : "#b9c6d6", light);
       }
       occupy(box); labels.push(box); break;
     }
-    if (labels.length >= budget) break;
+    if (labels.length >= budget + reserved.length) break;
   }
+}
+
+function bearing(n, selectedNode) {
+  const meta = pretty(n.type) + " · " + number.format(n.degree) + (n.degree === 1 ? " lane" : " lanes");
+  const link = selectedNode && selectedNode !== n && selectedNode.routes.find(l => l.a === n || l.b === n);
+  return link ? (link.e.subject_id === n.id ? "→ " : "← ") + pretty(link.e.relation) + " · " + meta : meta;
+}
+
+function tooltip(light, selectedNode) {
+  if (!hover || !hoverAt || drag) return;
+  let title, meta = "", tint = null;
+  if (hover.sector) { title = "Enter the " + pretty(hover.node.type) + " sector"; meta = number.format(hover.node.sectorCount) + " entities"; tint = hover.node.tint; }
+  else if (hover.beacon) { title = "Fly to " + nodes.get(hover.beacon)?.name; meta = "Target out of view"; }
+  else if (hover.node) {
+    const n = hover.node;
+    if (labels.some(l => l.node === n && !l.sector)) return;
+    title = n.name; meta = bearing(n, selectedNode); tint = n.tint;
+  } else {
+    const e = hover.edge, a = nodes.get(e.subject_id), b = nodes.get(e.object_id);
+    title = pretty(e.relation) + (e.confidence == null ? "" : " · " + Math.round(e.confidence * 100) + "%");
+    meta = a.name + " → " + b.name; tint = a.tint;
+  }
+  ctx.font = "600 12px " + sans;
+  const w = Math.min(width - 16, Math.max(ctx.measureText(title).width, meta.length * 6.1) + 24);
+  const x = Math.max(8, Math.min(width - w - 8, hoverAt.x + 16)), y = Math.max(8, Math.min(height - 50, hoverAt.y - 50));
+  ctx.fillStyle = light ? "rgba(244,247,251,.94)" : "rgba(6,10,20,.88)";
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + w - 7, y); ctx.lineTo(x + w, y + 7); ctx.lineTo(x + w, y + 40); ctx.lineTo(x + 7, y + 40); ctx.lineTo(x, y + 33); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = light ? "rgba(60,80,100,.35)" : "rgba(150,210,230,.28)"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = tint == null ? (light ? "#a3520d" : "#ffd28a") : light ? "#33475c" : colors[tint];
+  ctx.fillRect(x, y + 9, 2, 22);
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = light ? "#132031" : "#eef3fb"; ctx.fillText(title, x + 11, y + 17, w - 20);
+  ctx.font = "500 9.5px " + mono; ctx.fillStyle = light ? "#4c5d70" : "#9fb0c6"; ctx.fillText(meta.toUpperCase(), x + 11, y + 31, w - 20);
+}
+
+function instruments(area, inView) {
+  const ratio = scale / fitScale, cx = (area.x - ox) / scale, cy = (area.y - oy) / scale;
+  readout("zoom", "×" + (ratio < 10 ? ratio.toFixed(1) : Math.round(ratio)));
+  const signed = v => (v < 0 ? "−" : "+") + String(Math.abs(Math.round(v))).padStart(4, "0");
+  readout("telemetry", "X " + signed(cx) + "  Y " + signed(-cy) + "  ·  " + number.format(inView) + " in view");
+  let where = "Open space", zone = null;
+  if (!stars.length) where = "No signal";
+  else if (ratio < 1.35 && !root) where = sectors.filter(s => s.typed).length + " sectors charted";
+  else {
+    let best = null, nearest = Infinity;
+    for (const s of sectors) {
+      const d = Math.hypot(cx - s.x, cy - s.y) / s.r;
+      if (d < nearest) { nearest = d; best = s; }
+    }
+    if (best && nearest < 1.15) {
+      const hops = Number($("hops").value);
+      const rank = "Sector " + String(best.rank).padStart(2, "0");
+      where = best.typed ? rank + " · " + pretty(best.node.type)
+        : best.node.id === root ? "Target system · " + hops + (hops === 1 ? " hop" : " hops") : "System · " + best.node.name;
+      if (best.typed) zone = [rank, pretty(best.node.type)];
+      else if (best.node.id !== root) zone = ["System", best.node.name];
+    }
+  }
+  if (readouts.region !== where && zone && !reducedMotion.matches) {
+    const card = $("zone");
+    card.replaceChildren(el("span", "", zone[0]), el("strong", "", zone[1]));
+    card.classList.remove("show");
+    void card.offsetWidth;
+    card.classList.add("show");
+  }
+  readout("region", where);
 }
 
 function draw(time) {
   frame = 0;
+  const motion = !reducedMotion.matches && document.visibilityState === "visible";
+  const ambient = motion && pace < 70;
+  const busy = flight || targetCamera || flightKeys.size || drag || pinch || reveal < 1 || (ambient && time - lockStart < 450);
+  if (ambient && !busy && time - lastPaint < (time - lastInput > 30000 ? 80 : time - lastInput > 4000 ? 31 : 0)) { paint(); return; }
+  if (busy && time - lastPaint < 1000) pace = pace * .9 + (time - lastPaint) * .1;
+  lastPaint = time;
   advanceCamera(time);
+  const full = Math.min(1.75, devicePixelRatio || 1);
+  const moving = flight || targetCamera || flightKeys.size || drag?.moved || pinch;
+  sizeScene(moving && (pace > 70 || gpuRatio < full) ? Math.min(.65, full) : full);
+  reveal = !revealStart ? 1 : Math.min(1, Math.max(0, (time - revealStart) / 1500));
   const area = mapArea(), light = document.documentElement.dataset.theme === "light";
-  const focusNode = (!hover?.sector && hover?.node) || nodes.get(selected), focus = focusNode?.index ?? -1;
+  const selectedNode = nodes.get(selected);
+  const focusNode = (!hover?.sector && hover?.node) || selectedNode, focus = focusNode?.index ?? -1;
   const visible = [];
   inCells((-70 - ox) / scale, (-70 - oy) / scale, (width + 70 - ox) / scale, (height + 70 - oy) / scale,
     b => { for (const n of b.nodes) visible.push(n); });
   const alpha = Math.min(.5, (.32 / Math.max(1, Math.sqrt(stars.length / 70))) * Math.max(1, Math.min(8, scale / fitScale)));
   ctx.clearRect(0, 0, width, height);
-  surveyGrid(light);
-  world.draw(ctx, width, height, ox, oy, scale, light, focus, alpha, visible);
-  if (focusNode) {
-    ctx.beginPath(); ctx.lineWidth = 1.5; ctx.strokeStyle = light ? "#247988b5" : "#72ddedb0";
-    for (const { a, b, distance } of focusNode.routes) {
-      if (distance * scale < 28) continue;
-      const dx = (b.x - a.x) / distance, dy = (b.y - a.y) / distance;
-      const r = world.radius(b, scale, focus) + 3, x = ox + b.x * scale - dx * r, y = oy + b.y * scale - dy * r;
-      const start = world.radius(a, scale, focus) + 2;
-      line(ox + a.x * scale + dx * start, oy + a.y * scale + dy * start, x, y);
-      line(x - 5 * dx + 2 * dy, y - 5 * dy - 2 * dx, x, y);
-      line(x - 5 * dx - 2 * dy, y - 5 * dy + 2 * dx, x, y);
-    }
-    ctx.stroke();
-  }
+  world.draw(ctx, { width, height, ox, oy, scale, light, focus, hover: hover?.node && !hover.sector ? hover.node.index : -1, edgeAlpha: alpha,
+    time: (time / 1000) % 3600, fitScale, ratio: gpuRatio, reveal, motion: ambient, dim: !!selectedNode }, visible);
+  ping(light);
+  if (focusNode && reveal > .5) routes(focusNode, light, time, ambient, focus);
   if (hover?.edge) {
     const a = nodes.get(hover.edge.subject_id), b = nodes.get(hover.edge.object_id);
-    ctx.beginPath(); ctx.lineWidth = 1.6; ctx.strokeStyle = light ? "#247988" : "#8bd8e7";
+    ctx.beginPath(); ctx.lineWidth = 1.8; ctx.strokeStyle = light ? "#1b6a78" : "#a5ecf5";
     if (a === b) {
       const r = a.radius * 1.45 * scale;
       ctx.arc(ox + a.x * scale + r, oy + a.y * scale - r, r, 0, Math.PI * 2);
-    } else line(ox + a.x * scale, oy + a.y * scale, ox + b.x * scale, oy + b.y * scale);
+    } else { ctx.moveTo(ox + a.x * scale, oy + a.y * scale); ctx.lineTo(ox + b.x * scale, oy + b.y * scale); }
     ctx.stroke();
   }
-  for (const n of landmarks) if (stars.length < 160 || n.index === 0 || n.index === focus) orbits(n, light, focus, n === stars[0]);
-  if (focusNode && !focusNode.landmark) orbits(focusNode, light, focus, true);
-  labelField(visible, focus, light, area);
-  if (hover && hoverAt && !drag) {
-    const text = hover.sector ? "Zoom into " + pretty(hover.node.type) : hover.node ? hover.node.name + " · " + pretty(hover.node.type) :
-      pretty(hover.edge.relation) + (hover.edge.confidence == null ? "" : " · " + Math.round(hover.edge.confidence * 100) + "%");
-    ctx.font = "11px ui-monospace, monospace"; ctx.textBaseline = "middle";
-    const w = Math.min(width - 16, ctx.measureText(text).width + 18);
-    const x = Math.max(8, Math.min(width - w - 8, hoverAt.x + 12)), y = Math.max(8, Math.min(height - 33, hoverAt.y - 34));
-    ctx.fillStyle = light ? "#e7f3f0" : "#172634"; ctx.fillRect(x, y, w, 24);
-    ctx.strokeStyle = light ? "#829c9e" : "#405968"; ctx.lineWidth = 1; ctx.strokeRect(x, y, w, 24);
-    ctx.fillStyle = light ? "#183340" : "#e1eada"; ctx.fillText(text, x + 9, y + 12, w - 18);
-  }
-  drawLocator(area, light);
-  $("zoom").textContent = Math.round(scale / fitScale * 100) + "%";
+  const reserved = selectedNode && reveal > .3 ? [reticle(selectedNode, light, time, ambient, focus)] : [];
+  labelField(visible, focus, light, area, reserved, selectedNode);
+  if (selectedNode) offscreen(selectedNode, area, light, time, ambient); else beacon = null;
+  tooltip(light, selectedNode);
+  drawLocator(area, light, time, ambient);
+  instruments(area, visible.length);
+  if ((ambient && stars.length) || busy) paint();
 }
 
 function hit(x, y) {
+  if (beacon && Math.hypot(x - beacon.x, y - beacon.y) < 24) return { beacon: beacon.id };
   const label = labels.find(l => x >= l.x && x <= l.x + l.w && y >= l.y && y <= l.y + l.h);
   if (label) return { node: label.node, sector: label.sector };
   const wx = (x - ox) / scale, wy = (y - oy) / scale;
@@ -936,7 +1219,7 @@ function hit(x, y) {
   inCells(wx - 30 / scale, wy - 30 / scale, wx + 30 / scale, wy + 30 / scale, bin => {
     for (const n of bin.nodes) {
       const d = Math.hypot(wx - n.x, wy - n.y) * scale;
-      if (d < Math.max(7, world.radius(n, scale, -1) + 3) && d < distance) { distance = d; node = n; }
+      if (d < Math.max(8, world.radius(n, scale, -1) + 3) && d < distance) { distance = d; node = n; }
     }
   });
   if (node) return { node };
@@ -967,6 +1250,7 @@ function point(event) {
 
 function zoomAt(factor, x, y) {
   const area = mapArea(), current = targetCamera || { scale, x: ox, y: oy };
+  flight = null;
   x ??= area.x; y ??= area.y;
   const next = Math.min(Math.max(6, fitScale * 5), Math.max(fitScale * .22, current.scale * factor));
   steer(next, x - (x - current.x) * next / current.scale, y - (y - current.y) * next / current.scale);
@@ -977,60 +1261,102 @@ canvas.addEventListener("contextrestored", () => {
   ctx.setTransform(canvas.width / width, 0, 0, canvas.height / height, 0, 0);
   rebuildLocator(); paint();
 });
+document.addEventListener("visibilitychange", paint);
+reducedMotion.addEventListener("change", () => { revealStart = 0; paint(); });
 
-function inspectFromMap(id) {
+function announce(n) {
+  $("announce").textContent = n ? "Target " + n.name + ", " + pretty(n.type) + ", " + n.degree + (n.degree === 1 ? " lane" : " lanes") : "";
+}
+
+function inspectFromMap(id, glide = true) {
   inspect(id);
+  const n = nodes.get(id);
+  if (n && glide) flyTo(n.x, n.y, Math.max(scale, Math.min(framing(n), scale * 2.5), stars.length >= 160 ? fitScale * 3.5 : 0));
+  announce(n);
   if (window.matchMedia("(max-width: 710px)").matches) $("sidebar").scrollIntoView({ block: "start" });
 }
 
+function cycle(step) {
+  const from = nodes.get(selected);
+  if (!cycling || (from && from !== cycling.origin && !cycling.list.includes(from))) {
+    const origin = from || null;
+    const list = origin ? [...new Set(origin.routes.map(l => (l.a === origin ? l.b : l.a)))].filter(m => m !== origin) : landmarks.slice();
+    if (origin) list.sort((p, q) => Math.atan2(p.y - origin.y, p.x - origin.x) - Math.atan2(q.y - origin.y, q.x - origin.x));
+    cycling = { origin, list, i: -1 };
+  }
+  if (!cycling.list.length) return;
+  cycling.i = (cycling.i + step + cycling.list.length) % cycling.list.length;
+  inspectFromMap(cycling.list[cycling.i].id);
+}
+
 canvas.onpointerdown = e => {
-  if (e.button !== 0 || !e.isPrimary) return;
-  targetCamera = null;
-  canvas.focus({ preventScroll: true });
+  lastInput = performance.now();
+  if (e.button !== 0) return;
   const p = point(e);
-  drag = { ...p, id: e.pointerId, ox, oy, moved: false };
+  touches.set(e.pointerId, p);
   canvas.setPointerCapture(e.pointerId);
-  hover = null;
+  targetCamera = null; flight = null; hover = null;
+  if (touches.size === 2) {
+    const [a, b] = [...touches.values()];
+    pinch = { d: Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)), scale, ox, oy, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    drag = null;
+  } else if (e.isPrimary) {
+    canvas.focus({ preventScroll: true });
+    drag = { ...p, id: e.pointerId, ox, oy, moved: false };
+  }
   paint();
 };
 canvas.onpointermove = e => {
+  lastInput = performance.now();
   const p = point(e);
-  if (drag && drag.id === e.pointerId) {
+  if (touches.has(e.pointerId)) touches.set(e.pointerId, p);
+  if (pinch && touches.size === 2) {
+    const [a, b] = [...touches.values()], mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    const next = Math.min(Math.max(6, fitScale * 5), Math.max(fitScale * .22, pinch.scale * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d));
+    scale = next; ox = mx - (pinch.x - pinch.ox) * next / pinch.scale; oy = my - (pinch.y - pinch.oy) * next / pinch.scale;
+  } else if (drag && drag.id === e.pointerId) {
     const dx = p.x - drag.x, dy = p.y - drag.y;
     if (drag.moved || Math.hypot(dx, dy) > 4) {
       drag.moved = true;
       ox = drag.ox + dx; oy = drag.oy + dy;
       canvas.dataset.cursor = "drag";
     }
-  } else {
+  } else if (!touches.size) {
     hover = hit(p.x, p.y);
     hoverAt = p;
-    canvas.dataset.cursor = hover?.node ? "pointer" : "";
+    canvas.dataset.cursor = hover?.node || hover?.beacon ? "pointer" : "";
   }
   paint();
 };
 canvas.onpointerup = e => {
+  touches.delete(e.pointerId);
+  if (touches.size < 2) pinch = null;
   if (!drag || drag.id !== e.pointerId) return;
   const moved = drag.moved, p = point(e);
   drag = null;
   canvas.releasePointerCapture(e.pointerId);
   canvas.dataset.cursor = "";
   const target = !moved && hit(p.x, p.y);
-  if (target?.sector) {
-    const n = target.node, area = mapArea();
-    const next = Math.max(fitScale * 2.1, Math.min(4, Math.min(area.w, area.h) / (2.2 * n.sectorRadius)));
-    steer(next, area.x - n.x * next, area.y - n.y * next);
-  } else if (target?.node) inspectFromMap(target.node.id);
+  if (target?.beacon) flyToEntity(target.beacon);
+  else if (target?.sector) {
+    const s = sectors.find(s => s.node === target.node), area = mapArea();
+    flyTo(s.x, s.y, Math.max(fitScale * 2.1, Math.min(4, Math.min(area.w, area.h) / (2.2 * s.r))));
+  } else if (target?.node) {
+    tapped = { id: target.node.id, at: performance.now() };
+    inspectFromMap(target.node.id);
+  }
   paint();
 };
-canvas.onpointercancel = () => { drag = null; hover = null; canvas.dataset.cursor = ""; paint(); };
+canvas.onpointercancel = e => { touches.delete(e.pointerId); pinch = null; drag = null; hover = null; canvas.dataset.cursor = ""; paint(); };
 canvas.onpointerleave = () => { hover = null; paint(); };
 canvas.ondblclick = e => {
-  const p = point(e), target = hit(p.x, p.y);
-  if (target?.node) loadMap(target.node.id, true);
+  const p = point(e), target = tapped && performance.now() - tapped.at < 700 ? { node: nodes.get(tapped.id) } : hit(p.x, p.y);
+  tapped = null;
+  if (target?.node && !target.sector) loadMap(target.node.id, true);
 };
 canvas.addEventListener("wheel", e => {
   e.preventDefault();
+  lastInput = performance.now();
   const p = point(e), delta = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? height : 1);
   zoomAt(Math.exp(-Math.max(-180, Math.min(180, delta)) * .0018), p.x, p.y);
 }, { passive: false });
@@ -1038,11 +1364,16 @@ document.addEventListener("keydown", e => {
   if (e.ctrlKey || e.metaKey || e.altKey || $("auth").open || e.target.closest("input,select,textarea,[contenteditable=true]")) return;
   const key = e.key.toLowerCase();
   if (e.target !== canvas && e.target !== document.body && e.target !== document.documentElement && !["w", "a", "s", "d"].includes(key)) return;
+  lastInput = performance.now();
   if (e.key === "+" || e.key === "=") zoomAt(1.25);
   else if (e.key === "-") zoomAt(.8);
   else if (e.key === "Home") fit(true);
+  else if (e.key === "]" || e.key === "[") cycle(e.key === "]" ? 1 : -1);
+  else if (e.key === "Enter" && selected) flyToEntity(selected);
+  else if (e.key === "Escape" && selected && $("results").hidden) closeInspector();
   else if (["w", "a", "s", "d", "arrowleft", "arrowright", "arrowup", "arrowdown"].includes(key)) {
-    targetCamera = null; hover = null;
+    targetCamera = null; flight = null; hover = null;
+    if (!flightKeys.size) lastFrame = performance.now();
     if (!flightKeys.has(key)) {
       if (key === "a" || key === "arrowleft") ox += 12;
       if (key === "d" || key === "arrowright") ox -= 12;
@@ -1057,6 +1388,7 @@ document.addEventListener("keydown", e => {
 });
 document.addEventListener("keyup", e => flightKeys.delete(e.key.toLowerCase()));
 window.addEventListener("blur", () => flightKeys.clear());
+
 
 function signedOut() {
   for (const key of requests.keys()) abort(key);
