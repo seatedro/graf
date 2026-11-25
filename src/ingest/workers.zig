@@ -14,6 +14,7 @@ pub const idle_poll_ms = 2_000;
 pub const leader_retry_ms = 5_000;
 pub const housekeeping_ms = 60_000;
 pub const summaries_per_pass = 5;
+pub const arena_retain_bytes = 1 << 20;
 
 const Shared = struct {
     p: *ingest.Pipeline,
@@ -55,6 +56,13 @@ pub fn run(p: *ingest.Pipeline, stop: *std.atomic.Value(bool)) !void {
         if (stop.load(.acquire)) return;
     }
     log.info("this process leads ingestion", .{});
+    return lead(p, stop);
+}
+
+pub fn lead(p: *ingest.Pipeline, stop: *std.atomic.Value(bool)) !void {
+    const io = p.client.io;
+    const gpa = p.store.allocator;
+    var shared: Shared = .{ .p = p, .stop = stop };
 
     var listener = try p.store.pool.newListener();
     defer listener.deinit();
@@ -107,7 +115,7 @@ fn worker(shared: *Shared, index: usize) void {
     var last_housekeeping: core.Micros = 0;
 
     while (!shared.stop.load(.acquire)) {
-        _ = arena_state.reset(.retain_capacity);
+        recycle(&arena_state);
         const arena = arena_state.allocator();
         const lease = backend.claim(arena) catch |err| {
             log.err("claim failed: {t}", .{err});
@@ -134,6 +142,10 @@ fn worker(shared: *Shared, index: usize) void {
 
         sleepUnless(io, shared, idle_poll_ms);
     }
+}
+
+pub fn recycle(arena_state: *std.heap.ArenaAllocator) void {
+    _ = arena_state.reset(.{ .retain_with_limit = arena_retain_bytes });
 }
 
 fn housekeeping(arena: std.mem.Allocator, p: *ingest.Pipeline, model: *postgres.ClientModel) !void {

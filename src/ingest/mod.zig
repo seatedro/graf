@@ -112,4 +112,5 @@ test {
     _ = @import("pipeline_test.zig");
     _ = @import("postgres_test.zig");
     _ = @import("client_test.zig");
+    _ = @import("workers_test.zig");
 }

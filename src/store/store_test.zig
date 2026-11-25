@@ -739,3 +739,71 @@ test "a merge keeps the entity with more facts and leaves two established entiti
     try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM possible_duplicate WHERE graph_id = $1 AND entity_a = $2 AND entity_b = $3", .{ gid, @as([]const u8, &osprey_twin.id.bytes), @as([]const u8, &osprey.id.bytes) }));
     try testing.expectEqual(@as(i64, 1), try scalarI64(&s, "SELECT count(*) FROM entry WHERE id = $1 AND warnings::text LIKE '%both hold more than%'", .{@as([]const u8, &en2.bytes)}));
 }
+
+test "backfill spend is cached per UTC day, counts backfill calls as they land, and resets at midnight" {
+    var s = try store.testing.open();
+    defer s.close();
+    const g = try store.testing.freshGraph(&s);
+    const gid: []const u8 = &g.bytes;
+    var prng = std.Random.DefaultPrng.init(@intCast(core.time.now(s.io)));
+    const today = store.spend.dayStart(4_102_444_800_000_000 + @as(i64, prng.random().intRangeAtMost(i64, 0, 300 * 365)) * day);
+
+    var old = note("history", "an old decision from history", 1_700_000_000_000_000);
+    old.backfill = true;
+    const old_id = try enqueueNew(&s, g, old);
+    const live_id = try enqueueNew(&s, g, note("live", "a live decision", 1_800_000_000_000_000));
+
+    const ledger = s.ledger();
+    const call = struct {
+        fn at(st: *Store, entry: Id, started_at: i64, usd: f64) core.LlmCall {
+            return .{ .id = Id.v7(st.io), .graph_id = .nil, .entry_id = entry, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .cost_usd = usd, .cost_status = .priced, .latency_ms = 10, .started_at = started_at };
+        }
+    }.at;
+
+    const s1 = std.time.us_per_s;
+    try ledger.record(&call(&s, old_id, today - 60 * s1, 0.007));
+    try ledger.record(&call(&s, old_id, today + 1 * s1, 0.002));
+    try ledger.record(&call(&s, live_id, today + 2 * s1, 0.05));
+    const t0 = today + 60 * s1;
+    try testing.expectApproxEqAbs(@as(f64, 0.002), try store.spend.spent(&s, g, t0), 1e-12);
+
+    try ledger.record(&call(&s, old_id, today + 3 * s1, 0.0015));
+    try testing.expectApproxEqAbs(@as(f64, 0.0035), try store.spend.spent(&s, g, t0 + s1), 1e-12);
+
+    _ = try s.pool.exec(
+        \\INSERT INTO llm_call (id, graph_id, entry_id, purpose, route, model, attempt, outcome, cost_usd, cost_status, latency_ms, started_at)
+        \\VALUES (gen_random_uuid(), $1, $2, 'extract', 'openai-responses', 'example-model', 1, 'ok', 0.004, 'priced', 10, $3)
+    , .{ gid, @as([]const u8, &old_id.bytes), today + 4 * s1 });
+    try testing.expectApproxEqAbs(@as(f64, 0.0035), try store.spend.spent(&s, g, t0 + 2 * s1), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.0075), try store.spend.spent(&s, g, t0 + store.spend.refresh_us), 1e-12);
+
+    const tomorrow = today + day;
+    try testing.expectApproxEqAbs(@as(f64, 0), try store.spend.spent(&s, g, tomorrow + s1), 1e-12);
+    try ledger.record(&call(&s, old_id, today + 5 * s1, 0.009));
+    try testing.expectApproxEqAbs(@as(f64, 0), try store.spend.spent(&s, g, tomorrow + 2 * s1), 1e-12);
+    try ledger.record(&call(&s, old_id, tomorrow + 3 * s1, 0.00025));
+    try testing.expectApproxEqAbs(@as(f64, 0.00025), try store.spend.spent(&s, g, tomorrow + 4 * s1), 1e-12);
+}
+
+test "a backfill call that lands mid-day stops backfill claims before the cached spend refreshes" {
+    var s = try store.testing.open();
+    defer s.close();
+    const g = try store.testing.freshGraph(&s);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    var first = note("history-a", "an old decision", 1_700_000_000_000_000);
+    first.backfill = true;
+    const first_id = try enqueueNew(&s, g, first);
+    var second = note("history-b", "another old decision", 1_700_000_000_000_001);
+    second.backfill = true;
+    _ = try enqueueNew(&s, g, second);
+
+    const lease = (try s.claimWithin(a, g, "w1", 0.005)).?;
+    try testing.expect(lease.entry_id.eql(first_id));
+
+    try s.ledger().record(&.{ .id = Id.v7(s.io), .graph_id = .nil, .entry_id = first_id, .purpose = .extract, .route = "openai-responses", .model = "example-model", .attempt = 1, .ok = true, .cost_usd = 0.005, .cost_status = .priced, .latency_ms = 10, .started_at = core.time.now(s.io) });
+    try testing.expect(try s.claimWithin(a, g, "w2", 0.005) == null);
+    try testing.expect(try s.claimWithin(a, g, "w2", 0.006) != null);
+}

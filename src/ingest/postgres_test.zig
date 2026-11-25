@@ -137,7 +137,7 @@ test "ingest SQL runs against the store schema" {
     try testing.expectEqual(@as(usize, 0), empty.entities.len);
     try testing.expectEqual(@as(usize, 0), empty.facts.len);
 
-    const touched = try postgres.jsonRow(rebase.Touched, arena, conn, postgres.touched_sql, .{ t[0], @as(i64, 0), @as(i64, 1) });
+    const touched = try postgres.jsonRow(rebase.Touched, arena, conn, postgres.touched_sql, .{ t[0], @as(i64, 0), @as(i64, 1), true });
     try testing.expectEqual(@as(usize, 2), touched.entities.len);
     try testing.expectEqual(@as(usize, 1), touched.facts.len);
     try testing.expect(touched.facts[0].active);
@@ -146,7 +146,13 @@ test "ingest SQL runs against the store schema" {
         const want: []const []const u8 = if (e.id.eql(cache)) &.{"brackwater cache service"} else &.{};
         try testing.expectEqual(want.len, e.aliases.len);
         for (want, e.aliases) |w, got| try testing.expectEqualStrings(w, got);
+        try testing.expectEqual(@as(usize, 512), e.emb.len);
     }
+
+    const bare = try postgres.jsonRow(rebase.Touched, arena, conn, postgres.touched_sql, .{ t[0], @as(i64, 0), @as(i64, 1), false });
+    try testing.expectEqual(@as(usize, 2), bare.entities.len);
+    try testing.expectEqual(@as(usize, 1), bare.facts.len);
+    for (bare.entities) |e| try testing.expectEqual(@as(usize, 0), e.emb.len);
 
     _ = try conn.exec(postgres.bump_sql, .{try std.fmt.allocPrint(arena, "{{\"entities\":[\"{s}\"],\"facts\":[\"{s}\"]}}", .{ t[4], t[6] })});
     try testing.expectEqual(@as(i32, 2), try scalar(i32, conn, "SELECT facts_since_summary FROM entity WHERE id = $1::uuid", .{t[4]}));
