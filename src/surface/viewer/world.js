@@ -86,7 +86,7 @@ const SurveyWorld = (() => {
     struct Trail { @builtin(position) p: vec4f, @location(0) ink: vec4f }
     @vertex fn edge(@location(0) location: vec2f, @location(1) ids: vec2f, @location(2) level: f32) -> Trail {
       let selected = any(ids == vec2f(cam.lens.z));
-      let amount = select(clamp(cam.lens.w * level, 0.0, 0.48), 0.88, selected);
+      let amount = select(clamp(cam.lens.w * level, 0.0, 0.48), min(0.8, 0.1 + level * 0.55), selected);
       let ink = select(vec3f(0.48, 0.64, 0.68), vec3f(0.16, 0.30, 0.37), cam.lens.y > 0);
       return Trail(clip(location * cam.lens.x + cam.view.zw), vec4f(ink,amount));
     }
@@ -194,7 +194,7 @@ const SurveyWorld = (() => {
     const edge = program(`
       layout(location=0) in vec2 pos; layout(location=1) in vec2 ids; layout(location=2) in float level; out vec4 ink;
       void main(){gl_Position=clip(pos*lens.x+view.zw);
-        float a=any(equal(ids,vec2(lens.z)))?.88:clamp(lens.w*level,0.,.48);
+        float a=any(equal(ids,vec2(lens.z)))?min(.8,.1+level*.55):clamp(lens.w*level,0.,.48);
         ink=vec4(lens.y>0.?vec3(.16,.30,.37):vec3(.48,.64,.68),a);}`,
       "in vec4 ink; out vec4 color; void main(){color=ink;}");
     gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
@@ -236,6 +236,7 @@ const SurveyWorld = (() => {
 
   function create(canvas, palette, paint) {
     const atlas = sprites(palette), camera = new Float32Array(cameraSize);
+    const daylight = palette.map(color => "rgb(" + [1, 3, 5].map(i => Math.round(parseInt(color.slice(i, i + 2), 16) * .62)).join(",") + ")");
     let driver, arrays = [new Float32Array(), new Float32Array()], counts = [0, 0];
     function activate(next) {
       driver = next;
@@ -253,6 +254,7 @@ const SurveyWorld = (() => {
       }
       activate(next);
     }
+    activate(null);
     initialize();
     return {
       upload(nodes, lines) {
@@ -270,19 +272,32 @@ const SurveyWorld = (() => {
         const lines = arrays[1];
         const batches = Array.from({ length: 6 }, () => new Path2D());
         for (let i = 0; i < lines.length; i += 10) {
+          const selected = lines[i + 2] === focus || lines[i + 3] === focus;
+          if (!selected && lines[i + 4] * edgeAlpha < .008) continue;
           const ax = ox + lines[i] * scale, ay = oy + lines[i + 1] * scale;
           const bx = ox + lines[i + 5] * scale, by = oy + lines[i + 6] * scale;
           if (Math.max(ax, bx) < 0 || Math.min(ax, bx) > width || Math.max(ay, by) < 0 || Math.min(ay, by) > height) continue;
-          const batch = lines[i + 2] === focus || lines[i + 3] === focus ? 5 : Math.min(4, Math.round(lines[i + 4] * 2));
+          const batch = selected ? 5 : Math.min(4, Math.round(lines[i + 4] * 2));
           batches[batch].moveTo(ax, ay); batches[batch].lineTo(bx, by);
         }
         ctx.lineWidth = 1; ctx.strokeStyle = light ? "#294c5e" : "#7ba3ad";
         batches.forEach((path, i) => {
-          ctx.globalAlpha = i === 5 ? .88 : Math.min(.48, edgeAlpha * Math.max(.12, i / 2));
+          ctx.globalAlpha = i === 5 ? .38 : Math.min(.48, edgeAlpha * Math.max(.12, i / 2));
           ctx.stroke(path);
         });
         ctx.globalAlpha = 1;
+        const specks = new Map(), planets = [];
         for (const n of visible) {
+          const r = radius(n, scale, focus);
+          if (r >= 2.6 || n.landmark || n.index === focus) { planets.push(n); continue; }
+          if (!specks.has(n.tint)) specks.set(n.tint, new Path2D());
+          specks.get(n.tint).rect(ox + n.x * scale - r * .7, oy + n.y * scale - r * .7, r * 1.4, r * 1.4);
+        }
+        for (const [tint, dots] of specks) {
+          ctx.fillStyle = (light ? daylight : palette)[tint];
+          ctx.fill(dots);
+        }
+        for (const n of planets) {
           const tile = n.tile + camera[5], r = radius(n, scale, focus) * 3;
           ctx.drawImage(atlas, (tile % columns) * tileSize, Math.floor(tile / columns) * tileSize, tileSize, tileSize,
             ox + n.x * scale - r, oy + n.y * scale - r, 2 * r, 2 * r);

@@ -731,6 +731,7 @@ function paint() {
 
 function steer(next, x, y) {
   hover = null;
+  if (!targetCamera) lastFrame = performance.now();
   if (reducedMotion.matches) { scale = next; ox = x; oy = y; targetCamera = null; }
   else targetCamera = { scale: next, x, y };
   paint();
@@ -745,10 +746,10 @@ function flyToEntity(id) {
 }
 
 function advanceCamera(time) {
-  const dt = Math.min(40, Math.max(1, time - lastFrame));
+  const elapsed = Math.max(1, time - lastFrame), dt = Math.min(40, elapsed);
   lastFrame = time;
   if (targetCamera) {
-    const t = 1 - Math.exp(-dt / 69), target = targetCamera;
+    const t = 1 - Math.exp(-elapsed / 69), target = targetCamera;
     ox += (target.x - ox) * t; oy += (target.y - oy) * t; scale += (target.scale - scale) * t;
     if (Math.abs(target.x - ox) + Math.abs(target.y - oy) + Math.abs(target.scale - scale) * 400 < .28) {
       ox = target.x; oy = target.y; scale = target.scale; targetCamera = null;
