@@ -129,19 +129,17 @@ pub fn loadCursor(s: *Store, arena: std.mem.Allocator, graph_id: Id, source: *co
 }
 
 pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const u8, backfill_daily_usd: ?f64) !?Lease {
+    const allow_backfill = if (backfill_daily_usd) |cap| try store.spend.spent(s, graph_id, core.time.now(s.io)) < cap else true;
+
     var row = (try s.pool.row(
-        \\WITH backfill_spent AS (
-        \\  SELECT COALESCE(sum(c.cost_usd), 0)::float8 AS usd
-        \\  FROM llm_call c JOIN entry b ON b.id = c.entry_id
-        \\  WHERE c.graph_id = $1 AND c.started_at >= date_trunc('day', now(), 'UTC') AND b.backfill
-        \\), next AS (
+        \\WITH next AS (
         \\  SELECT e.id FROM entry e
         \\  WHERE e.graph_id = $1
         \\    AND e.status IN ('queued', 'extracting', 'extracted', 'staged')
         \\    AND (e.lease_until IS NULL OR e.lease_until < now())
         \\    AND (e.status <> 'extracting' OR e.lease_until < now())
         \\    AND (e.not_before IS NULL OR e.not_before <= now())
-        \\    AND (NOT e.backfill OR $4::float8 IS NULL OR (SELECT usd FROM backfill_spent) < $4::float8)
+        \\    AND (NOT e.backfill OR $4::bool)
         \\    AND NOT EXISTS (
         \\      SELECT 1 FROM entry p
         \\      WHERE p.source_id = e.source_id
@@ -162,7 +160,7 @@ pub fn claim(s: *Store, arena: std.mem.Allocator, graph_id: Id, worker: []const 
         \\RETURNING e.id, e.source_id, e.seq_in_source, e.kind, e.project, e.author, e.body::text,
         \\  e.content_hash, e.reference_time, e.status, e.attempts, e.lease_token, e.base_seq,
         \\  e.commit_seq, e.cost_usd::float8, e.extraction::text
-    , .{ @as([]const u8, &graph_id.bytes), worker, @as(i32, @intCast(s.lease_ms)), backfill_daily_usd })) orelse return null;
+    , .{ @as([]const u8, &graph_id.bytes), worker, @as(i32, @intCast(s.lease_ms)), allow_backfill })) orelse return null;
     defer row.deinit() catch {};
 
     const id = try store.idFromPg(try row.get([]const u8, 0));

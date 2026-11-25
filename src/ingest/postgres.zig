@@ -173,7 +173,7 @@ pub const touched_sql =
     \\  'entities', COALESCE((SELECT json_agg(json_build_object(
     \\      'id', e.id, 'name', e.name, 'norm', e.norm, 'type', e.type, 'merged_into', e.merged_into,
     \\      'aliases', COALESCE(ta.norms, '[]'::json),
-    \\      'emb', COALESCE(e.name_emb::text::json, '[]'::json)))
+    \\      'emb', CASE WHEN $4 THEN COALESCE(e.name_emb::text::json, '[]'::json) ELSE '[]'::json END))
     \\    FROM entity e JOIN te ON te.id = e.id LEFT JOIN ta ON ta.entity_id = e.id), '[]'::json),
     \\  'facts', COALESCE((SELECT json_agg(json_build_object(
     \\      'active', upper_inf(f.known) AND upper_inf(f.valid),
@@ -286,7 +286,8 @@ pub const PgBackend = struct {
         fn run(ptr: *anyopaque, conn: *pg.Conn, cs: *core.ChangeSet, base_seq: i64, latest_seq: i64) anyerror!void {
             const ctx: *RebaseCtx = @ptrCast(@alignCast(ptr));
             var gbuf: [36]u8 = undefined;
-            const touched = jsonRow(rebase.Touched, ctx.arena, conn, touched_sql, .{ ctx.graph_id.toString(&gbuf), base_seq, latest_seq }) catch |err| return logPgError(conn, err);
+            const with_emb = cs.new_entities.len > 0;
+            const touched = jsonRow(rebase.Touched, ctx.arena, conn, touched_sql, .{ ctx.graph_id.toString(&gbuf), base_seq, latest_seq, with_emb }) catch |err| return logPgError(conn, err);
             const out = try rebase.apply(ctx.arena, cs, touched, core.time.now(ctx.io), ctx.reference_time);
             ctx.duplicates = out.possible_duplicates;
         }

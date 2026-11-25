@@ -5,6 +5,7 @@ pub const migrations = @import("migrations.zig");
 pub const managed = @import("managed.zig");
 const queue = @import("queue.zig");
 const committer = @import("commit.zig");
+pub const spend = @import("spend.zig");
 
 pub const Id = core.Id;
 
@@ -17,6 +18,7 @@ pub const Store = struct {
     pool: *pg.Pool,
     lease_ms: u32,
     default_graph: Id = .nil,
+    backfill_spend: spend.BackfillSpend = .{},
 
     pub const OpenOptions = struct {
         pool_size: u16 = 4,
@@ -131,12 +133,13 @@ pub const Store = struct {
             break :blk &entry_buf;
         } else null;
 
-        _ = try s.pool.exec(
+        var row = (try s.pool.row(
             \\INSERT INTO llm_call (id, graph_id, entry_id, purpose, route, model, attempt, outcome,
             \\  error_class, http_status, input_tokens, output_tokens, cache_read_tokens,
             \\  cache_write_tokens, cost_usd, cost_status, latency_ms, started_at)
             \\VALUES ($1, COALESCE($2, (SELECT graph_id FROM entry WHERE id = $3), $19), $3, $4, $5, $6, $7, $8,
             \\  $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            \\RETURNING graph_id, COALESCE((SELECT backfill FROM entry WHERE id = $3), false)
         , .{
             @as([]const u8, &id_buf),   graph,                          entry,
             @tagName(call.purpose),     call.route,                     call.model,
@@ -145,7 +148,11 @@ pub const Store = struct {
             call.cache_read_tokens,     call.cache_write_tokens,        call.cost_usd,
             @tagName(call.cost_status), call.latency_ms,                call.started_at,
             fallback,
-        });
+        })).?;
+        defer row.deinit() catch {};
+
+        if (!try row.get(bool, 1) or call.cost_usd == 0) return;
+        spend.add(s, try idFromPg(try row.get([]const u8, 0)), call.cost_usd, call.started_at);
     }
 
     pub fn sink(s: *Store, graph_id: Id) core.EntrySink {
@@ -320,6 +327,7 @@ test {
     std.testing.refAllDecls(@This());
     _ = migrations;
     _ = managed;
+    _ = spend;
     _ = @import("seam_test.zig");
     _ = @import("store_test.zig");
 }
@@ -356,6 +364,11 @@ test "hot path indexes exist after migrate and migration 4 reapplies over them" 
             return error.MissingIndex;
         }
     }
+
+    var dropped = (try s.pool.row("SELECT to_regclass('entry_queue') IS NULL", .{})).?;
+    const gone = try dropped.get(bool, 0);
+    try dropped.deinit();
+    try std.testing.expect(gone);
 
     var opts = (try s.pool.row("SELECT 'fastupdate=off' = ANY(reloptions) FROM pg_class WHERE oid = 'entity_alias_norm_trgm'::regclass", .{})).?;
     defer opts.deinit() catch {};
