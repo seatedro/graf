@@ -18,6 +18,7 @@ pub const default_limit = 50;
 pub const default_cap_usd = 1.0;
 pub const batch_size = 8;
 pub const schedule_interval_s = 3600;
+pub const unsure_retry_days = 30;
 
 pub const Options = struct {
     types: []const core.EntityType = &default_types,
@@ -133,7 +134,8 @@ pub const candidates_sql =
     \\  UNION ALL
     \\  SELECT NULL, NULL, f.a, f.b FROM found f
     \\  WHERE NOT EXISTS (SELECT 1 FROM possible_duplicate d WHERE d.graph_id = $1::uuid
-    \\      AND ((d.entity_a = f.a AND d.entity_b = f.b) OR (d.entity_a = f.b AND d.entity_b = f.a)))
+    \\      AND ((d.entity_a = f.a AND d.entity_b = f.b) OR (d.entity_a = f.b AND d.entity_b = f.a))
+    \\      AND (d.status <> 'unsure' OR d.decided_at > now() - make_interval(days => $3::int)))
     \\    AND NOT EXISTS (SELECT 1 FROM must_not_merge m WHERE m.graph_id = $1::uuid
     \\      AND m.entity_a = least(f.a, f.b) AND m.entity_b = greatest(f.a, f.b))
     \\),
@@ -245,7 +247,7 @@ pub fn findCandidates(arena: Allocator, conn: *pg.Conn, graph_id: Id, types: []c
     errdefer conn.rollback() catch {};
     _ = try conn.exec("SET LOCAL hnsw.iterative_scan = relaxed_order", .{});
     _ = try conn.exec("SET LOCAL pg_trgm.similarity_threshold = 0.4", .{});
-    const all = try postgres.jsonRow([]Candidate, arena, conn, candidates_sql, .{ graph_id.toString(&gbuf), try typeNames(arena, types) });
+    const all = try postgres.jsonRow([]Candidate, arena, conn, candidates_sql, .{ graph_id.toString(&gbuf), try typeNames(arena, types), @as(i32, unsure_retry_days) });
     try conn.commit();
 
     var kept: std.ArrayList(Candidate) = .empty;

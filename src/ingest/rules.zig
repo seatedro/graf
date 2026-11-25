@@ -19,7 +19,7 @@ pub const lexical_floor_cosine: f32 = 0.60;
 pub const shared_project_cosine: f32 = 0.70;
 
 pub const consolidate_same: f64 = 0.80;
-pub const consolidate_different: f64 = 0.20;
+pub const consolidate_different: f64 = 0.10;
 
 pub const neighbour_cosine: f32 = 0.72;
 pub const neighbours_per_fact: usize = 8;

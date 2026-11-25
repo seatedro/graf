@@ -310,6 +310,11 @@ test "consolidate previews without writing, then merges, keeps apart, and never 
     const again = try consolidate.run(Judge, arena, &s, &judge, seed.graph, .{});
     try testing.expectEqual(@as(usize, 0), again.candidates);
     try testing.expectEqual(asked, judge.asked);
+
+    _ = try conn.exec("UPDATE possible_duplicate SET decided_at = now() - interval '31 days' WHERE graph_id = $1 AND status = 'unsure'", .{seed.gid()});
+    const later = try consolidate.run(Judge, arena, &s, &judge, seed.graph, .{ .dry_run = true });
+    try testing.expectEqual(@as(usize, 1), later.candidates);
+    try testing.expectEqual(consolidate.Action.unsure, find(later, "Maren Hollis", "Maren Okafor").?.action);
 }
 
 test "graf merge and unmerge round-trip facts, aliases and inventories, and keep the pair apart" {
