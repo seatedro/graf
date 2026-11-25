@@ -152,6 +152,7 @@ test "prefetch surfaces first names and project phrasings that name-only cosine 
     const relay = try seed.entity("brinelog relay", .software, try vec(arena, &.{.{ 9, 1 }}), "");
     const hollis = try seed.entity("Maren Hollis", .person, try vec(arena, &.{ .{ 0, 0.44 }, .{ 1, 0.898 } }), "Engineer on the brinelog relay.");
     try seed.alias(hollis, "M. Hollis");
+    try seed.alias(hollis, "Maren");
     _ = try seed.fact(hollis, "owns", relay, "Maren Hollis owns the brinelog relay.", "brinelog");
     const slots = try seed.entity("quay slot ordering research", .project, try vec(arena, &.{.{ 2, 1 }}), "Research on berth slot ordering.");
     const phase = try seed.entity("Mooring Phase 1", .project, try vec(arena, &.{.{ 4, 1 }}), "First rollout phase of Mooring.");
@@ -197,6 +198,7 @@ test "prefetch surfaces first names and project phrasings that name-only cosine 
     try testing.expect(cand.cosine < 0.5);
     try testing.expectEqualStrings("Engineer on the brinelog relay.", cand.description);
     try testing.expectEqualStrings("M. Hollis", cand.aliases[0]);
+    try testing.expectEqualStrings("maren", cand.via[0]);
     try testing.expectEqualStrings("Maren Hollis owns the brinelog relay.", cand.facts[0]);
     try testing.expect(!cand.shares_project);
 

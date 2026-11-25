@@ -82,7 +82,7 @@ pub fn apply(arena: Allocator, cs: *ChangeSet, touched: Touched, commit_time: co
             var hit = std.mem.eql(u8, ne.norm, t.norm);
             for (norms.items) |n| {
                 if (!rules.specificAlias(n)) continue;
-                hit = hit or std.mem.eql(u8, n, t.norm) or hasNorm(t.aliases, n);
+                hit = hit or std.mem.eql(u8, n, t.norm) or (hasNorm(t.aliases, n) and rules.exactAlias(t.type, n, t.norm));
             }
             if (hit) {
                 match = t.id;

@@ -157,6 +157,12 @@ pub fn distinctMarkers(a_norm: []const u8, b_norm: []const u8) bool {
     return unsharedMarker(a_norm, b_norm) and unsharedMarker(b_norm, a_norm);
 }
 
+pub fn exactAlias(entity_type: EntityType, alias_norm: []const u8, entity_norm: []const u8) bool {
+    if (!specificAlias(alias_norm)) return false;
+    if (entity_type != .person or std.mem.indexOfScalar(u8, alias_norm, ' ') != null) return true;
+    return !std.mem.eql(u8, alias_norm, firstToken(entity_norm)) or std.mem.eql(u8, alias_norm, entity_norm);
+}
+
 pub fn sameFirstName(a_norm: []const u8, b_norm: []const u8) bool {
     const a = firstToken(a_norm);
     return a.len >= 3 and std.mem.eql(u8, a, firstToken(b_norm));
@@ -528,6 +534,15 @@ test "numbered phases, tickets, lanes and versions carry distinct markers" {
     try testing.expect(!distinctMarkers("postgresql 17", "postgres 17"));
     try testing.expect(!distinctMarkers("zig 0 17 1", "zig 0 17"));
     try testing.expect(!distinctMarkers("maren", "maren hollis"));
+}
+
+test "a bare first name is never an exact alias of a person with a full name" {
+    try testing.expect(!exactAlias(.person, "maren", "maren hollis"));
+    try testing.expect(exactAlias(.person, "maren", "maren"));
+    try testing.expect(exactAlias(.person, "mhollis", "maren hollis"));
+    try testing.expect(exactAlias(.person, "maren h", "maren hollis"));
+    try testing.expect(exactAlias(.project, "brinelog", "brinelog relay"));
+    try testing.expect(!exactAlias(.person, "core", "core team"));
 }
 
 test "contextual gray admits first names and handles, and lexical project variants" {

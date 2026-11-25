@@ -27,14 +27,14 @@ pub const CandidateEntity = struct {
 
     fn exactHit(c: CandidateEntity, mention_norm: []const u8) bool {
         for (c.via) |v| {
-            if (rules.specificAlias(v)) return true;
+            if (rules.exactAlias(c.type, v, c.norm)) return true;
             if (std.mem.eql(u8, v, mention_norm) and std.mem.eql(u8, v, c.norm)) return true;
         }
         return false;
     }
 
     fn sharesSpecific(a: CandidateEntity, b: CandidateEntity) bool {
-        for (a.via) |v| if (rules.specificAlias(v) and hasNorm(b.via, v)) return true;
+        for (a.via) |v| if (rules.exactAlias(a.type, v, a.norm) and rules.exactAlias(b.type, v, b.norm) and hasNorm(b.via, v)) return true;
         return false;
     }
 };
