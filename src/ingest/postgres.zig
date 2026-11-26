@@ -93,7 +93,8 @@ pub const context_sql =
 pub const prefetch_sql =
     \\WITH req AS (SELECT $1::jsonb AS r),
     \\ent_in AS (
-    \\  SELECT (e.ord - 1)::int AS item, (e.value->'emb')::text::halfvec(512) AS emb
+    \\  SELECT (e.ord - 1)::int AS item, (e.value->'emb')::text::halfvec(512) AS emb,
+    \\         e.value->>'type' AS type, COALESCE(e.value->>'first', '') AS first
     \\  FROM req, jsonb_array_elements(r->'entities') WITH ORDINALITY e(value, ord)
     \\),
     \\ent_norms AS (
@@ -113,13 +114,28 @@ pub const prefetch_sql =
     \\  SELECT en.item, COALESCE(x.merged_into, x.id), NULL FROM ent_norms en CROSS JOIN LATERAL (
     \\    SELECT a.entity_id FROM entity_alias a WHERE a.graph_id = $2::uuid AND a.norm % en.norm
     \\    ORDER BY similarity(a.norm, en.norm) DESC LIMIT 5) t JOIN entity x ON x.id = t.entity_id
+    \\  UNION ALL
+    \\  SELECT ei.item, k.id, NULL FROM ent_in ei CROSS JOIN LATERAL (
+    \\    SELECT x.id FROM entity x WHERE x.graph_id = $2::uuid AND x.type = 'person' AND x.merged_into IS NULL
+    \\      AND split_part(x.norm, ' ', 1) = ei.first
+    \\    ORDER BY x.name_emb <=> ei.emb LIMIT 5) k
+    \\  WHERE ei.type = 'person' AND length(ei.first) >= 3
     \\),
     \\ent_out AS (
     \\  SELECT h.item, x.id, x.name, x.norm, x.type,
     \\         COALESCE(array_agg(DISTINCT h.via) FILTER (WHERE h.via IS NOT NULL), '{}') AS via,
-    \\         CASE WHEN x.name_emb IS NULL THEN 0 ELSE 1 - (x.name_emb <=> ei.emb) END AS cosine
+    \\         CASE WHEN x.name_emb IS NULL THEN 0 ELSE 1 - (x.name_emb <=> ei.emb) END AS cosine,
+    \\         COALESCE((SELECT max(similarity(x.norm, n.norm)) FROM ent_norms n WHERE n.item = h.item), 0)::real AS lexical,
+    \\         x.description,
+    \\         ARRAY(SELECT a.alias FROM entity_alias a WHERE a.graph_id = $2::uuid AND a.entity_id = x.id AND a.norm <> x.norm
+    \\           ORDER BY a.norm COLLATE "C" LIMIT 4) AS aliases,
+    \\         ARRAY(SELECT f.text FROM fact f WHERE f.graph_id = $2::uuid AND f.subject_id = x.id AND upper_inf(f.known) AND upper_inf(f.valid)
+    \\           ORDER BY f.confidence DESC, f.created_seq DESC LIMIT 2) AS facts,
+    \\         $5::text IS NOT NULL AND (
+    \\           EXISTS (SELECT 1 FROM fact f WHERE f.graph_id = $2::uuid AND f.subject_id = x.id AND f.project = $5::text)
+    \\           OR EXISTS (SELECT 1 FROM fact f WHERE f.graph_id = $2::uuid AND f.object_id = x.id AND f.project = $5::text)) AS shares_project
     \\  FROM hits h JOIN entity x ON x.id = h.id AND x.merged_into IS NULL JOIN ent_in ei ON ei.item = h.item
-    \\  GROUP BY h.item, x.id, x.name, x.norm, x.type, x.name_emb, ei.emb
+    \\  GROUP BY h.item, x.id, x.name, x.norm, x.type, x.description, x.name_emb, ei.emb
     \\),
     \\fact_in AS (
     \\  SELECT (f.ord - 1)::int AS item, (f.value->>'subject')::int AS subject, (f.value->>'object')::int AS object,
@@ -267,7 +283,7 @@ pub const PgBackend = struct {
         try conn.begin();
         errdefer conn.rollback() catch {};
         _ = conn.exec("SET LOCAL hnsw.iterative_scan = relaxed_order", .{}) catch |err| return logPgError(conn, err);
-        const out = jsonRow(resolve.Prefetch, arena, conn, prefetch_sql, .{ payload, b.graph_id.toString(&gbuf), norm_items.items, norms.items }) catch |err| return logPgError(conn, err);
+        const out = jsonRow(resolve.Prefetch, arena, conn, prefetch_sql, .{ payload, b.graph_id.toString(&gbuf), norm_items.items, norms.items, req.project }) catch |err| return logPgError(conn, err);
         try conn.commit();
         return out;
     }
@@ -400,11 +416,16 @@ pub fn finishOn(arena: Allocator, conn: *pg.Conn, io: std.Io, lease: store.Lease
 }
 
 pub fn prefetchPayload(arena: Allocator, req: pipeline.PrefetchRequest) ![]const u8 {
-    const E = struct { emb: []const f32 };
+    const E = struct { emb: []const f32, type: ?core.EntityType, first: []const u8 };
     const F = struct { subject: u32, object: ?u32, relation: []const u8, opposed: ?[]const u8, text: []const u8, emb: []const f32 };
 
     const ents = try arena.alloc(E, req.entity_embs.len);
-    for (ents, req.entity_embs) |*e, emb| e.* = .{ .emb = emb };
+    for (ents, req.entity_embs, 0..) |*e, emb, i| {
+        const norms = if (i < req.entity_norms.len) req.entity_norms[i] else &.{};
+        const name = if (norms.len > 0) norms[0] else "";
+        var it = std.mem.tokenizeScalar(u8, name, ' ');
+        e.* = .{ .emb = emb, .type = if (i < req.entity_types.len) req.entity_types[i] else null, .first = it.next() orelse "" };
+    }
 
     const facts = try arena.alloc(F, req.fact_subject.len);
     for (facts, 0..) |*f, j| f.* = .{

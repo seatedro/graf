@@ -6,6 +6,7 @@ const ingest = @import("mod.zig");
 const pipeline = @import("pipeline.zig");
 const postgres = @import("postgres.zig");
 const jobs = @import("jobs.zig");
+const consolidate = @import("consolidate.zig");
 
 const log = std.log.scoped(.ingest);
 
@@ -149,8 +150,13 @@ pub fn recycle(arena_state: *std.heap.ArenaAllocator) void {
 }
 
 fn housekeeping(arena: std.mem.Allocator, p: *ingest.Pipeline, model: *postgres.ClientModel) !void {
-    const conn = try p.store.pool.acquire();
-    defer conn.release();
-    _ = try jobs.runDailyPromotion(conn, p.graph_id);
-    _ = try jobs.refreshSummaries(postgres.ClientModel, arena, conn, model, p.graph_id, summaries_per_pass);
+    {
+        const conn = try p.store.pool.acquire();
+        defer conn.release();
+        _ = try jobs.runDailyPromotion(conn, p.graph_id);
+        _ = try jobs.refreshSummaries(postgres.ClientModel, arena, conn, model, p.graph_id, summaries_per_pass);
+    }
+
+    const report = try consolidate.runScheduled(postgres.ClientModel, arena, p.store, model, p.graph_id, p.config.ingest.consolidate_pairs) orelse return;
+    log.info("consolidation: {d} pairs judged, {d} merged, {d} kept apart", .{ report.judged, report.count(.merge), report.count(.keep_apart) });
 }

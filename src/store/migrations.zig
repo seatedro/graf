@@ -13,7 +13,9 @@ pub const all = [_]Migration{
     .{ .version = 3, .name = "entry_backfill", .sql = @embedFile("migrations/0003_entry_backfill.sql") },
     .{ .version = 4, .name = "hot_path_indexes", .sql = @embedFile("migrations/0004_hot_path_indexes.sql") },
     .{ .version = 5, .name = "drop_entry_queue", .sql = @embedFile("migrations/0005_drop_entry_queue.sql") },
+    .{ .version = 6, .name = "merge_undo", .sql = @embedFile("migrations/0006_merge_undo.sql") },
     .{ .version = 100, .name = "ingest", .sql = @embedFile("migrations/0100_ingest.sql") },
+    .{ .version = 101, .name = "entity_resolution", .sql = @embedFile("migrations/0101_entity_resolution.sql") },
     .{ .version = 200, .name = "project_brief", .sql = @embedFile("migrations/0200_project_brief.sql") },
     .{ .version = 201, .name = "graph_view", .sql = @embedFile("migrations/0201_graph_view.sql") },
 };

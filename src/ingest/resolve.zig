@@ -19,17 +19,22 @@ pub const CandidateEntity = struct {
     type: core.EntityType,
     via: []const []const u8 = &.{},
     cosine: f32 = 0,
+    lexical: f32 = 0,
+    description: []const u8 = "",
+    aliases: []const []const u8 = &.{},
+    facts: []const []const u8 = &.{},
+    shares_project: bool = false,
 
     fn exactHit(c: CandidateEntity, mention_norm: []const u8) bool {
         for (c.via) |v| {
-            if (rules.specificAlias(v)) return true;
+            if (rules.exactAlias(c.type, v, c.norm)) return true;
             if (std.mem.eql(u8, v, mention_norm) and std.mem.eql(u8, v, c.norm)) return true;
         }
         return false;
     }
 
     fn sharesSpecific(a: CandidateEntity, b: CandidateEntity) bool {
-        for (a.via) |v| if (rules.specificAlias(v) and hasNorm(b.via, v)) return true;
+        for (a.via) |v| if (rules.exactAlias(a.type, v, a.norm) and rules.exactAlias(b.type, v, b.norm) and hasNorm(b.via, v)) return true;
         return false;
     }
 };
@@ -240,6 +245,7 @@ fn candidatesFor(arena: Allocator, prefetch: Prefetch, item: usize) Allocator.Er
             for (c.via) |v| if (!hasNorm(via.items, v)) try via.append(arena, v);
             prev.via = via.items;
             prev.cosine = @max(prev.cosine, c.cosine);
+            prev.lexical = @max(prev.lexical, c.lexical);
             continue :outer;
         };
         try out.append(arena, c);
@@ -270,16 +276,17 @@ fn planEntity(arena: Allocator, e: ingest.ExtractedEntity, item: usize, prefetch
 
     for (cands) |c| {
         if (c.type != e.type or c.cosine < rules.merge_cosine) continue;
-        if (rules.tokenJaccard(e_norm, c.norm) < rules.merge_jaccard) continue;
+        if (rules.tokenJaccard(e_norm, c.norm) < rules.merge_jaccard or rules.distinctMarkers(e_norm, c.norm)) continue;
         return .{ .decision = .{ .existing = c.id } };
     }
 
     var gray: std.ArrayList(Id) = .empty;
     for (cands) |c| {
         if (gray.items.len >= rules.gray_per_entity) break;
-        if (rules.hardBlocked(e.type, c.type)) continue;
+        if (rules.hardBlocked(e.type, c.type) or rules.distinctMarkers(e_norm, c.norm)) continue;
         const near = if (rules.compatible(e.type, c.type)) c.cosine >= rules.gray_cosine else c.cosine >= rules.gray_cross_type_cosine;
-        if (near) try appendUnique(arena, &gray, c.id);
+        const context = rules.contextualGray(e.type, c.type, e_norm, c.norm, .{ .cosine = c.cosine, .lexical = c.lexical, .shares_project = c.shares_project });
+        if (near or context) try appendUnique(arena, &gray, c.id);
     }
 
     if (gray.items.len > 0) return .{ .decision = .ask, .gray = gray.items };
@@ -487,6 +494,30 @@ pub const relation_options = [_]llm.decision.Option{
 
 const entity_none: llm.decision.Option = .{ .name = "none", .description = "none of the above: a different real-world entity" };
 
+pub const entity_link_rule = "Same name is not enough: a company and its product, a tool and a dataset, or numbered siblings such as Phase 1 and Phase 2 are different entities. A project and its repository are the same entity. A first name, nickname or handle names the same person as a full name when their projects, teammates or work overlap; two people who only share a first name and do unrelated work are different people.";
+
+pub fn writeCandidateContext(w: *std.Io.Writer, c: CandidateEntity) std.Io.Writer.Error!void {
+    if (c.description.len > 0) try w.print(": {s}", .{c.description});
+    if (c.aliases.len > 0) {
+        try w.writeAll("; also called ");
+        for (c.aliases, 0..) |a, i| try w.print("{s}\"{s}\"", .{ if (i > 0) ", " else "", a });
+    }
+
+    if (c.facts.len > 0) {
+        try w.writeAll("; known facts:");
+        for (c.facts) |f| try w.print(" {s}", .{f});
+    }
+
+    if (c.shares_project) try w.writeAll("; active in this entry's project");
+}
+
+fn candidateDescription(arena: Allocator, c: CandidateEntity) Allocator.Error![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    out.writer.print("the existing \"{s}\" ({t})", .{ c.name, c.type }) catch return error.OutOfMemory;
+    writeCandidateContext(&out.writer, c) catch return error.OutOfMemory;
+    return out.written();
+}
+
 pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, prefetch: Prefetch) Allocator.Error!Decisions {
     var qs: std.ArrayList(Question) = .empty;
     var asks: std.ArrayList(llm.Question) = .empty;
@@ -501,7 +532,7 @@ pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, pr
             try targets.append(arena, g);
             try options.append(arena, .{
                 .name = try std.fmt.allocPrint(arena, "E{d}", .{targets.items.len}),
-                .description = try std.fmt.allocPrint(arena, "the existing \"{s}\" ({t})", .{ c.name, c.type }),
+                .description = try candidateDescription(arena, c),
             });
         }
 
@@ -509,7 +540,7 @@ pub fn decisionQuestions(arena: Allocator, p: Plan, checked: extract.Checked, pr
         try options.append(arena, entity_none);
         try qs.append(arena, .{ .kind = .entity_link, .item = i, .targets = targets.items });
         try asks.append(arena, .{ .choice = .{
-            .prompt = try std.fmt.allocPrint(arena, "Which existing entity is the new entity \"{s}\" ({t}: {s})? Same name is not enough: a company and its product, a tool and a dataset, or two people who share a first name are different entities. A project and its repository are the same entity.", .{ e.name, e.type, e.description }),
+            .prompt = try std.fmt.allocPrint(arena, "Which existing entity is the new entity \"{s}\" ({t}: {s})? {s}", .{ e.name, e.type, e.description, entity_link_rule }),
             .options = options.items,
         } });
     }

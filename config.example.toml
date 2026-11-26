@@ -53,6 +53,9 @@ max_inflight = 8
 
 [ingest]
 workers = 4
+# Entity pairs the background consolidation pass judges each hour with the decision backend.
+# 0 turns it off; run graf consolidate --dry-run to preview what it would merge.
+consolidate_pairs = 0
 
 [serve]
 listen = "127.0.0.1:7420"

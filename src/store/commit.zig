@@ -57,7 +57,7 @@ pub fn commit(s: *Store, lease: Lease, change_set: *const core.ChangeSet, rebase
     var applied_merges: std.ArrayList(core.ChangeSet.Merge) = .empty;
     for (0..cs.merges.len) |k| {
         const m = try orientMerge(s, a, conn, gid, &cs, k, &warnings) orelse continue;
-        try applyMerge(s, a, conn, gid, seq, &m, &touched_entities, &touched_facts);
+        _ = try applyMerge(s, a, conn, gid, seq, &m, &touched_entities, &touched_facts);
         try applied_merges.append(a, m);
     }
     cs.merges = applied_merges.items;
@@ -280,9 +280,13 @@ fn insertEntities(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i6
 
 pub const max_merge_facts = 100;
 
-const MergeSide = struct { created_seq: i64, facts: i64 };
+pub const MergeSide = struct { created_seq: i64, facts: i64 };
 
-fn mergeSide(conn: *pg.Conn, gid: []const u8, id: *const Id) !?MergeSide {
+pub fn shouldSwap(from: MergeSide, into: MergeSide) bool {
+    return from.facts > into.facts or (from.facts == into.facts and from.created_seq < into.created_seq);
+}
+
+pub fn mergeSide(conn: *pg.Conn, gid: []const u8, id: *const Id) !?MergeSide {
     var row = (try conn.row(
         \\SELECT e.created_seq,
         \\  (SELECT count(*) FROM fact f WHERE f.graph_id = $1 AND (f.subject_id = e.id OR f.object_id = e.id))
@@ -317,8 +321,7 @@ fn orientMerge(s: *Store, a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8,
         return null;
     }
 
-    const swap = f.facts > i.facts or (f.facts == i.facts and f.created_seq < i.created_seq);
-    if (!swap) return m;
+    if (!shouldSwap(f, i)) return m;
 
     try redirect(a, cs, m.into, m.from);
     return .{ .from = m.into, .into = m.from, .reason = m.reason };
@@ -358,10 +361,14 @@ fn redirect(a: std.mem.Allocator, cs: *core.ChangeSet, old: Id, new: Id) !void {
     cs.merges = merges;
 }
 
-fn applyMerge(s: *Store, a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, m: *const core.ChangeSet.Merge, touched_entities: *std.ArrayList([]const u8), touched_facts: *std.ArrayList([]const u8)) !void {
+pub fn applyMerge(s: *Store, a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, m: *const core.ChangeSet.Merge, touched_entities: *std.ArrayList([]const u8), touched_facts: *std.ArrayList([]const u8)) !Id {
     const log_id = Id.v7(s.io);
     const moved = try collectIds(a, conn,
-        \\WITH moved AS (
+        \\WITH subjects AS (
+        \\  SELECT id FROM fact WHERE graph_id = $1 AND subject_id = $2
+        \\), objects AS (
+        \\  SELECT id FROM fact WHERE graph_id = $1 AND object_id = $2
+        \\), moved AS (
         \\  UPDATE fact SET
         \\    subject_id = CASE WHEN subject_id = $2 THEN $3 ELSE subject_id END,
         \\    object_id = CASE WHEN object_id = $2 THEN $3 ELSE object_id END
@@ -372,22 +379,26 @@ fn applyMerge(s: *Store, a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, 
         \\), aliases AS (
         \\  INSERT INTO entity_alias (graph_id, norm, entity_id, alias)
         \\  SELECT graph_id, norm, $3, alias FROM entity_alias WHERE entity_id = $2
-        \\  ON CONFLICT DO NOTHING RETURNING 1
+        \\  ON CONFLICT DO NOTHING RETURNING norm
         \\), mentions AS (
         \\  INSERT INTO entity_mention (entity_id, entry_id)
         \\  SELECT $3, entry_id FROM entity_mention WHERE entity_id = $2
-        \\  ON CONFLICT DO NOTHING RETURNING 1
+        \\  ON CONFLICT DO NOTHING RETURNING entry_id
         \\), logged AS (
-        \\  INSERT INTO merge_log (id, graph_id, seq, from_id, into_id, reason, moved_facts)
-        \\  SELECT $5, $1, $4, $2, $3, $6, ARRAY(SELECT id FROM moved ORDER BY id)
+        \\  INSERT INTO merge_log (id, graph_id, seq, from_id, into_id, reason, moved_facts,
+        \\    subject_facts, object_facts, added_aliases, added_mentions)
+        \\  SELECT $5, $1, $4, $2, $3, $6, ARRAY(SELECT id FROM moved ORDER BY id),
+        \\    ARRAY(SELECT id FROM subjects ORDER BY id), ARRAY(SELECT id FROM objects ORDER BY id),
+        \\    ARRAY(SELECT norm FROM aliases ORDER BY norm), ARRAY(SELECT entry_id FROM mentions ORDER BY entry_id)
         \\  RETURNING 1
         \\)
         \\SELECT id FROM moved
     , .{ gid, @as([]const u8, &m.from.bytes), @as([]const u8, &m.into.bytes), seq, @as([]const u8, &log_id.bytes), m.reason });
 
-    try touched_entities.append(a, &m.from.bytes);
-    try touched_entities.append(a, &m.into.bytes);
+    try touched_entities.append(a, try a.dupe(u8, &m.from.bytes));
+    try touched_entities.append(a, try a.dupe(u8, &m.into.bytes));
     try touched_facts.appendSlice(a, moved);
+    return log_id;
 }
 
 fn insertFacts(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, commit_ts: i64, facts: []const core.ChangeSet.NewFact, touched: *std.ArrayList([]const u8)) !void {
@@ -466,7 +477,7 @@ fn insertFacts(a: std.mem.Allocator, conn: *pg.Conn, gid: []const u8, seq: i64, 
     try touched.appendSlice(a, ids);
 }
 
-fn collectIds(a: std.mem.Allocator, conn: *pg.Conn, sql: []const u8, args: anytype) ![]const []const u8 {
+pub fn collectIds(a: std.mem.Allocator, conn: *pg.Conn, sql: []const u8, args: anytype) ![]const []const u8 {
     var result = try conn.query(sql, args);
     defer result.deinit();
     var out: std.ArrayList([]const u8) = .empty;

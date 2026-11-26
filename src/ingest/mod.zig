@@ -52,6 +52,7 @@ pub const pipeline = @import("pipeline.zig");
 pub const rebase = @import("rebase.zig");
 pub const postgres = @import("postgres.zig");
 pub const jobs = @import("jobs.zig");
+pub const consolidate = @import("consolidate.zig");
 pub const workers = @import("workers.zig");
 pub const testing = @import("testing.zig");
 
@@ -113,4 +114,5 @@ test {
     _ = @import("postgres_test.zig");
     _ = @import("client_test.zig");
     _ = @import("workers_test.zig");
+    _ = @import("consolidate_test.zig");
 }
