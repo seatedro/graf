@@ -128,7 +128,7 @@ pub const prefetch_sql =
     \\         COALESCE((SELECT max(similarity(x.norm, n.norm)) FROM ent_norms n WHERE n.item = h.item), 0)::real AS lexical,
     \\         x.description,
     \\         ARRAY(SELECT a.alias FROM entity_alias a WHERE a.graph_id = $2::uuid AND a.entity_id = x.id AND a.norm <> x.norm
-    \\           ORDER BY a.norm LIMIT 4) AS aliases,
+    \\           ORDER BY a.norm COLLATE "C" LIMIT 4) AS aliases,
     \\         ARRAY(SELECT f.text FROM fact f WHERE f.graph_id = $2::uuid AND f.subject_id = x.id AND upper_inf(f.known) AND upper_inf(f.valid)
     \\           ORDER BY f.confidence DESC, f.created_seq DESC LIMIT 2) AS facts,
     \\         $5::text IS NOT NULL AND (
